@@ -39,8 +39,8 @@ export class AuthController {
   }
 
   @Post('google/token')
-  googleTokenLogin(@Body() body: { idToken: string }) {
-    return this.authService.googleTokenLogin(body.idToken);
+  googleTokenLogin(@Body() body: { idToken?: string; accessToken?: string }) {
+    return this.authService.googleTokenLogin(body.idToken || body.accessToken || '');
   }
 
   @Post('apple')

@@ -161,17 +161,43 @@ export class AuthService {
     return tokens;
   }
 
-  async googleTokenLogin(idToken: string) {
-    const payload = this.jwtService.decode(idToken) as any;
-    if (!payload?.email) throw new UnauthorizedException('Invalid Google token');
-    let user = await this.usersService.findByEmail(payload.email);
+  async googleTokenLogin(token: string) {
+    if (!token) throw new UnauthorizedException('Token required');
+
+    let email: string, name: string, avatarUrl: string, providerId: string;
+
+    // Try as access_token first (from @react-oauth/google useGoogleLogin)
+    try {
+      const res = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const profile = await res.json();
+        email = profile.email;
+        name = profile.name || profile.email.split('@')[0];
+        avatarUrl = profile.picture;
+        providerId = profile.sub;
+      } else {
+        // Try as id_token
+        const payload = this.jwtService.decode(token) as any;
+        if (!payload?.email) throw new UnauthorizedException('Invalid Google token');
+        email = payload.email;
+        name = payload.name || payload.email.split('@')[0];
+        avatarUrl = payload.picture;
+        providerId = payload.sub;
+      }
+    } catch {
+      throw new UnauthorizedException('Failed to verify Google token');
+    }
+
+    let user = await this.usersService.findByEmail(email);
     if (!user) {
       user = await this.usersService.create({
-        email: payload.email,
-        name: payload.name || payload.email.split('@')[0],
-        avatarUrl: payload.picture,
+        email,
+        name,
+        avatarUrl,
         provider: AuthProvider.GOOGLE,
-        providerId: payload.sub,
+        providerId,
       });
     }
     const tokens = this.generateTokens(user);
