@@ -13,6 +13,9 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { BillingModule } from './billing/billing.module';
+import { WorkspaceModule } from './workspace/workspace.module';
+import { StorageModule } from './storage/storage.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   controllers: [AppController],
@@ -53,6 +56,9 @@ import { BillingModule } from './billing/billing.module';
     ReportsModule,
     NotificationsModule,
     BillingModule,
+    WorkspaceModule,
+    StorageModule,
+    ScheduleModule.forRoot(),
   ],
 })
 export class AppModule {}
