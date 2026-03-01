@@ -46,9 +46,7 @@ import { ScheduleModule } from '@nestjs/schedule';
       imports: [ConfigModule],
       useFactory: (cfg: ConfigService) => {
         const redisUrl = cfg.get<string>('REDIS_URL');
-        if (redisUrl) {
-          return { url: redisUrl };
-        }
+        if (redisUrl) return { url: redisUrl } as any;
         return {
           redis: {
             host: cfg.get('REDIS_HOST', 'localhost'),
