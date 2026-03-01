@@ -23,27 +23,40 @@ import { ScheduleModule } from '@nestjs/schedule';
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (cfg: ConfigService) => ({
-        type: 'postgres',
-        host: cfg.get('DB_HOST', 'localhost'),
-        port: cfg.get<number>('DB_PORT', 5432),
-        username: cfg.get('DB_USERNAME', 'postgres'),
-        password: cfg.get('DB_PASSWORD', 'postgres'),
-        database: cfg.get('DB_DATABASE', 'subradar'),
-        autoLoadEntities: true,
-        synchronize: cfg.get('NODE_ENV') !== 'production',
-      }),
+      useFactory: (cfg: ConfigService) => {
+        const isProd = cfg.get('NODE_ENV') === 'production';
+        const url = cfg.get<string>('DATABASE_URL');
+        return {
+          type: 'postgres' as const,
+          url: url || undefined,
+          host: url ? undefined : cfg.get<string>('DB_HOST', 'localhost'),
+          port: url ? undefined : cfg.get<number>('DB_PORT', 5432),
+          username: url ? undefined : cfg.get<string>('DB_USERNAME', 'postgres'),
+          password: url ? undefined : cfg.get<string>('DB_PASSWORD', 'postgres'),
+          database: url ? undefined : cfg.get<string>('DB_DATABASE', 'subradar'),
+          autoLoadEntities: true,
+          synchronize: !isProd,
+          logging: false,
+          ssl: isProd ? { rejectUnauthorized: false } : undefined,
+        } as any;
+      },
       inject: [ConfigService],
     }),
     BullModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (cfg: ConfigService) => ({
-        redis: {
-          host: cfg.get('REDIS_HOST', 'localhost'),
-          port: cfg.get<number>('REDIS_PORT', 6379),
-          password: cfg.get('REDIS_PASSWORD') || undefined,
-        },
-      }),
+      useFactory: (cfg: ConfigService) => {
+        const redisUrl = cfg.get<string>('REDIS_URL');
+        if (redisUrl) {
+          return { url: redisUrl };
+        }
+        return {
+          redis: {
+            host: cfg.get('REDIS_HOST', 'localhost'),
+            port: cfg.get<number>('REDIS_PORT', 6379),
+            password: cfg.get('REDIS_PASSWORD') || undefined,
+          },
+        };
+      },
       inject: [ConfigService],
     }),
     AuthModule,
