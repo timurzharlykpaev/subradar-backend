@@ -161,6 +161,24 @@ export class AuthService {
     return tokens;
   }
 
+  async googleTokenLogin(idToken: string) {
+    const payload = this.jwtService.decode(idToken) as any;
+    if (!payload?.email) throw new UnauthorizedException('Invalid Google token');
+    let user = await this.usersService.findByEmail(payload.email);
+    if (!user) {
+      user = await this.usersService.create({
+        email: payload.email,
+        name: payload.name || payload.email.split('@')[0],
+        avatarUrl: payload.picture,
+        provider: AuthProvider.GOOGLE,
+        providerId: payload.sub,
+      });
+    }
+    const tokens = this.generateTokens(user);
+    await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
+    return { user, ...tokens };
+  }
+
   async logout(userId: string) {
     await this.usersService.updateRefreshToken(userId, null);
     return { message: 'Logged out' };

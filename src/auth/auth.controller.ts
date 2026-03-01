@@ -1,8 +1,9 @@
 import {
-  Controller, Post, Get, Body, Query, UseGuards, Request, Redirect,
+  Controller, Post, Get, Body, Query, UseGuards, Request, Res,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
+import { UsersService } from '../users/users.service';
 import { RegisterDto, LoginDto, MagicLinkDto, RefreshTokenDto, AppleAuthDto } from './dto/auth.dto';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -10,7 +11,10 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly usersService: UsersService,
+  ) {}
 
   @Post('register')
   register(@Body() dto: RegisterDto) {
@@ -28,8 +32,15 @@ export class AuthController {
 
   @Get('google/callback')
   @UseGuards(GoogleAuthGuard)
-  googleCallback(@Request() req) {
-    return this.authService.googleLogin(req.user);
+  async googleCallback(@Request() req, @Res() res: import('express').Response) {
+    const result = await this.authService.googleLogin(req.user);
+    const frontendUrl = process.env.FRONTEND_URL || 'https://app.subradar.ai';
+    return res.redirect(`${frontendUrl}/auth/callback?accessToken=${result.accessToken}&refreshToken=${result.refreshToken}`);
+  }
+
+  @Post('google/token')
+  googleTokenLogin(@Body() body: { idToken: string }) {
+    return this.authService.googleTokenLogin(body.idToken);
   }
 
   @Post('apple')
@@ -57,5 +68,12 @@ export class AuthController {
   @Post('logout')
   logout(@Request() req) {
     return this.authService.logout(req.user.id);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  async me(@Request() req) {
+    return this.usersService.findById(req.user.id);
   }
 }
