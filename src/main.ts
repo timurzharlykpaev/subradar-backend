@@ -36,4 +36,4 @@ async function bootstrap() {
   console.log(`SubRadar API running on http://localhost:${port}/api/v1`);
   console.log(`Swagger docs: http://localhost:${port}/api/docs`);
 }
-bootstrap();
+void bootstrap();

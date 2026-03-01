@@ -1,5 +1,11 @@
 import {
-  Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, Index,
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  ManyToOne,
+  JoinColumn,
+  Index,
 } from 'typeorm';
 import { Workspace } from './workspace.entity';
 
@@ -31,13 +37,21 @@ export class WorkspaceMember {
   @Column({ nullable: true })
   userId: string;
 
-  @Column({ type: 'enum', enum: WorkspaceMemberRole, default: WorkspaceMemberRole.MEMBER })
+  @Column({
+    type: 'enum',
+    enum: WorkspaceMemberRole,
+    default: WorkspaceMemberRole.MEMBER,
+  })
   role: WorkspaceMemberRole;
 
   @Column({ nullable: true })
   inviteEmail: string;
 
-  @Column({ type: 'enum', enum: WorkspaceMemberStatus, default: WorkspaceMemberStatus.PENDING })
+  @Column({
+    type: 'enum',
+    enum: WorkspaceMemberStatus,
+    default: WorkspaceMemberStatus.PENDING,
+  })
   status: WorkspaceMemberStatus;
 
   @CreateDateColumn()

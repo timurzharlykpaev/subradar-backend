@@ -1,6 +1,11 @@
 import {
-  Entity, PrimaryGeneratedColumn, Column, CreateDateColumn,
-  UpdateDateColumn, ManyToOne, JoinColumn,
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { PaymentCard } from '../../payment-cards/entities/payment-card.entity';
@@ -55,7 +60,11 @@ export class Subscription {
   @Column()
   name: string;
 
-  @Column({ type: 'enum', enum: SubscriptionCategory, default: SubscriptionCategory.OTHER })
+  @Column({
+    type: 'enum',
+    enum: SubscriptionCategory,
+    default: SubscriptionCategory.OTHER,
+  })
   category: SubscriptionCategory;
 
   @Column({ type: 'decimal', precision: 10, scale: 2 })
@@ -79,7 +88,11 @@ export class Subscription {
   @Column({ type: 'jsonb', nullable: true })
   availablePlans: object[];
 
-  @Column({ type: 'enum', enum: SubscriptionStatus, default: SubscriptionStatus.ACTIVE })
+  @Column({
+    type: 'enum',
+    enum: SubscriptionStatus,
+    default: SubscriptionStatus.ACTIVE,
+  })
   status: SubscriptionStatus;
 
   @Column({ nullable: true, type: 'date' })

@@ -66,9 +66,9 @@ export class BillingService {
     const response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/vnd.api+json',
-        'Accept': 'application/vnd.api+json',
+        Accept: 'application/vnd.api+json',
       },
       body: JSON.stringify({
         data: {
@@ -87,7 +87,7 @@ export class BillingService {
       }),
     });
 
-    const result = await response.json() as any;
+    const result = (await response.json()) as any;
     return { checkoutUrl: result?.data?.attributes?.url };
   }
 }

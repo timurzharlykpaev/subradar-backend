@@ -11,7 +11,8 @@ export class NotificationsProcessor {
 
   @Process('send-reminder')
   async handleReminder(job: Job) {
-    const { fcmToken, email, subscriptionName, amount, currency, billingDate } = job.data;
+    const { fcmToken, email, subscriptionName, amount, currency, billingDate } =
+      job.data;
     this.logger.log(`Processing reminder for ${subscriptionName}`);
 
     try {
@@ -27,7 +28,13 @@ export class NotificationsProcessor {
 
       // Always send email
       if (email) {
-        await this.service.sendBillingReminderEmail(email, subscriptionName, amount, currency, billingDate);
+        await this.service.sendBillingReminderEmail(
+          email,
+          subscriptionName,
+          amount,
+          currency,
+          billingDate,
+        );
       }
     } catch (error) {
       this.logger.error(`Failed to send reminder: ${error.message}`);

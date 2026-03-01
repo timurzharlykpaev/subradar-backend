@@ -1,12 +1,20 @@
 import {
-  Injectable, UnauthorizedException, BadRequestException, ConflictException,
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { User, AuthProvider } from '../users/entities/user.entity';
-import { RegisterDto, LoginDto, MagicLinkDto, AppleAuthDto } from './dto/auth.dto';
+import {
+  RegisterDto,
+  LoginDto,
+  MagicLinkDto,
+  AppleAuthDto,
+} from './dto/auth.dto';
 
 @Injectable()
 export class AuthService {
@@ -48,7 +56,8 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const user = await this.usersService.findByEmailWithPassword(dto.email);
-    if (!user || !user.password) throw new UnauthorizedException('Invalid credentials');
+    if (!user || !user.password)
+      throw new UnauthorizedException('Invalid credentials');
 
     const valid = await bcrypt.compare(dto.password, user.password);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
@@ -106,16 +115,25 @@ export class AuthService {
   async sendMagicLink(dto: MagicLinkDto) {
     let user = await this.usersService.findByEmail(dto.email);
     if (!user) {
-      user = await this.usersService.create({ email: dto.email, provider: AuthProvider.LOCAL });
+      user = await this.usersService.create({
+        email: dto.email,
+        provider: AuthProvider.LOCAL,
+      });
     }
 
     const token = this.jwtService.sign(
       { sub: user.id, email: user.email, type: 'magic-link' },
-      { secret: this.cfg.get('MAGIC_LINK_SECRET', 'magic-secret'), expiresIn: '15m' },
+      {
+        secret: this.cfg.get('MAGIC_LINK_SECRET', 'magic-secret'),
+        expiresIn: '15m',
+      },
     );
 
     const expiry = new Date(Date.now() + 15 * 60 * 1000);
-    await this.usersService.update(user.id, { magicLinkToken: token, magicLinkExpiry: expiry });
+    await this.usersService.update(user.id, {
+      magicLinkToken: token,
+      magicLinkExpiry: expiry,
+    });
 
     // TODO: send email via Resend
     const link = `${this.cfg.get('APP_URL')}/auth/magic?token=${token}`;
@@ -133,10 +151,15 @@ export class AuthService {
     }
 
     const user = await this.usersService.findById(payload.sub);
-    if (user.magicLinkToken !== token) throw new UnauthorizedException('Token already used');
-    if (new Date() > user.magicLinkExpiry) throw new UnauthorizedException('Magic link expired');
+    if (user.magicLinkToken !== token)
+      throw new UnauthorizedException('Token already used');
+    if (new Date() > user.magicLinkExpiry)
+      throw new UnauthorizedException('Magic link expired');
 
-    await this.usersService.update(user.id, { magicLinkToken: undefined, magicLinkExpiry: undefined });
+    await this.usersService.update(user.id, {
+      magicLinkToken: undefined,
+      magicLinkExpiry: undefined,
+    });
 
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
@@ -154,7 +177,8 @@ export class AuthService {
     }
 
     const user = await this.usersService.findById(payload.sub);
-    if (user.refreshToken !== token) throw new UnauthorizedException('Refresh token revoked');
+    if (user.refreshToken !== token)
+      throw new UnauthorizedException('Refresh token revoked');
 
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);

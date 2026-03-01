@@ -16,7 +16,10 @@ export class ReceiptsService {
     private readonly cfg: ConfigService,
   ) {
     this.s3 = new S3Client({
-      endpoint: cfg.get('DO_SPACES_ENDPOINT', 'https://nyc3.digitaloceanspaces.com'),
+      endpoint: cfg.get(
+        'DO_SPACES_ENDPOINT',
+        'https://nyc3.digitaloceanspaces.com',
+      ),
       region: 'us-east-1',
       credentials: {
         accessKeyId: cfg.get('DO_SPACES_KEY', ''),
@@ -27,19 +30,30 @@ export class ReceiptsService {
     this.cdnUrl = cfg.get('DO_SPACES_CDN_URL', '');
   }
 
-  async upload(userId: string, file: Express.Multer.File, subscriptionId?: string): Promise<Receipt> {
+  async upload(
+    userId: string,
+    file: Express.Multer.File,
+    subscriptionId?: string,
+  ): Promise<Receipt> {
     const key = `receipts/${userId}/${Date.now()}-${file.originalname}`;
 
-    await this.s3.send(new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-      Body: file.buffer,
-      ContentType: file.mimetype,
-      ACL: 'private',
-    }));
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        ACL: 'private',
+      }),
+    );
 
     const fileUrl = `${this.cdnUrl}/${key}`;
-    const receipt = this.repo.create({ userId, filename: file.originalname, fileUrl, subscriptionId });
+    const receipt = this.repo.create({
+      userId,
+      filename: file.originalname,
+      fileUrl,
+      subscriptionId,
+    });
     return this.repo.save(receipt);
   }
 

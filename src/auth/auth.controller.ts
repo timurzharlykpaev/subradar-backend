@@ -1,10 +1,23 @@
 import {
-  Controller, Post, Get, Body, Query, UseGuards, Request, Res,
+  Controller,
+  Post,
+  Get,
+  Body,
+  Query,
+  UseGuards,
+  Request,
+  Res,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
-import { RegisterDto, LoginDto, MagicLinkDto, RefreshTokenDto, AppleAuthDto } from './dto/auth.dto';
+import {
+  RegisterDto,
+  LoginDto,
+  MagicLinkDto,
+  RefreshTokenDto,
+  AppleAuthDto,
+} from './dto/auth.dto';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
@@ -35,12 +48,16 @@ export class AuthController {
   async googleCallback(@Request() req, @Res() res: import('express').Response) {
     const result = await this.authService.googleLogin(req.user);
     const frontendUrl = process.env.FRONTEND_URL || 'https://app.subradar.ai';
-    return res.redirect(`${frontendUrl}/auth/callback?accessToken=${result.accessToken}&refreshToken=${result.refreshToken}`);
+    return res.redirect(
+      `${frontendUrl}/auth/callback?accessToken=${result.accessToken}&refreshToken=${result.refreshToken}`,
+    );
   }
 
   @Post('google/token')
   googleTokenLogin(@Body() body: { idToken?: string; accessToken?: string }) {
-    return this.authService.googleTokenLogin(body.idToken || body.accessToken || '');
+    return this.authService.googleTokenLogin(
+      body.idToken || body.accessToken || '',
+    );
   }
 
   @Post('apple')

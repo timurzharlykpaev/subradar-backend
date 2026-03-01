@@ -11,8 +11,16 @@ export class AnalyticsController {
   constructor(private readonly service: AnalyticsService) {}
 
   @Get('summary')
-  summary(@Request() req, @Query('month') month?: string, @Query('year') year?: string) {
-    return this.service.getSummary(req.user.id, month ? +month : undefined, year ? +year : undefined);
+  summary(
+    @Request() req,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+  ) {
+    return this.service.getSummary(
+      req.user.id,
+      month ? +month : undefined,
+      year ? +year : undefined,
+    );
   }
 
   @Get('monthly')
@@ -21,8 +29,16 @@ export class AnalyticsController {
   }
 
   @Get('by-category')
-  byCategory(@Request() req, @Query('month') month?: string, @Query('year') year?: string) {
-    return this.service.getByCategory(req.user.id, month ? +month : undefined, year ? +year : undefined);
+  byCategory(
+    @Request() req,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+  ) {
+    return this.service.getByCategory(
+      req.user.id,
+      month ? +month : undefined,
+      year ? +year : undefined,
+    );
   }
 
   @Get('upcoming')

@@ -3,7 +3,9 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 // WsException not installed - using standard Error
 class WsException extends Error {
-  constructor(message: string) { super(message); }
+  constructor(message: string) {
+    super(message);
+  }
 }
 
 @Injectable()

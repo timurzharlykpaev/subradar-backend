@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PaymentCardsService } from './payment-cards.service';
@@ -27,7 +37,11 @@ export class PaymentCardsController {
   }
 
   @Patch(':id')
-  update(@Request() req, @Param('id') id: string, @Body() dto: Partial<CreatePaymentCardDto>) {
+  update(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() dto: Partial<CreatePaymentCardDto>,
+  ) {
     return this.service.update(req.user.id, id, dto);
   }
 

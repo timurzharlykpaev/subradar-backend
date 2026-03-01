@@ -15,9 +15,13 @@ export class StorageService {
   private readonly publicEndpoint: string;
 
   constructor(private readonly cfg: ConfigService) {
-    const endpoint = cfg.get('DO_SPACES_ENDPOINT', 'https://fra1.digitaloceanspaces.com');
+    const endpoint = cfg.get(
+      'DO_SPACES_ENDPOINT',
+      'https://fra1.digitaloceanspaces.com',
+    );
     this.bucket = cfg.get('DO_SPACES_BUCKET', 'subradar');
-    this.publicEndpoint = cfg.get('DO_SPACES_CDN_URL') || `${endpoint}/${this.bucket}`;
+    this.publicEndpoint =
+      cfg.get('DO_SPACES_CDN_URL') || `${endpoint}/${this.bucket}`;
 
     this.s3 = new S3Client({
       endpoint,
@@ -30,7 +34,12 @@ export class StorageService {
     });
   }
 
-  async uploadFile(buffer: Buffer, filename: string, mimetype: string, isPublic = true): Promise<string> {
+  async uploadFile(
+    buffer: Buffer,
+    filename: string,
+    mimetype: string,
+    isPublic = true,
+  ): Promise<string> {
     const key = `${Date.now()}-${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 
     await this.s3.send(
@@ -52,6 +61,8 @@ export class StorageService {
   }
 
   async deleteFile(key: string): Promise<void> {
-    await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+    await this.s3.send(
+      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
   }
 }

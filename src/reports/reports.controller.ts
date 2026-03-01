@@ -1,7 +1,16 @@
-import { Controller, Post, Get, Param, Body, UseGuards, Request, Res } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Param,
+  Body,
+  UseGuards,
+  Request,
+  Res,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsString, IsEnum, IsDateString } from 'class-validator';
+import { IsEnum, IsDateString } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ReportsService } from './reports.service';
@@ -31,7 +40,11 @@ export class ReportsController {
   }
 
   @Get(':id/download')
-  async download(@Request() req, @Param('id') id: string, @Res() res: Response) {
+  async download(
+    @Request() req,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
     const buffer = await this.service.generatePdf(req.user.id, id);
     res.set({
       'Content-Type': 'application/pdf',

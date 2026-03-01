@@ -21,7 +21,8 @@ export default () => ({
 
   jwt: {
     secret: process.env.JWT_SECRET || 'jwt-secret-change-me',
-    refreshSecret: process.env.JWT_REFRESH_SECRET || 'jwt-refresh-secret-change-me',
+    refreshSecret:
+      process.env.JWT_REFRESH_SECRET || 'jwt-refresh-secret-change-me',
     expiresIn: process.env.JWT_EXPIRES_IN || '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
   },
@@ -29,7 +30,9 @@ export default () => ({
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackUrl: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/v1/auth/google/callback',
+    callbackUrl:
+      process.env.GOOGLE_CALLBACK_URL ||
+      'http://localhost:3000/api/v1/auth/google/callback',
   },
 
   openai: {
@@ -40,7 +43,8 @@ export default () => ({
   spaces: {
     key: process.env.DO_SPACES_KEY,
     secret: process.env.DO_SPACES_SECRET,
-    endpoint: process.env.DO_SPACES_ENDPOINT || 'https://fra1.digitaloceanspaces.com',
+    endpoint:
+      process.env.DO_SPACES_ENDPOINT || 'https://fra1.digitaloceanspaces.com',
     bucket: process.env.DO_SPACES_BUCKET || 'subradar',
     cdnUrl: process.env.DO_SPACES_CDN_URL,
   },

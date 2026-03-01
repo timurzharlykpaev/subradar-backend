@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PaymentCard } from './entities/payment-card.entity';
@@ -7,10 +11,14 @@ import { CreatePaymentCardDto } from './dto/create-payment-card.dto';
 @Injectable()
 export class PaymentCardsService {
   constructor(
-    @InjectRepository(PaymentCard) private readonly repo: Repository<PaymentCard>,
+    @InjectRepository(PaymentCard)
+    private readonly repo: Repository<PaymentCard>,
   ) {}
 
-  async create(userId: string, dto: CreatePaymentCardDto): Promise<PaymentCard> {
+  async create(
+    userId: string,
+    dto: CreatePaymentCardDto,
+  ): Promise<PaymentCard> {
     if (dto.isDefault) {
       await this.repo.update({ userId }, { isDefault: false });
     }
@@ -29,7 +37,11 @@ export class PaymentCardsService {
     return card;
   }
 
-  async update(userId: string, id: string, dto: Partial<CreatePaymentCardDto>): Promise<PaymentCard> {
+  async update(
+    userId: string,
+    id: string,
+    dto: Partial<CreatePaymentCardDto>,
+  ): Promise<PaymentCard> {
     const card = await this.findOne(userId, id);
     if (dto.isDefault) {
       await this.repo.update({ userId }, { isDefault: false });

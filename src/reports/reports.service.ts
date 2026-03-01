@@ -1,6 +1,10 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository } from 'typeorm';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const PDFDocument = require('pdfkit');
 import { Report, ReportType } from './entities/report.entity';
@@ -11,12 +15,25 @@ import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
 export class ReportsService {
   constructor(
     @InjectRepository(Report) private readonly reportRepo: Repository<Report>,
-    @InjectRepository(Subscription) private readonly subRepo: Repository<Subscription>,
-    @InjectRepository(PaymentCard) private readonly cardRepo: Repository<PaymentCard>,
+    @InjectRepository(Subscription)
+    private readonly subRepo: Repository<Subscription>,
+    @InjectRepository(PaymentCard)
+    private readonly cardRepo: Repository<PaymentCard>,
   ) {}
 
-  async generate(userId: string, from: string, to: string, type: ReportType): Promise<Report> {
-    const report = this.reportRepo.create({ userId, from, to, type, status: 'ready' });
+  async generate(
+    userId: string,
+    from: string,
+    to: string,
+    type: ReportType,
+  ): Promise<Report> {
+    const report = this.reportRepo.create({
+      userId,
+      from,
+      to,
+      type,
+      status: 'ready',
+    });
     return this.reportRepo.save(report);
   }
 
@@ -28,7 +45,10 @@ export class ReportsService {
   }
 
   async findAll(userId: string): Promise<Report[]> {
-    return this.reportRepo.find({ where: { userId }, order: { createdAt: 'DESC' } });
+    return this.reportRepo.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+    });
   }
 
   async generatePdf(userId: string, id: string): Promise<Buffer> {
@@ -39,8 +59,12 @@ export class ReportsService {
     const subs = await this.subRepo
       .createQueryBuilder('s')
       .where('s.userId = :userId', { userId })
-      .andWhere('(s.startDate IS NULL OR s.startDate >= :from)', { from: report.from })
-      .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', { to: report.to })
+      .andWhere('(s.startDate IS NULL OR s.startDate >= :from)', {
+        from: report.from,
+      })
+      .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', {
+        to: report.to,
+      })
       .getMany();
 
     return new Promise<Buffer>((resolve, reject) => {
@@ -52,10 +76,18 @@ export class ReportsService {
       doc.on('error', reject);
 
       // Header
-      doc.fontSize(24).font('Helvetica-Bold').text('SubRadar AI', { align: 'center' });
-      doc.fontSize(16).font('Helvetica').text(`${report.type.toUpperCase()} Report`, { align: 'center' });
+      doc
+        .fontSize(24)
+        .font('Helvetica-Bold')
+        .text('SubRadar AI', { align: 'center' });
+      doc
+        .fontSize(16)
+        .font('Helvetica')
+        .text(`${report.type.toUpperCase()} Report`, { align: 'center' });
       doc.moveDown();
-      doc.fontSize(12).text(`Period: ${report.from} to ${report.to}`, { align: 'center' });
+      doc
+        .fontSize(12)
+        .text(`Period: ${report.from} to ${report.to}`, { align: 'center' });
       doc.moveDown(2);
 
       if (report.type === ReportType.SUMMARY) {
@@ -81,7 +113,9 @@ export class ReportsService {
 
     // Category breakdown
     const byCat: Record<string, number> = {};
-    subs.forEach((s) => { byCat[s.category] = (byCat[s.category] || 0) + Number(s.amount); });
+    subs.forEach((s) => {
+      byCat[s.category] = (byCat[s.category] || 0) + Number(s.amount);
+    });
     doc.font('Helvetica-Bold').text('By Category:');
     doc.font('Helvetica');
     Object.entries(byCat).forEach(([cat, amt]) => {
@@ -89,30 +123,53 @@ export class ReportsService {
     });
   }
 
-  private addDetailedContent(doc: any, subs: Subscription[], cardMap: Record<string, PaymentCard>) {
+  private addDetailedContent(
+    doc: any,
+    subs: Subscription[],
+    cardMap: Record<string, PaymentCard>,
+  ) {
     doc.fontSize(14).font('Helvetica-Bold').text('Subscription Details');
     doc.moveDown();
 
     subs.forEach((s, i) => {
       const card = s.paymentCardId ? cardMap[s.paymentCardId] : null;
-      doc.fontSize(12).font('Helvetica-Bold').text(`${i + 1}. ${s.name}`);
+      doc
+        .fontSize(12)
+        .font('Helvetica-Bold')
+        .text(`${i + 1}. ${s.name}`);
       doc.font('Helvetica');
-      doc.text(`   Category: ${s.category} | Amount: ${s.currency} ${s.amount} | Period: ${s.billingPeriod}`);
+      doc.text(
+        `   Category: ${s.category} | Amount: ${s.currency} ${s.amount} | Period: ${s.billingPeriod}`,
+      );
       doc.text(`   Status: ${s.status} | Added: ${s.addedVia}`);
       if (card) doc.text(`   Card: ••••${card.last4} (${card.brand})`);
       doc.moveDown(0.5);
     });
   }
 
-  private addTaxContent(doc: any, subs: Subscription[], cardMap: Record<string, PaymentCard>) {
+  private addTaxContent(
+    doc: any,
+    subs: Subscription[],
+    cardMap: Record<string, PaymentCard>,
+  ) {
     doc.fontSize(14).font('Helvetica-Bold').text('Tax Report');
     doc.moveDown();
 
     // Table header
     const cols = [50, 180, 280, 340, 390, 460, 510];
-    const headers = ['Service', 'Category', 'Amount', 'Currency', 'Card', 'Period', 'Business'];
+    const headers = [
+      'Service',
+      'Category',
+      'Amount',
+      'Currency',
+      'Card',
+      'Period',
+      'Business',
+    ];
     doc.fontSize(9).font('Helvetica-Bold');
-    headers.forEach((h, i) => doc.text(h, cols[i], doc.y, { continued: i < headers.length - 1 }));
+    headers.forEach((h, i) =>
+      doc.text(h, cols[i], doc.y, { continued: i < headers.length - 1 }),
+    );
     doc.moveDown(0.5);
 
     const lineY = doc.y;
@@ -140,7 +197,9 @@ export class ReportsService {
     });
 
     doc.moveDown();
-    const businessTotal = subs.filter((s) => s.isBusinessExpense).reduce((sum, s) => sum + Number(s.amount), 0);
+    const businessTotal = subs
+      .filter((s) => s.isBusinessExpense)
+      .reduce((sum, s) => sum + Number(s.amount), 0);
     doc.font('Helvetica-Bold').fontSize(11);
     doc.text(`Business Expenses Total: $${businessTotal.toFixed(2)}`);
   }

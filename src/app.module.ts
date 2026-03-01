@@ -31,9 +31,15 @@ import { ScheduleModule } from '@nestjs/schedule';
           url: url || undefined,
           host: url ? undefined : cfg.get<string>('DB_HOST', 'localhost'),
           port: url ? undefined : cfg.get<number>('DB_PORT', 5432),
-          username: url ? undefined : cfg.get<string>('DB_USERNAME', 'postgres'),
-          password: url ? undefined : cfg.get<string>('DB_PASSWORD', 'postgres'),
-          database: url ? undefined : cfg.get<string>('DB_DATABASE', 'subradar'),
+          username: url
+            ? undefined
+            : cfg.get<string>('DB_USERNAME', 'postgres'),
+          password: url
+            ? undefined
+            : cfg.get<string>('DB_PASSWORD', 'postgres'),
+          database: url
+            ? undefined
+            : cfg.get<string>('DB_DATABASE', 'subradar'),
           autoLoadEntities: true,
           synchronize: !isProd,
           logging: false,

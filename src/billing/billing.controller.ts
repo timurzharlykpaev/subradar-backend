@@ -1,6 +1,12 @@
 import {
-  Controller, Post, Body, Headers, Req,
-  UseGuards, Request, BadRequestException,
+  Controller,
+  Post,
+  Body,
+  Headers,
+  Req,
+  UseGuards,
+  Request,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsString } from 'class-validator';
@@ -42,6 +48,10 @@ export class BillingController {
   @Post('checkout')
   async createCheckout(@Request() req, @Body() dto: CreateCheckoutDto) {
     const user = await this.usersService.findById(req.user.id);
-    return this.billingService.createCheckout(req.user.id, dto.variantId, user.email);
+    return this.billingService.createCheckout(
+      req.user.id,
+      dto.variantId,
+      user.email,
+    );
   }
 }
