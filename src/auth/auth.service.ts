@@ -204,7 +204,8 @@ export class AuthService {
       } else {
         // Try as id_token
         const payload = this.jwtService.decode(token) as any;
-        if (!payload?.email) throw new UnauthorizedException('Invalid Google token');
+        if (!payload?.email)
+          throw new UnauthorizedException('Invalid Google token');
         email = payload.email;
         name = payload.name || payload.email.split('@')[0];
         avatarUrl = payload.picture;
