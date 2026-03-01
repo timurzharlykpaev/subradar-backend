@@ -1,0 +1,25 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches: [dev]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 46.101.197.19
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/subradar
+            git pull origin dev
+            docker compose -f docker-compose.subradar.yml build subradar-api-dev
+            docker compose -f docker-compose.subradar.yml up -d --no-deps subradar-api-dev
+            docker image prune -f
+            echo "✅ subradar-api-dev deployed"
