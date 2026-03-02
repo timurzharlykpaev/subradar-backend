@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -21,6 +23,9 @@ import { ScheduleModule } from '@nestjs/schedule';
   controllers: [AppController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ThrottlerModule.forRoot([
+      { name: 'default', ttl: 60000, limit: 120 }, // 120 req/min global
+    ]),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (cfg: ConfigService) => {
@@ -78,6 +83,9 @@ import { ScheduleModule } from '@nestjs/schedule';
     WorkspaceModule,
     StorageModule,
     ScheduleModule.forRoot(),
+  ],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard }, // global rate limiting
   ],
 })
 export class AppModule {}
