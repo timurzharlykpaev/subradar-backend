@@ -141,11 +141,8 @@ export class AuthService {
     const link = `${appUrl}/auth/magic?token=${token}`;
 
     const isProd = this.cfg.get('NODE_ENV') === 'production';
-    const resendKey = this.cfg.get('RESEND_API_KEY', '');
-    const emailDisabled = !resendKey || resendKey.includes('placeholder');
 
-    if (!emailDisabled) {
-      await this.notifications.sendEmail(
+    await this.notifications.sendEmail(
         dto.email,
         'Your SubRadar sign-in link',
         `
@@ -159,7 +156,6 @@ export class AuthService {
           </div>
         `,
       );
-    }
 
     // В dev — возвращаем ссылку в ответе для удобства тестирования
     return {
