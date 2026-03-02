@@ -3,27 +3,23 @@ import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
-import Mailgun from 'mailgun.js';
-import FormData from 'form-data';
+import { Resend } from 'resend';
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
-  private readonly mailgunClient: ReturnType<InstanceType<typeof Mailgun>['client']> | null = null;
+  private readonly resend: Resend | null = null;
   private readonly fromEmail: string;
-  private readonly mailgunDomain: string;
 
   constructor(
     @InjectQueue('notifications') private readonly queue: Queue,
     private readonly cfg: ConfigService,
   ) {
-    const apiKey = cfg.get<string>('MAILGUN_API_KEY', '');
-    this.mailgunDomain = cfg.get<string>('MAILGUN_DOMAIN', 'subradar.ai');
-    this.fromEmail = cfg.get<string>('MAILGUN_FROM_EMAIL', `noreply@${this.mailgunDomain}`);
+    const apiKey = cfg.get<string>('RESEND_API_KEY', '');
+    this.fromEmail = cfg.get<string>('RESEND_FROM_EMAIL', 'noreply@subradar.ai');
 
     if (apiKey && !apiKey.includes('placeholder')) {
-      const mg = new Mailgun(FormData);
-      this.mailgunClient = mg.client({ username: 'api', key: apiKey });
+      this.resend = new Resend(apiKey);
     }
 
     // Initialize Firebase Admin only once
@@ -79,13 +75,13 @@ export class NotificationsService {
   }
 
   async sendEmail(to: string, subject: string, html: string) {
-    if (!this.mailgunClient) {
-      this.logger.warn(`Email not sent to ${to} — MAILGUN_API_KEY not configured`);
+    if (!this.resend) {
+      this.logger.warn(`Email not sent to ${to} — RESEND_API_KEY not configured`);
       return;
     }
-    return this.mailgunClient.messages.create(this.mailgunDomain, {
+    return this.resend.emails.send({
       from: this.fromEmail,
-      to: [to],
+      to,
       subject,
       html,
     });
