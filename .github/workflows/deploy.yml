@@ -62,9 +62,18 @@ jobs:
           envs: TARGET
           script: |
             cd /opt/subradar
-            # Cleanup any stuck/orphan containers before deploy
-            docker rm -f $(docker ps -aq --filter "name=subradar-api-${TARGET}" --filter "status=created") 2>/dev/null || true
-            docker rm -f $(docker ps -aq --filter "name=subradar-api-${TARGET}" --filter "status=exited") 2>/dev/null || true
+            CONTAINER="subradar-api-${TARGET}"
+            LOCK="/tmp/deploy_locks/${CONTAINER}"
+            mkdir -p /tmp/deploy_locks
+
+            # Ставим lock — watchdog не будет слать алерты во время деплоя
+            touch "$LOCK"
+            trap "rm -f $LOCK" EXIT
+
+            # Cleanup stuck containers
+            docker rm -f $(docker ps -aq --filter "name=${CONTAINER}" --filter "status=created") 2>/dev/null || true
+            docker rm -f $(docker ps -aq --filter "name=${CONTAINER}" --filter "status=exited") 2>/dev/null || true
+
             if [ "$TARGET" = "prod" ]; then
               docker compose pull subradar-api-prod
               docker compose up -d --force-recreate --no-deps subradar-api-prod
@@ -75,5 +84,6 @@ jobs:
               echo "✅ subradar-api-dev deployed"
             fi
             docker image prune -f
+            rm -f "$LOCK"
         env:
           TARGET: ${{ steps.env.outputs.target }}
