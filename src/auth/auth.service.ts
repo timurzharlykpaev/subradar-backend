@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { User, AuthProvider } from '../users/entities/user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   RegisterDto,
   LoginDto,
@@ -22,6 +23,7 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly cfg: ConfigService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private generateTokens(user: User) {
@@ -135,9 +137,35 @@ export class AuthService {
       magicLinkExpiry: expiry,
     });
 
-    // TODO: send email via Resend
-    const link = `${this.cfg.get('APP_URL')}/auth/magic?token=${token}`;
-    return { message: 'Magic link sent', link }; // link exposed for dev
+    const appUrl = this.cfg.get('APP_URL', 'https://app.subradar.ai');
+    const link = `${appUrl}/auth/magic?token=${token}`;
+
+    const isProd = this.cfg.get('NODE_ENV') === 'production';
+    const resendKey = this.cfg.get('RESEND_API_KEY', '');
+    const emailDisabled = !resendKey || resendKey.includes('placeholder');
+
+    if (!emailDisabled) {
+      await this.notifications.sendEmail(
+        dto.email,
+        'Your SubRadar sign-in link',
+        `
+          <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+            <h2 style="margin-bottom:8px">Sign in to SubRadar</h2>
+            <p style="color:#666;margin-bottom:24px">Click the button below to sign in. This link expires in 15 minutes.</p>
+            <a href="${link}" style="display:inline-block;background:#8B5CF6;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-weight:600">
+              Sign in to SubRadar
+            </a>
+            <p style="color:#999;font-size:12px;margin-top:24px">If you didn't request this, ignore this email.</p>
+          </div>
+        `,
+      );
+    }
+
+    // В dev — возвращаем ссылку в ответе для удобства тестирования
+    return {
+      message: 'Magic link sent',
+      ...(isProd ? {} : { link }),
+    };
   }
 
   async verifyMagicLink(token: string) {
