@@ -62,13 +62,16 @@ jobs:
           envs: TARGET
           script: |
             cd /opt/subradar
+            # Cleanup any stuck/orphan containers before deploy
+            docker rm -f $(docker ps -aq --filter "name=subradar-api-${TARGET}" --filter "status=created") 2>/dev/null || true
+            docker rm -f $(docker ps -aq --filter "name=subradar-api-${TARGET}" --filter "status=exited") 2>/dev/null || true
             if [ "$TARGET" = "prod" ]; then
               docker compose pull subradar-api-prod
-              docker compose up -d --no-deps subradar-api-prod
+              docker compose up -d --force-recreate --no-deps subradar-api-prod
               echo "✅ subradar-api-prod deployed"
             else
               docker compose pull subradar-api-dev
-              docker compose up -d --no-deps subradar-api-dev
+              docker compose up -d --force-recreate --no-deps subradar-api-dev
               echo "✅ subradar-api-dev deployed"
             fi
             docker image prune -f
