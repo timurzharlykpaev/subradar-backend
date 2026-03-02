@@ -54,7 +54,11 @@ export class AnalyticsService {
     return {
       totalMonthly: Math.round(totalMonthly * 100) / 100,
       totalYearly: Math.round(totalYearly * 100) / 100,
+      activeCount: totalSubscriptions,
       totalSubscriptions,
+      pausedCount: subs.filter((s) => s.status === SubscriptionStatus.PAUSED).length,
+      trialCount: subs.filter((s) => s.status === SubscriptionStatus.TRIAL).length,
+      savingsPossible: 0,
       businessExpenses: Math.round(businessExpenses * 100) / 100,
       averagePerSubscription:
         totalSubscriptions > 0
