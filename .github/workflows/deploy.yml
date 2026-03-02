@@ -24,8 +24,8 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: timurzharlykpaev
+          password: ${{ secrets.GHCR_TOKEN }}
       - name: Build & push dev
         if: github.event_name == 'push' || github.event.inputs.environment == 'dev'
         uses: docker/build-push-action@v5
