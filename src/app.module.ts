@@ -41,7 +41,9 @@ import { ScheduleModule } from '@nestjs/schedule';
             ? undefined
             : cfg.get<string>('DB_DATABASE', 'subradar'),
           autoLoadEntities: true,
-          synchronize: true, // auto-create tables (safe for early-stage)
+          synchronize: !isProd, // dev: auto-sync; prod: use migrations
+          migrations: [__dirname + '/migrations/*.{ts,js}'],
+          migrationsRun: isProd, // в проде — автозапуск миграций при старте
           logging: false,
           ssl: isProd ? { rejectUnauthorized: false } : undefined,
         } as any;
