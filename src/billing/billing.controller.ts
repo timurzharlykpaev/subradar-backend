@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   Headers,
   Req,
@@ -9,13 +10,16 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsString } from 'class-validator';
+import { IsString, IsOptional } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
 
 class CreateCheckoutDto {
-  @IsString() variantId: string;
+  /** Lemon Squeezy variant id */
+  @IsOptional() @IsString() variantId?: string;
+  /** Alias used by web/mobile clients */
+  @IsOptional() @IsString() planId?: string;
 }
 
 @ApiTags('billing')
@@ -48,10 +52,33 @@ export class BillingController {
   @Post('checkout')
   async createCheckout(@Request() req, @Body() dto: CreateCheckoutDto) {
     const user = await this.usersService.findById(req.user.id);
-    return this.billingService.createCheckout(
-      req.user.id,
-      dto.variantId,
-      user.email,
-    );
+    const variantId = dto.variantId || dto.planId || '';
+    return this.billingService.createCheckout(req.user.id, variantId, user.email);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('plans')
+  getPlans() {
+    return [];
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  getBillingMe(@Request() req) {
+    return this.usersService.findById(req.user.id).then((u) => ({
+      plan: (u as any).plan || 'free',
+      status: (u as any).subscriptionStatus || 'active',
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+    }));
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('cancel')
+  cancelBilling() {
+    return { message: 'Cancellation requested' };
   }
 }

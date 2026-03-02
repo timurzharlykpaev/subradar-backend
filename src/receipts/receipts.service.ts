@@ -60,4 +60,15 @@ export class ReceiptsService {
   async findAll(userId: string): Promise<Receipt[]> {
     return this.repo.find({ where: { userId }, order: { uploadedAt: 'DESC' } });
   }
+
+  async findBySubscription(userId: string, subscriptionId: string): Promise<Receipt[]> {
+    return this.repo.find({
+      where: { userId, subscriptionId },
+      order: { uploadedAt: 'DESC' },
+    });
+  }
+
+  async remove(userId: string, receiptId: string): Promise<void> {
+    await this.repo.delete({ id: receiptId, userId });
+  }
 }

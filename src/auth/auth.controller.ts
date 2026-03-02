@@ -93,4 +93,37 @@ export class AuthController {
   async me(@Request() req) {
     return this.usersService.findById(req.user.id);
   }
+
+  /** Alias: GET /auth/profile → same as /auth/me (used by mobile) */
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('profile')
+  async getProfile(@Request() req) {
+    return this.usersService.findById(req.user.id);
+  }
+
+  /** Alias: PUT /auth/profile → update user (used by mobile) */
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('profile')
+  async updateProfile(
+    @Request() req,
+    @Body() body: Partial<{ name: string; avatarUrl: string }>,
+  ) {
+    return this.usersService.update(req.user.id, body);
+  }
+
+  /** Mobile uses POST /auth/google with {idToken} in body — delegate to googleTokenLogin */
+  @Post('google/mobile')
+  googleMobileLogin(@Body() body: { idToken?: string; accessToken?: string }) {
+    return this.authService.googleTokenLogin(
+      body.idToken || body.accessToken || '',
+    );
+  }
+
+  /** Alias: POST /auth/verify with {token} — mobile's magic-link verification */
+  @Post('verify')
+  verifyMagicLinkPost(@Body() body: { token: string }) {
+    return this.authService.verifyMagicLink(body.token);
+  }
 }

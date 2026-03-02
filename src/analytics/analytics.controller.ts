@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Query, Body, UseGuards, Request } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AnalyticsService } from './analytics.service';
@@ -49,5 +49,11 @@ export class AnalyticsController {
   @Get('by-card')
   byCard(@Request() req) {
     return this.service.getByCard(req.user.id);
+  }
+
+  /** Mobile uses POST /analytics/report — stub that delegates to reports service */
+  @Post('report')
+  generateReport(@Body() body: { startDate?: string; endDate?: string; type?: string }) {
+    return { message: 'Use POST /reports/generate', received: body };
   }
 }
