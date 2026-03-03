@@ -1,7 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ForbiddenException,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'crypto';
 import { UsersService } from '../users/users.service';
+import { PLANS } from './plans.config';
 
 @Injectable()
 export class BillingService {
@@ -37,10 +44,17 @@ export class BillingService {
         if (email) {
           const user = await this.usersService.findByEmail(email);
           if (user) {
-            await this.usersService.update(user.id, {
-              plan: status === 'active' ? 'pro' : 'free',
+            const isTrialing = status === 'on_trial';
+            const updates: any = {
+              plan: status === 'active' || isTrialing ? 'pro' : 'free',
               lemonSqueezyCustomerId: String(customerId),
-            });
+            };
+            if (isTrialing && !user.trialUsed) {
+              updates.trialUsed = true;
+              updates.trialStartDate = new Date();
+              updates.trialEndDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+            }
+            await this.usersService.update(user.id, updates);
           }
         }
         break;
@@ -51,6 +65,13 @@ export class BillingService {
           const user = await this.usersService.findByEmail(email);
           if (user) {
             await this.usersService.update(user.id, { plan: 'free' });
+            if (user.proInviteeEmail) {
+              const invitee = await this.usersService.findByEmail(user.proInviteeEmail);
+              if (invitee) {
+                await this.usersService.update(invitee.id, { plan: 'free' });
+              }
+              await this.usersService.update(user.id, { proInviteeEmail: null });
+            }
           }
         }
         break;
@@ -88,6 +109,112 @@ export class BillingService {
     });
 
     const result = (await response.json()) as any;
-    return { checkoutUrl: result?.data?.attributes?.url };
+    return { url: result?.data?.attributes?.url };
+  }
+
+  async startTrial(userId: string): Promise<void> {
+    const user = await this.usersService.findById(userId);
+    if (user.trialUsed) {
+      throw new BadRequestException('Trial has already been used for this account');
+    }
+    const now = new Date();
+    const trialEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    await this.usersService.update(userId, {
+      plan: 'pro',
+      trialUsed: true,
+      trialStartDate: now,
+      trialEndDate: trialEnd,
+    });
+  }
+
+  async activateProInvite(ownerId: string, inviteeEmail: string): Promise<void> {
+    const owner = await this.usersService.findById(ownerId);
+    if (owner.plan !== 'pro' && owner.plan !== 'organization') {
+      throw new ForbiddenException('Only Pro or Organization users can send invites');
+    }
+    if (owner.plan === 'pro' && owner.proInviteeEmail) {
+      throw new BadRequestException('You already have an active invite. Remove it first.');
+    }
+    const invitee = await this.usersService.findByEmail(inviteeEmail);
+    if (!invitee) {
+      throw new NotFoundException(`User with email ${inviteeEmail} not found`);
+    }
+    if (invitee.id === ownerId) {
+      throw new BadRequestException('You cannot invite yourself');
+    }
+    await this.usersService.update(invitee.id, { plan: 'pro' });
+    await this.usersService.update(ownerId, { proInviteeEmail: inviteeEmail });
+  }
+
+  async removeProInvite(ownerId: string): Promise<void> {
+    const owner = await this.usersService.findById(ownerId);
+    if (!owner.proInviteeEmail) {
+      throw new BadRequestException('No active invite to remove');
+    }
+    const invitee = await this.usersService.findByEmail(owner.proInviteeEmail);
+    if (invitee) {
+      await this.usersService.update(invitee.id, { plan: 'free' });
+    }
+    await this.usersService.update(ownerId, { proInviteeEmail: null });
+  }
+
+  private getCurrentMonth(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  async consumeAiRequest(userId: string): Promise<void> {
+    const user = await this.usersService.findById(userId);
+    const currentMonth = this.getCurrentMonth();
+    const planConfig = PLANS[user.plan] ?? PLANS.free;
+
+    const needsReset = user.aiRequestsMonth !== currentMonth;
+    const currentUsed = needsReset ? 0 : user.aiRequestsUsed;
+
+    if (planConfig.aiRequestsLimit !== null && currentUsed >= planConfig.aiRequestsLimit) {
+      throw new ForbiddenException(
+        `AI request limit reached (${planConfig.aiRequestsLimit}/month). Upgrade to increase your limit.`,
+      );
+    }
+
+    await this.usersService.update(userId, {
+      aiRequestsUsed: currentUsed + 1,
+      aiRequestsMonth: currentMonth,
+    });
+  }
+
+  async getBillingInfo(userId: string, subscriptionCount: number) {
+    const user = await this.usersService.findById(userId);
+    const planConfig = PLANS[user.plan] ?? PLANS.free;
+    const currentMonth = this.getCurrentMonth();
+
+    const aiRequestsUsed =
+      user.aiRequestsMonth === currentMonth ? user.aiRequestsUsed : 0;
+
+    let trialDaysLeft: number | null = null;
+    let status: 'active' | 'cancelled' | 'trialing' = 'active';
+
+    if (user.trialEndDate) {
+      const now = Date.now();
+      const end = new Date(user.trialEndDate).getTime();
+      if (end > now) {
+        status = 'trialing';
+        trialDaysLeft = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+      }
+    }
+
+    return {
+      plan: user.plan,
+      status,
+      currentPeriodEnd: user.trialEndDate?.toISOString() ?? null,
+      cancelAtPeriodEnd: false,
+      trialUsed: user.trialUsed,
+      trialDaysLeft,
+      subscriptionCount,
+      subscriptionLimit: planConfig.subscriptionLimit,
+      aiRequestsUsed,
+      aiRequestsLimit: planConfig.aiRequestsLimit,
+      proInviteeEmail: user.proInviteeEmail ?? null,
+    };
   }
 }

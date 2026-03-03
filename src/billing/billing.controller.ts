@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
   Body,
   Headers,
   Req,
@@ -10,16 +11,21 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional, IsEmail } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { PLAN_DETAILS } from './plans.config';
+import { SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 
 class CreateCheckoutDto {
-  /** Lemon Squeezy variant id */
   @IsOptional() @IsString() variantId?: string;
-  /** Alias used by web/mobile clients */
   @IsOptional() @IsString() planId?: string;
+}
+
+class InviteDto {
+  @IsEmail() email: string;
 }
 
 @ApiTags('billing')
@@ -28,6 +34,7 @@ export class BillingController {
   constructor(
     private readonly billingService: BillingService,
     private readonly usersService: UsersService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   @Post('webhook')
@@ -56,23 +63,44 @@ export class BillingController {
     return this.billingService.createCheckout(req.user.id, variantId, user.email);
   }
 
-  @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard)
   @Get('plans')
   getPlans() {
-    return [];
+    return PLAN_DETAILS;
   }
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  getBillingMe(@Request() req) {
-    return this.usersService.findById(req.user.id).then((u) => ({
-      plan: (u as any).plan || 'free',
-      status: (u as any).subscriptionStatus || 'active',
-      currentPeriodEnd: null,
-      cancelAtPeriodEnd: false,
-    }));
+  async getBillingMe(@Request() req) {
+    const subs = await this.subscriptionsService.findAll(req.user.id);
+    const activeCount = subs.filter(
+      (s) => s.status === SubscriptionStatus.ACTIVE || s.status === SubscriptionStatus.TRIAL,
+    ).length;
+    return this.billingService.getBillingInfo(req.user.id, activeCount);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('trial')
+  async startTrial(@Request() req) {
+    await this.billingService.startTrial(req.user.id);
+    return { success: true, message: 'Trial started. Enjoy 7 days of Pro!' };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('invite')
+  async invite(@Request() req, @Body() dto: InviteDto) {
+    await this.billingService.activateProInvite(req.user.id, dto.email);
+    return { success: true, message: `Invite sent to ${dto.email}` };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Delete('invite')
+  async removeInvite(@Request() req) {
+    await this.billingService.removeProInvite(req.user.id);
+    return { success: true, message: 'Invite removed' };
   }
 
   @ApiBearerAuth()

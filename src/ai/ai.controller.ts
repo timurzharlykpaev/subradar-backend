@@ -5,12 +5,14 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  Request,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsString, IsOptional } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AiService } from './ai.service';
+import { BillingService } from '../billing/billing.service';
 
 class LookupServiceDto {
   @IsString() query: string;
@@ -40,36 +42,37 @@ class ParseTextDto {
 @UseGuards(JwtAuthGuard)
 @Controller('ai')
 export class AiController {
-  constructor(private readonly aiService: AiService) {}
+  constructor(
+    private readonly aiService: AiService,
+    private readonly billingService: BillingService,
+  ) {}
 
   @Post('lookup')
-  lookup(@Body() dto: LookupServiceDto) {
+  async lookup(@Request() req, @Body() dto: LookupServiceDto) {
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.query, dto.locale, dto.country);
   }
 
-  /** Alias used by web client */
   @Post('lookup-service')
-  lookupServiceAlias(@Body() dto: LookupServiceDto) {
+  async lookupServiceAlias(@Request() req, @Body() dto: LookupServiceDto) {
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.query, dto.locale, dto.country);
   }
 
-  /** Alias used by mobile client */
   @Post('search')
-  search(@Body() dto: LookupServiceDto) {
+  async search(@Request() req, @Body() dto: LookupServiceDto) {
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.query, dto.locale, dto.country);
   }
 
-  /**
-   * Accepts either:
-   *  - JSON body: { imageBase64: string }
-   *  - multipart/form-data: file field named "file"
-   */
   @Post('parse-screenshot')
   @UseInterceptors(FileInterceptor('file'))
   async parseScreenshot(
+    @Request() req,
     @Body() dto: ParseScreenshotDto,
     @UploadedFile() file?: Express.Multer.File,
   ) {
+    await this.billingService.consumeAiRequest(req.user.id);
     let imageBase64 = dto.imageBase64;
     if (!imageBase64 && file) {
       imageBase64 = file.buffer.toString('base64');
@@ -78,17 +81,19 @@ export class AiController {
   }
 
   @Post('voice')
-  voice(@Body() dto: VoiceDto) {
+  async voice(@Request() req, @Body() dto: VoiceDto) {
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.voiceToSubscription(dto.audioBase64 || '', dto.locale);
   }
 
-  /** Alias used by mobile client */
   @Post('voice-to-subscription')
   @UseInterceptors(FileInterceptor('file'))
   async voiceToSubscriptionAlias(
+    @Request() req,
     @Body() dto: VoiceDto,
     @UploadedFile() file?: Express.Multer.File,
   ) {
+    await this.billingService.consumeAiRequest(req.user.id);
     let audioBase64 = dto.audioBase64;
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
@@ -96,13 +101,14 @@ export class AiController {
     return this.aiService.voiceToSubscription(audioBase64 || '', dto.locale);
   }
 
-  /** Alias used by mobile client */
   @Post('parse-audio')
   @UseInterceptors(FileInterceptor('file'))
   async parseAudio(
+    @Request() req,
     @Body() dto: VoiceDto,
     @UploadedFile() file?: Express.Multer.File,
   ) {
+    await this.billingService.consumeAiRequest(req.user.id);
     let audioBase64 = dto.audioBase64;
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
@@ -110,9 +116,9 @@ export class AiController {
     return this.aiService.voiceToSubscription(audioBase64 || '', dto.locale);
   }
 
-  /** Parse plain text description into subscription fields */
   @Post('parse-text')
-  parseText(@Body() dto: ParseTextDto) {
+  async parseText(@Request() req, @Body() dto: ParseTextDto) {
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.text);
   }
 

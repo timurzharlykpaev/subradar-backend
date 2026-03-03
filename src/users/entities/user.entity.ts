@@ -59,6 +59,24 @@ export class User {
   @Column({ default: 'free' })
   plan: string;
 
+  @Column({ default: false })
+  trialUsed: boolean;
+
+  @Column({ nullable: true, type: 'timestamp' })
+  trialStartDate: Date;
+
+  @Column({ nullable: true, type: 'timestamp' })
+  trialEndDate: Date;
+
+  @Column({ default: 0 })
+  aiRequestsUsed: number;
+
+  @Column({ nullable: true })
+  aiRequestsMonth: string;
+
+  @Column({ nullable: true })
+  proInviteeEmail: string;
+
   @OneToMany(() => Subscription, (s) => s.user)
   subscriptions: Subscription[];
 
