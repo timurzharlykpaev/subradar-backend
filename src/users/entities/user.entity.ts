@@ -74,8 +74,8 @@ export class User {
   @Column({ nullable: true })
   aiRequestsMonth: string;
 
-  @Column({ nullable: true })
-  proInviteeEmail: string | null;
+  @Column({ type: 'varchar', nullable: true, default: null })
+  proInviteeEmail: string;
 
   @Column({ nullable: true })
   timezone: string;
