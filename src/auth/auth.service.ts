@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
+import { randomUUID } from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { User, AuthProvider } from '../users/entities/user.entity';
@@ -19,15 +21,26 @@ import {
 
 @Injectable()
 export class AuthService {
+  private readonly redis: Redis;
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly cfg: ConfigService,
     private readonly notifications: NotificationsService,
-  ) {}
+  ) {
+    this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
+  }
 
-  private generateTokens(user: User) {
-    const payload = { sub: user.id, email: user.email };
+  async createSession(userId: string): Promise<string> {
+    const sessionId = randomUUID();
+    await this.redis.set(`session:${userId}`, sessionId, 'EX', 2592000);
+    return sessionId;
+  }
+
+  private async generateTokens(user: User) {
+    const sessionId = await this.createSession(user.id);
+    const payload = { sub: user.id, email: user.email, sessionId };
     const accessToken = this.jwtService.sign(payload, {
       secret: this.cfg.get('JWT_SECRET', 'secret'),
       expiresIn: this.cfg.get('JWT_EXPIRES_IN', '7d'),
@@ -51,7 +64,7 @@ export class AuthService {
       provider: AuthProvider.LOCAL,
     });
 
-    const tokens = this.generateTokens(user);
+    const tokens = await this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
@@ -64,7 +77,7 @@ export class AuthService {
     const valid = await bcrypt.compare(dto.password, user.password);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
 
-    const tokens = this.generateTokens(user);
+    const tokens = await this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
@@ -80,7 +93,7 @@ export class AuthService {
         providerId: googleUser.providerId,
       });
     }
-    const tokens = this.generateTokens(user);
+    const tokens = await this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
@@ -109,7 +122,7 @@ export class AuthService {
       });
     }
 
-    const tokens = this.generateTokens(user);
+    const tokens = await this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
@@ -185,7 +198,7 @@ export class AuthService {
       magicLinkExpiry: undefined,
     });
 
-    const tokens = this.generateTokens(user);
+    const tokens = await this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
@@ -204,7 +217,7 @@ export class AuthService {
     if (user.refreshToken !== token)
       throw new UnauthorizedException('Refresh token revoked');
 
-    const tokens = this.generateTokens(user);
+    const tokens = await this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return tokens;
   }
@@ -249,12 +262,13 @@ export class AuthService {
         providerId,
       });
     }
-    const tokens = this.generateTokens(user);
+    const tokens = await this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
 
   async logout(userId: string) {
+    await this.redis.del(`session:${userId}`);
     await this.usersService.updateRefreshToken(userId, null);
     return { message: 'Logged out' };
   }
