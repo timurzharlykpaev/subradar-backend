@@ -74,7 +74,7 @@ export class BillingService {
               if (invitee) {
                 await this.usersService.update(invitee.id, { plan: 'free' });
               }
-              await this.usersService.update(user.id, { proInviteeEmail: null });
+              await this.usersService.update(user.id, { proInviteeEmail: undefined as any });
             }
           }
         }
@@ -174,7 +174,7 @@ export class BillingService {
     if (invitee) {
       await this.usersService.update(invitee.id, { plan: 'free' });
     }
-    await this.usersService.update(ownerId, { proInviteeEmail: null });
+    await this.usersService.update(ownerId, { proInviteeEmail: undefined as any });
   }
 
   private getCurrentMonth(): string {
