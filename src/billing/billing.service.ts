@@ -16,6 +16,8 @@ export class BillingService {
   private readonly webhookSecret: string;
   private readonly apiKey: string;
   private readonly storeId: string;
+  private readonly proVariantId: string;
+  private readonly teamVariantId: string;
 
   constructor(
     private readonly cfg: ConfigService,
@@ -24,6 +26,8 @@ export class BillingService {
     this.webhookSecret = cfg.get('LEMON_SQUEEZY_WEBHOOK_SECRET', '');
     this.apiKey = cfg.get('LEMON_SQUEEZY_API_KEY', '');
     this.storeId = cfg.get('LEMON_SQUEEZY_STORE_ID', '');
+    this.proVariantId = cfg.get('LEMON_SQUEEZY_PRO_VARIANT_ID', '874616');
+    this.teamVariantId = cfg.get('LEMON_SQUEEZY_TEAM_VARIANT_ID', '874623');
   }
 
   verifyWebhookSignature(payload: string, signature: string): boolean {
@@ -86,7 +90,10 @@ export class BillingService {
   resolveVariantId(planIdOrVariantId: string): string {
     // If it looks like a numeric variant ID, use directly
     if (/^\d+$/.test(planIdOrVariantId)) return planIdOrVariantId;
-    // Otherwise resolve from plan config
+    // Resolve from env-based config
+    if (planIdOrVariantId === 'pro') return this.proVariantId;
+    if (planIdOrVariantId === 'organization' || planIdOrVariantId === 'team') return this.teamVariantId;
+    // Fallback to plan config
     const plan = PLAN_DETAILS.find((p) => p.id === planIdOrVariantId);
     if (plan && 'variantIdMonthly' in plan) {
       return (plan as any).variantIdMonthly;

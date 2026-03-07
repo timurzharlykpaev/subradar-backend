@@ -7,20 +7,7 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Security headers
-  app.use(helmet());
-
-  app.setGlobalPrefix('api/v1');
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      forbidNonWhitelisted: true,
-    }),
-  );
-
-  // CORS — restrict to known origins
+  // CORS — must be before helmet
   const allowedOrigins = (process.env.CORS_ORIGINS || 'https://app.subradar.ai')
     .split(',')
     .map((o) => o.trim());
@@ -35,6 +22,24 @@ async function bootstrap() {
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
+
+  // Security headers — disable COOP to allow Google OAuth popup
+  app.use(
+    helmet({
+      crossOriginOpenerPolicy: false,
+      crossOriginResourcePolicy: false,
+    }),
+  );
+
+  app.setGlobalPrefix('api/v1');
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  );
 
   const config = new DocumentBuilder()
     .setTitle('SubRadar AI API')
