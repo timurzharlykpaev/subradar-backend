@@ -26,6 +26,9 @@
 | Загрузка чеков | ❌ | ❌ | ✅ |
 | Серверы/инфра подписки | ❌ | ❌ | ✅ |
 | Командный план | ❌ | ❌ | ✅ |
+| Trial Killer (отслеживание trial) | ❌ | ❌ | ✅ |
+| AI анализ расходов | ❌ | ❌ | ✅ (Pro) |
+| Ежемесячный AI аудит | ❌ | ❌ | ✅ (Pro) |
 
 ---
 
@@ -226,6 +229,8 @@ GET /analytics/monthly?months=12
 GET /analytics/by-category?month&year
 GET /analytics/upcoming?days=7
 GET /analytics/by-card
+GET /analytics/trials                — активные trial подписки с countdown
+GET /analytics/insights              — AI анализ расходов и рекомендации (Pro)
 ```
 
 ### Reports
@@ -365,12 +370,48 @@ services:
 
 ---
 
-## 10. Следующие шаги
+## 10. Новые AI-фичи (Roadmap)
 
-1. DNS в Spaceship (5 A-записей → 46.101.197.19)
+### 10.1 Trial Killer (РЕАЛИЗОВАНО)
+Отслеживание пробных периодов, напоминания перед окончанием, ссылки на отмену.
+- `GET /analytics/trials` — список trial подписок с countdown
+- Ежедневный cron (9:00 AM) — проверяет истекающие trials, шлёт push + email
+- Dashboard: TrialTracker секция (web + mobile)
+- Использует существующие поля: `trialEndDate`, `status: TRIAL`, `cancelUrl`, `reminderDaysBefore`
+
+### 10.2 AI Expense Analysis (СЛЕДУЮЩИЙ)
+AI анализирует расходы, предлагает отменить неиспользуемые подписки, показывает экономию.
+- `GET /analytics/insights` — AI рекомендации по оптимизации расходов
+- Заменит `savingsPossible: 0` на реальные данные
+- Pro-only фича, расходует AI квоту
+
+### 10.3 AI Subscription Audit (ПЛАНИРУЕТСЯ)
+Ежемесячный AI аудит: тренды расходов, дупликаты, health score (A-F).
+- `POST /reports/audit` — ручная генерация
+- `GET /reports/audit/latest` — последний аудит
+- Ежемесячный cron (1-е число), генерирует PDF + in-app отчёт
+- Тип отчёта: `audit`, поле `aiInsights` (JSONB)
+
+### 10.4 SaaS Tracker B2B (ПЛАНИРУЕТСЯ)
+Трекер SaaS расходов для компаний. Бюджеты, аналитика по workspace.
+- Расширение workspace: `totalBudget`, `budgetCurrency`, `budgetAlertThreshold`
+- `GET /workspace/:id/analytics`, `GET /workspace/:id/budget`
+- AI анализ SaaS расходов с B2B промптом
+
+### 10.5 Auto-Discovery (ОТЛОЖЕНО)
+Автоматическое обнаружение подписок через Gmail/Apple/Google Play.
+- Gmail API OAuth + email parsing через AI
+- Новая сущность `DiscoveredSubscription` (confidence, confirm/dismiss)
+- Высокая сложность + GDPR — реализация после 10.2-10.3
+
+---
+
+## 11. Инфраструктура (завершено)
+
+1. DNS → 46.101.197.19
 2. SSL certbot
 3. Docker deploy backend
-4. Deploy web → app.subradar.io
-5. Заполнить .env.prod
-6. Workspace/Team модуль (следующая итерация)
-7. App Store + Google Play публикация
+4. Deploy web → app.subradar.ai
+5. .env.prod настроен
+6. Workspace/Team модуль (beta)
+7. App Store + Google Play (в процессе)
