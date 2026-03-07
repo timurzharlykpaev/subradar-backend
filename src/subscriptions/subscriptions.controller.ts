@@ -17,6 +17,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SubscriptionsService } from './subscriptions.service';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
+import { SubscriptionStatus } from './entities/subscription.entity';
 import { ReceiptsService } from '../receipts/receipts.service';
 
 @ApiTags('subscriptions')
@@ -77,7 +78,25 @@ export class SubscriptionsController {
   /** Cancel a subscription (set status to cancelled) */
   @Post(':id/cancel')
   cancel(@Request() req, @Param('id') id: string) {
-    return this.service.update(req.user.id, id, { status: 'cancelled' } as any);
+    return this.service.updateStatus(req.user.id, id, SubscriptionStatus.CANCELLED);
+  }
+
+  /** Pause a subscription */
+  @Post(':id/pause')
+  pause(@Request() req, @Param('id') id: string) {
+    return this.service.updateStatus(req.user.id, id, SubscriptionStatus.PAUSED);
+  }
+
+  /** Restore a paused/cancelled subscription to active */
+  @Post(':id/restore')
+  restore(@Request() req, @Param('id') id: string) {
+    return this.service.updateStatus(req.user.id, id, SubscriptionStatus.ACTIVE);
+  }
+
+  /** Archive (soft delete) a subscription */
+  @Post(':id/archive')
+  archive(@Request() req, @Param('id') id: string) {
+    return this.service.updateStatus(req.user.id, id, SubscriptionStatus.CANCELLED);
   }
 
   // ── Nested receipts routes ──────────────────────────────────────────────────

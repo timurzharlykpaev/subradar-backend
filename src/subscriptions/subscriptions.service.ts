@@ -76,6 +76,19 @@ export class SubscriptionsService {
     await this.repo.remove(sub);
   }
 
+  async updateStatus(
+    userId: string,
+    id: string,
+    status: SubscriptionStatus,
+  ): Promise<Subscription> {
+    const sub = await this.findOne(userId, id);
+    sub.status = status;
+    if (status === SubscriptionStatus.CANCELLED) {
+      sub.cancelledAt = new Date();
+    }
+    return this.repo.save(sub);
+  }
+
   findAllForUser(userId: string) {
     return this.repo.find({ where: { userId } });
   }

@@ -30,4 +30,20 @@ export class UsersController {
   ) {
     return this.usersService.update(req.user.id, body);
   }
+
+  @Patch('preferences')
+  updatePreferences(
+    @Request() req,
+    @Body()
+    body: Partial<{
+      timezone: string;
+      locale: string;
+      dateFormat: string;
+      notificationsEnabled: boolean;
+      currency: string;
+      country: string;
+    }>,
+  ) {
+    return this.usersService.updatePreferences(req.user.id, body);
+  }
 }

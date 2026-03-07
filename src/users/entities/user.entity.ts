@@ -77,6 +77,27 @@ export class User {
   @Column({ nullable: true })
   proInviteeEmail: string;
 
+  @Column({ nullable: true })
+  timezone: string;
+
+  @Column({ nullable: true })
+  locale: string;
+
+  @Column({ nullable: true })
+  country: string;
+
+  @Column({ nullable: true, default: 'USD' })
+  defaultCurrency: string;
+
+  @Column({ nullable: true })
+  dateFormat: string;
+
+  @Column({ default: false })
+  onboardingCompleted: boolean;
+
+  @Column({ default: true })
+  notificationsEnabled: boolean;
+
   @OneToMany(() => Subscription, (s) => s.user)
   subscriptions: Subscription[];
 

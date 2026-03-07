@@ -9,9 +9,17 @@ import {
 import { User } from '../../users/entities/user.entity';
 
 export enum ReportType {
-  SUMMARY = 'summary',
-  DETAILED = 'detailed',
-  TAX = 'tax',
+  SUMMARY = 'SUMMARY',
+  DETAILED = 'DETAILED',
+  TAX = 'TAX',
+  AUDIT = 'AUDIT',
+}
+
+export enum ReportStatus {
+  PENDING = 'PENDING',
+  GENERATING = 'GENERATING',
+  READY = 'READY',
+  FAILED = 'FAILED',
 }
 
 @Entity('reports')
@@ -38,8 +46,8 @@ export class Report {
   @Column({ nullable: true })
   fileUrl: string;
 
-  @Column({ default: 'pending' })
-  status: string;
+  @Column({ type: 'enum', enum: ReportStatus, default: ReportStatus.PENDING })
+  status: ReportStatus;
 
   @CreateDateColumn()
   createdAt: Date;

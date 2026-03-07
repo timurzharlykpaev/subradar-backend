@@ -44,4 +44,30 @@ export class UsersService {
   async updateRefreshToken(id: string, token: string | null): Promise<void> {
     await this.repo.update(id, { refreshToken: token ?? undefined });
   }
+
+  async updatePreferences(
+    id: string,
+    prefs: Partial<{
+      timezone: string;
+      locale: string;
+      dateFormat: string;
+      notificationsEnabled: boolean;
+      currency: string;
+      country: string;
+    }>,
+  ): Promise<User> {
+    const updateData: Partial<User> = {};
+    if (prefs.timezone !== undefined) updateData.timezone = prefs.timezone;
+    if (prefs.locale !== undefined) updateData.locale = prefs.locale;
+    if (prefs.dateFormat !== undefined) updateData.dateFormat = prefs.dateFormat;
+    if (prefs.notificationsEnabled !== undefined)
+      updateData.notificationsEnabled = prefs.notificationsEnabled;
+    if (prefs.currency !== undefined) updateData.defaultCurrency = prefs.currency;
+    if (prefs.country !== undefined) updateData.country = prefs.country;
+
+    if (Object.keys(updateData).length > 0) {
+      await this.repo.update(id, updateData);
+    }
+    return this.findById(id);
+  }
 }

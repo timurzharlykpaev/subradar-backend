@@ -7,7 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const PDFDocument = require('pdfkit');
-import { Report, ReportType } from './entities/report.entity';
+import { Report, ReportType, ReportStatus } from './entities/report.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
 
@@ -32,7 +32,7 @@ export class ReportsService {
       from,
       to,
       type,
-      status: 'ready',
+      status: ReportStatus.READY,
     });
     return this.reportRepo.save(report);
   }

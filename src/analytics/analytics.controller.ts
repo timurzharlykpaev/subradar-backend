@@ -23,13 +23,47 @@ export class AnalyticsController {
     );
   }
 
+  /** Alias for summary */
+  @Get('home')
+  home(
+    @Request() req,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+  ) {
+    return this.service.getSummary(
+      req.user.id,
+      month ? +month : undefined,
+      year ? +year : undefined,
+    );
+  }
+
   @Get('monthly')
   monthly(@Request() req, @Query('months') months?: string) {
     return this.service.getMonthly(req.user.id, months ? +months : 12);
   }
 
+  /** Alias for monthly */
+  @Get('trends')
+  trends(@Request() req, @Query('months') months?: string) {
+    return this.service.getMonthly(req.user.id, months ? +months : 12);
+  }
+
   @Get('by-category')
   byCategory(
+    @Request() req,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+  ) {
+    return this.service.getByCategory(
+      req.user.id,
+      month ? +month : undefined,
+      year ? +year : undefined,
+    );
+  }
+
+  /** Alias for by-category */
+  @Get('categories')
+  categories(
     @Request() req,
     @Query('month') month?: string,
     @Query('year') year?: string,
