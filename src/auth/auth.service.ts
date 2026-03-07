@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   ConflictException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -19,6 +20,8 @@ import {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
@@ -239,8 +242,10 @@ export class AuthService {
       throw new UnauthorizedException('Failed to verify Google token');
     }
 
+    this.logger.log(`googleTokenLogin: email=${email}, providerId=${providerId}`);
     let user = await this.usersService.findByEmail(email);
     if (!user) {
+      this.logger.log(`googleTokenLogin: creating new user ${email}`);
       user = await this.usersService.create({
         email,
         name,
@@ -249,8 +254,10 @@ export class AuthService {
         providerId,
       });
     }
+    this.logger.log(`googleTokenLogin: generating tokens for user ${user.id}`);
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
+    this.logger.log(`googleTokenLogin: success for ${email}`);
     return { user, ...tokens };
   }
 
