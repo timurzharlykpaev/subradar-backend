@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'crypto';
 import { UsersService } from '../users/users.service';
-import { PLANS } from './plans.config';
+import { PLANS, PLAN_DETAILS } from './plans.config';
 
 @Injectable()
 export class BillingService {
@@ -83,7 +83,19 @@ export class BillingService {
     }
   }
 
-  async createCheckout(userId: string, variantId: string, email: string) {
+  resolveVariantId(planIdOrVariantId: string): string {
+    // If it looks like a numeric variant ID, use directly
+    if (/^\d+$/.test(planIdOrVariantId)) return planIdOrVariantId;
+    // Otherwise resolve from plan config
+    const plan = PLAN_DETAILS.find((p) => p.id === planIdOrVariantId);
+    if (plan && 'variantIdMonthly' in plan) {
+      return (plan as any).variantIdMonthly;
+    }
+    return planIdOrVariantId;
+  }
+
+  async createCheckout(userId: string, planIdOrVariantId: string, email: string) {
+    const variantId = this.resolveVariantId(planIdOrVariantId);
     const response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
       method: 'POST',
       headers: {

@@ -45,8 +45,8 @@ export const PLAN_DETAILS = [
     price: 2.99,
     yearlyPrice: 24.99,
     currency: 'USD',
-    variantIdMonthly: 'pro-monthly',
-    variantIdYearly: 'pro-yearly',
+    variantIdMonthly: '874616',
+    variantIdYearly: '874616',
     features: [
       'Unlimited subscriptions',
       '200 AI requests per month',
@@ -63,8 +63,8 @@ export const PLAN_DETAILS = [
     price: 9.99,
     yearlyPrice: 99.99,
     currency: 'USD',
-    variantIdMonthly: 'org-monthly',
-    variantIdYearly: 'org-yearly',
+    variantIdMonthly: '874623',
+    variantIdYearly: '874623',
     features: [
       'Everything in Pro',
       'Unlimited AI requests',
