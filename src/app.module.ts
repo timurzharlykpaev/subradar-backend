@@ -24,7 +24,7 @@ import { ScheduleModule } from '@nestjs/schedule';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot([
-      { name: 'default', ttl: 60000, limit: 120 }, // 120 req/min global
+      { name: 'default', ttl: 60000, limit: 300 }, // 300 req/min global
     ]),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],

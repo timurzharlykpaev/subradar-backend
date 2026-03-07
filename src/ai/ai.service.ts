@@ -1,33 +1,67 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
+import Redis from 'ioredis';
 
 @Injectable()
 export class AiService {
   private readonly openai: OpenAI;
   private readonly model: string;
+  private readonly redis: Redis;
+  private activeRequests = 0;
+  private readonly maxConcurrency = 3;
+  private readonly waitQueue: (() => void)[] = [];
 
   constructor(private readonly cfg: ConfigService) {
     this.openai = new OpenAI({ apiKey: cfg.get('OPENAI_API_KEY') });
     this.model = cfg.get('OPENAI_MODEL', 'gpt-4o');
+    this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
+  }
+
+  private async acquireSlot(): Promise<void> {
+    if (this.activeRequests < this.maxConcurrency) {
+      this.activeRequests++;
+      return;
+    }
+    return new Promise((resolve) => {
+      this.waitQueue.push(() => {
+        this.activeRequests++;
+        resolve();
+      });
+    });
+  }
+
+  private releaseSlot(): void {
+    this.activeRequests--;
+    const next = this.waitQueue.shift();
+    if (next) next();
   }
 
   private async chat(
     messages: OpenAI.ChatCompletionMessageParam[],
     jsonMode = true,
   ) {
-    const response = await this.openai.chat.completions.create({
-      model: this.model,
-      messages,
-      response_format: jsonMode ? { type: 'json_object' } : undefined,
-      temperature: 0.2,
-    });
-    const content = response.choices[0].message.content || '{}';
-    return jsonMode ? JSON.parse(content) : content;
+    await this.acquireSlot();
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: this.model,
+        messages,
+        response_format: jsonMode ? { type: 'json_object' } : undefined,
+        temperature: 0.2,
+      });
+      const content = response.choices[0].message.content || '{}';
+      return jsonMode ? JSON.parse(content) : content;
+    } finally {
+      this.releaseSlot();
+    }
   }
 
   async lookupService(query: string, locale = 'en', country = 'US') {
-    return this.chat([
+    const cacheKey = `ai:lookup:${query}:${locale}:${country}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    const result = await this.chat([
       {
         role: 'system',
         content: `You are a subscription service lookup assistant. Return JSON with fields: name, iconUrl, serviceUrl, cancelUrl, category (one of STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER), plans (array of {name, price, currency, period}). Locale: ${locale}, Country: ${country}.`,
@@ -37,50 +71,63 @@ export class AiService {
         content: `Look up subscription service: "${query}"`,
       },
     ]);
+
+    await this.redis.set(cacheKey, JSON.stringify(result), 'EX', 86400);
+    return result;
   }
 
   async parseScreenshot(imageBase64: string) {
-    const response = await this.openai.chat.completions.create({
-      model: this.model,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a receipt/subscription screenshot parser. Extract subscription details and return JSON with: name, amount, currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY/LIFETIME/ONE_TIME), date (ISO string), planName.',
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'Parse this subscription screenshot:' },
-            {
-              type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
-            },
-          ],
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-    });
-    return JSON.parse(response.choices[0].message.content || '{}');
+    await this.acquireSlot();
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a receipt/subscription screenshot parser. Extract subscription details and return JSON with: name, amount, currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY/LIFETIME/ONE_TIME), date (ISO string), planName.',
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Parse this subscription screenshot:' },
+              {
+                type: 'image_url',
+                image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
+              },
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.1,
+      });
+      return JSON.parse(response.choices[0].message.content || '{}');
+    } finally {
+      this.releaseSlot();
+    }
   }
 
   async voiceToSubscription(audioBase64: string, locale = 'en') {
-    // First transcribe audio
-    const audioBuffer = Buffer.from(audioBase64, 'base64');
-    const audioFile = new File([audioBuffer], 'audio.webm', {
-      type: 'audio/webm',
-    });
+    // First transcribe audio (counts as one OpenAI slot)
+    await this.acquireSlot();
+    let text: string;
+    try {
+      const audioBuffer = Buffer.from(audioBase64, 'base64');
+      const audioFile = new File([audioBuffer], 'audio.webm', {
+        type: 'audio/webm',
+      });
 
-    const transcription = await this.openai.audio.transcriptions.create({
-      file: audioFile,
-      model: 'whisper-1',
-      language: locale.split('-')[0],
-    });
+      const transcription = await this.openai.audio.transcriptions.create({
+        file: audioFile,
+        model: 'whisper-1',
+        language: locale.split('-')[0],
+      });
+      text = transcription.text;
+    } finally {
+      this.releaseSlot();
+    }
 
-    const text = transcription.text;
-
-    // Then parse subscription details from transcript
+    // Then parse subscription details from transcript (chat() acquires its own slot)
     return this.chat([
       {
         role: 'system',

@@ -98,7 +98,7 @@ PRODUCTIVITY | HEALTH | NEWS | OTHER
 - Refresh token rotation
 
 ### Rate limiting
-- Global: 120 req/min (ThrottlerGuard)
+- Global: 300 req/min (ThrottlerGuard)
 - Не убирать
 
 ## API контракт (фронт + мобилка завязаны)
