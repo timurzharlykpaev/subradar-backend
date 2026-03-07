@@ -161,6 +161,29 @@ export class AnalyticsService {
       );
   }
 
+  async getTrials(userId: string) {
+    const subs = await this.subRepo.find({
+      where: { userId, status: SubscriptionStatus.TRIAL },
+      relations: ['paymentCard'],
+    });
+
+    const now = Date.now();
+    return subs.map((s) => {
+      const daysUntilTrialEnd = s.trialEndDate
+        ? Math.ceil(
+            (new Date(s.trialEndDate).getTime() - now) / (24 * 60 * 60 * 1000),
+          )
+        : null;
+      return {
+        ...s,
+        daysUntilTrialEnd,
+        isExpiringSoon:
+          daysUntilTrialEnd !== null && daysUntilTrialEnd >= 0 && daysUntilTrialEnd <= 3,
+        isExpired: daysUntilTrialEnd !== null && daysUntilTrialEnd < 0,
+      };
+    });
+  }
+
   async getByCard(userId: string) {
     const cards = await this.cardRepo.find({ where: { userId } });
     const subs = await this.subRepo.find({ where: { userId } });

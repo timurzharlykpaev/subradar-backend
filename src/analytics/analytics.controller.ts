@@ -51,6 +51,11 @@ export class AnalyticsController {
     return this.service.getByCard(req.user.id);
   }
 
+  @Get('trials')
+  trials(@Request() req) {
+    return this.service.getTrials(req.user.id);
+  }
+
   /** Mobile uses POST /analytics/report — stub that delegates to reports service */
   @Post('report')
   generateReport(@Body() body: { startDate?: string; endDate?: string; type?: string }) {
