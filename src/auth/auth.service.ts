@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   ConflictException,
+  InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -243,22 +244,27 @@ export class AuthService {
     }
 
     this.logger.log(`googleTokenLogin: email=${email}, providerId=${providerId}`);
-    let user = await this.usersService.findByEmail(email);
-    if (!user) {
-      this.logger.log(`googleTokenLogin: creating new user ${email}`);
-      user = await this.usersService.create({
-        email,
-        name,
-        avatarUrl,
-        provider: AuthProvider.GOOGLE,
-        providerId,
-      });
+    try {
+      let user = await this.usersService.findByEmail(email);
+      if (!user) {
+        this.logger.log(`googleTokenLogin: creating new user ${email}`);
+        user = await this.usersService.create({
+          email,
+          name,
+          avatarUrl,
+          provider: AuthProvider.GOOGLE,
+          providerId,
+        });
+      }
+      this.logger.log(`googleTokenLogin: generating tokens for user ${user.id}`);
+      const tokens = this.generateTokens(user);
+      await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
+      this.logger.log(`googleTokenLogin: success for ${email}`);
+      return { user, ...tokens };
+    } catch (dbError: any) {
+      this.logger.error(`googleTokenLogin DB error for ${email}: ${dbError?.message}`, dbError?.stack);
+      throw new InternalServerErrorException(`Auth DB error: ${dbError?.message}`);
     }
-    this.logger.log(`googleTokenLogin: generating tokens for user ${user.id}`);
-    const tokens = this.generateTokens(user);
-    await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
-    this.logger.log(`googleTokenLogin: success for ${email}`);
-    return { user, ...tokens };
   }
 
   async logout(userId: string) {
