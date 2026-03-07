@@ -75,7 +75,7 @@ export class User {
   aiRequestsMonth: string;
 
   @Column({ nullable: true })
-  proInviteeEmail: string;
+  proInviteeEmail: string | null;
 
   @Column({ nullable: true })
   timezone: string;
