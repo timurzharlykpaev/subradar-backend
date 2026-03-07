@@ -53,24 +53,119 @@ jobs:
           push: true
           tags: ghcr.io/timurzharlykpaev/subradar-backend:latest
 
+      - name: Write .env.prod to server
+        if: steps.env.outputs.target == 'prod'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 46.101.197.19
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cat > /opt/subradar/.env.prod << 'ENVEOF'
+            NODE_ENV=production
+            PORT=8080
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            DB_HOST=dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com
+            DB_PORT=25060
+            DB_USERNAME=doadmin
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_DATABASE=subradar
+            DB_SSL=true
+            REDIS_URL=redis://subradar-redis:6379
+            JWT_ACCESS_SECRET=${{ secrets.JWT_ACCESS_SECRET }}
+            JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
+            JWT_EXPIRES_IN=7d
+            JWT_REFRESH_EXPIRES_IN=30d
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            GOOGLE_CALLBACK_URL=https://api.subradar.ai/api/v1/auth/google/callback
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            OPENAI_MODEL=gpt-4o
+            DO_SPACES_KEY=${{ secrets.DO_SPACES_KEY }}
+            DO_SPACES_SECRET=${{ secrets.DO_SPACES_SECRET }}
+            DO_SPACES_BUCKET=subradar
+            DO_SPACES_REGION=fra1
+            DO_SPACES_ENDPOINT=https://fra1.digitaloceanspaces.com
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            RESEND_FROM_EMAIL=noreply@subradar.ai
+            FRONTEND_URL=https://app.subradar.ai
+            CORS_ORIGINS=https://app.subradar.ai
+            APP_URL=https://app.subradar.ai
+            NODE_TLS_REJECT_UNAUTHORIZED=0
+            LEMON_SQUEEZY_API_KEY=${{ secrets.LEMON_SQUEEZY_API_KEY }}
+            LEMON_SQUEEZY_WEBHOOK_SECRET=${{ secrets.LEMON_SQUEEZY_WEBHOOK_SECRET }}
+            LEMON_SQUEEZY_STORE_ID=${{ secrets.LEMON_SQUEEZY_STORE_ID }}
+            LEMON_SQUEEZY_PRO_MONTHLY_VARIANT_ID=${{ secrets.LEMON_SQUEEZY_PRO_MONTHLY_VARIANT_ID }}
+            LEMON_SQUEEZY_PRO_YEARLY_VARIANT_ID=${{ secrets.LEMON_SQUEEZY_PRO_YEARLY_VARIANT_ID }}
+            LEMON_SQUEEZY_TEAM_MONTHLY_VARIANT_ID=${{ secrets.LEMON_SQUEEZY_TEAM_MONTHLY_VARIANT_ID }}
+            LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID=${{ secrets.LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID }}
+            ENVEOF
+            echo "✅ .env.prod updated"
+
+      - name: Write .env.dev to server
+        if: steps.env.outputs.target == 'dev'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 46.101.197.19
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cat > /opt/subradar/.env.dev << 'ENVEOF'
+            NODE_ENV=development
+            PORT=8080
+            DATABASE_URL=postgresql://doadmin:${{ secrets.DB_PASSWORD }}@dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com:25060/subradar_dev?sslmode=require
+            DB_HOST=dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com
+            DB_PORT=25060
+            DB_USERNAME=doadmin
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_DATABASE=subradar_dev
+            DB_SSL=true
+            REDIS_URL=redis://subradar-redis:6379
+            JWT_ACCESS_SECRET=${{ secrets.JWT_ACCESS_SECRET }}
+            JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
+            JWT_EXPIRES_IN=7d
+            JWT_REFRESH_EXPIRES_IN=30d
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            GOOGLE_CALLBACK_URL=https://api-dev.subradar.ai/api/v1/auth/google/callback
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            OPENAI_MODEL=gpt-4o
+            DO_SPACES_KEY=${{ secrets.DO_SPACES_KEY }}
+            DO_SPACES_SECRET=${{ secrets.DO_SPACES_SECRET }}
+            DO_SPACES_BUCKET=subradar
+            DO_SPACES_REGION=fra1
+            DO_SPACES_ENDPOINT=https://fra1.digitaloceanspaces.com
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            RESEND_FROM_EMAIL=noreply@subradar.ai
+            FRONTEND_URL=https://app-dev.subradar.ai
+            CORS_ORIGINS=https://app-dev.subradar.ai,http://localhost:5173
+            APP_URL=https://app-dev.subradar.ai
+            NODE_TLS_REJECT_UNAUTHORIZED=0
+            LEMON_SQUEEZY_API_KEY=${{ secrets.LEMON_SQUEEZY_API_KEY }}
+            LEMON_SQUEEZY_WEBHOOK_SECRET=${{ secrets.LEMON_SQUEEZY_WEBHOOK_SECRET }}
+            LEMON_SQUEEZY_STORE_ID=${{ secrets.LEMON_SQUEEZY_STORE_ID }}
+            LEMON_SQUEEZY_PRO_MONTHLY_VARIANT_ID=${{ secrets.LEMON_SQUEEZY_PRO_MONTHLY_VARIANT_ID }}
+            LEMON_SQUEEZY_PRO_YEARLY_VARIANT_ID=${{ secrets.LEMON_SQUEEZY_PRO_YEARLY_VARIANT_ID }}
+            LEMON_SQUEEZY_TEAM_MONTHLY_VARIANT_ID=${{ secrets.LEMON_SQUEEZY_TEAM_MONTHLY_VARIANT_ID }}
+            LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID=${{ secrets.LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID }}
+            ENVEOF
+            echo "✅ .env.dev updated"
+
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 46.101.197.19
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: TARGET
           script: |
+            TARGET="${{ steps.env.outputs.target }}"
             cd /opt/subradar
             CONTAINER="subradar-api-${TARGET}"
             LOCK="/tmp/deploy_locks/${CONTAINER}"
             mkdir -p /tmp/deploy_locks
-
-            # Ставим lock — watchdog не будет слать алерты во время деплоя
             touch "$LOCK"
             trap "rm -f $LOCK" EXIT
 
-            # Cleanup stuck containers
             docker rm -f $(docker ps -aq --filter "name=${CONTAINER}" --filter "status=created") 2>/dev/null || true
             docker rm -f $(docker ps -aq --filter "name=${CONTAINER}" --filter "status=exited") 2>/dev/null || true
 
