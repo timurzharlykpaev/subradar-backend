@@ -2,6 +2,19 @@
 
 AI-powered subscription management backend built with NestJS.
 
+## Documentation
+
+See `docs/` folder for full product specification:
+- [Product Overview](docs/PRODUCT_OVERVIEW.md) — vision, principles, monetization, MVP criteria
+- [Domain Model](docs/DOMAIN_MODEL.md) — entities, enums, status lifecycle
+- [API Contracts](docs/API_CONTRACTS.md) — all endpoints with examples
+- [Billing Rules](docs/BILLING_RULES.md) — Free/Pro/Team plans, trial logic
+- [AI Behavior](docs/AI_BEHAVIOR.md) — AI rules, confidence, fallbacks
+- [State Rules](docs/STATE_RULES.md) — subscription lifecycle, empty states
+- [Module Boundaries](docs/MODULE_BOUNDARIES.md) — NestJS module responsibilities
+- [Jobs and Crons](docs/JOBS_AND_CRONS.md) — background tasks
+- [AI Pipelines](docs/AI_PIPELINES.md) — text/screenshot/matcher/insights/audit pipelines
+
 ## Stack
 
 - **Framework:** NestJS + TypeScript

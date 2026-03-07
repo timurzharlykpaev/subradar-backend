@@ -166,5 +166,29 @@ REDIS_URL=redis://subradar-redis:6379
 - Существующие миграции в `src/migrations/`
 - Порты: prod=8082, dev=8083
 
+## Документация
+Подробная спецификация продукта в папке `docs/`:
+- `docs/PRODUCT_OVERVIEW.md` — обзор продукта, принципы, аудитория, монетизация, MVP критерии
+- `docs/DOMAIN_MODEL.md` — все сущности и их поля, lifecycle статусов
+- `docs/API_CONTRACTS.md` — все API endpoints с примерами
+- `docs/BILLING_RULES.md` — тарифы Free/Pro/Team, логика триала
+- `docs/AI_BEHAVIOR.md` — правила поведения AI, confidence levels, fallback
+- `docs/STATE_RULES.md` — жизненный цикл подписки, empty states
+- `docs/MODULE_BOUNDARIES.md` — границы NestJS модулей
+- `docs/JOBS_AND_CRONS.md` — фоновые задачи и cron jobs
+- `docs/AI_PIPELINES.md` — AI пайплайны (text, screenshot, matcher, insights, audit)
+
+## Agent Rules
+1. Не ломать существующий Google auth
+2. Не добавлять новые библиотеки без явной причины
+3. Любая AI-фича должна иметь fallback UI
+4. Любой новый экран должен быть связан с navigation map
+5. Любой новый API endpoint должен быть отражён в docs/API_CONTRACTS.md
+6. Любая тяжёлая операция должна быть async/job-based (BullMQ)
+7. Любые финансовые данные требуют user confirmation
+8. Любая новая сущность должна иметь status lifecycle
+9. Любая продуктовая фича должна иметь analytics events
+10. Не реализовывать Release 2/3 фичи, пока не стабилен MVP (Release 1)
+
 ## Прогресс
 См. `PROGRESS.md` в корне репозитория.

@@ -59,11 +59,47 @@ _(ничего активного)_
 
 ---
 
-## 📋 Бэклог
+## MVP Acceptance Criteria (из новой спецификации)
+
+- [x] Пользователь может войти через Google
+- [x] Пользователь может добавить подписку вручную
+- [ ] Пользователь может пройти onboarding
+- [ ] Пользователь может добавить подписку через AI text
+- [ ] Пользователь может добавить подписку через фото/скриншот
+- [ ] Пользователь может подтвердить или исправить AI-результат
+- [x] Пользователь видит список подписок
+- [ ] Пользователь видит home dashboard (GET /analytics/home)
+- [ ] Пользователь видит upcoming charges (GET /analytics/upcoming)
+- [ ] Пользователь видит trial countdown (GET /analytics/trials)
+- [ ] Пользователь получает пуши за 7 дней и за 1 день до списания
+- [ ] Пользователь видит monthly и yearly forecast (GET /analytics/forecast)
+- [x] Пользователь может сохранить card nickname + last4
+- [ ] Пользователь может сгенерировать PDF summary
+- [ ] Free limits и Pro gating работают корректно
+- [ ] Аналитика обновляется после добавления/редактирования подписки
+- [ ] Duplicate warning работает хотя бы на базовом уровне
+- [x] Нет хранения чувствительных карточных данных
+- [ ] Даты и уведомления работают с timezone
+- [ ] Ошибки AI не ломают сценарий добавления
+
+## Backlog
 
 - [ ] Magic link end-to-end тест (email доставка не проверена)
-- [ ] Webhook signature verify для будущих payment providers
-- [ ] Расширенный AI анализ (паттерны трат, дубли подписок)
-- [ ] Push уведомления (upcoming payments)
+- [ ] Lemon Squeezy webhook signature verification
+- [ ] AI text parser (POST /ai/parse-text-subscription)
+- [ ] AI screenshot parser (POST /ai/parse-subscription-image)
+- [ ] AI service matcher (POST /ai/match-service)
+- [ ] AI insights endpoint (GET /ai/subscription-insights)
+- [ ] AI monthly audit (POST /ai/run-audit)
+- [ ] Granular analytics endpoints (home, trends, categories, upcoming, trials, forecast, savings)
+- [ ] Push notifications via FCM (upcoming payments, trial expiry)
+- [ ] Daily cron job (billing reminders, trial alerts)
+- [ ] Monthly audit cron job
+- [ ] Async PDF report generation (BullMQ)
+- [ ] ARCHIVED subscription status
+- [ ] Subscription archive/pause/restore endpoints
+- [ ] New subscription fields: normalizedServiceId, sourceType, aiConfidence, tags, reminderOffsets
+- [ ] Files/attachments module (temp screenshot storage)
+- [ ] Audit/logs module (event history)
 - [ ] Unit тесты (покрытие низкое)
 - [ ] COOP header для app.subradar.ai
