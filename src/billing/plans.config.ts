@@ -45,7 +45,7 @@ export const PLAN_DETAILS = [
     price: 2.99,
     yearlyPrice: 24.99,
     currency: 'USD',
-    variantIdMonthly: '1377278',
+    variantIdMonthly: '1377270',
     variantIdYearly: '1377270',
     features: [
       'Unlimited subscriptions',
@@ -63,7 +63,7 @@ export const PLAN_DETAILS = [
     price: 9.99,
     yearlyPrice: 99.99,
     currency: 'USD',
-    variantIdMonthly: '1377285',
+    variantIdMonthly: '1377279',
     variantIdYearly: '1377279',
     features: [
       'Everything in Pro',
