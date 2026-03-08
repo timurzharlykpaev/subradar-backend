@@ -82,6 +82,9 @@ export class Subscription {
   @Column({ nullable: true, type: 'date' })
   startDate: Date;
 
+  @Column({ nullable: true, type: 'date' })
+  nextPaymentDate: Date;
+
   @Column({ nullable: true })
   currentPlan: string;
 
