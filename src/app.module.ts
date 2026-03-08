@@ -19,6 +19,7 @@ import { BillingModule } from './billing/billing.module';
 import { WorkspaceModule } from './workspace/workspace.module';
 import { StorageModule } from './storage/storage.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { RemindersModule } from './reminders/reminders.module';
 
 @Module({
   controllers: [AppController, ClientErrorController],
@@ -83,6 +84,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     BillingModule,
     WorkspaceModule,
     StorageModule,
+    RemindersModule,
     ScheduleModule.forRoot(),
   ],
   providers: [
