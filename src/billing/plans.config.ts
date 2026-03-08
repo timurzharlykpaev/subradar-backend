@@ -7,8 +7,8 @@ export interface PlanConfig {
 
 export const PLANS: Record<string, PlanConfig> = {
   free: {
-    subscriptionLimit: 3,
-    aiRequestsLimit: 5,
+    subscriptionLimit: 5,
+    aiRequestsLimit: 10,
     hasInvite: false,
     canCreateOrg: false,
   },
@@ -34,8 +34,8 @@ export const PLAN_DETAILS = [
     yearlyPrice: 0,
     currency: 'USD',
     features: [
-      'Up to 3 subscriptions',
-      '5 AI requests per month',
+      'Up to 5 subscriptions',
+      '10 AI requests per month',
       'Basic analytics',
     ],
   },
@@ -45,8 +45,8 @@ export const PLAN_DETAILS = [
     price: 2.99,
     yearlyPrice: 24.99,
     currency: 'USD',
-    variantIdMonthly: '874616',
-    variantIdYearly: '874616',
+    variantIdMonthly: '1377278',
+    variantIdYearly: '1377270',
     features: [
       'Unlimited subscriptions',
       '200 AI requests per month',
@@ -63,8 +63,8 @@ export const PLAN_DETAILS = [
     price: 9.99,
     yearlyPrice: 99.99,
     currency: 'USD',
-    variantIdMonthly: '874623',
-    variantIdYearly: '874623',
+    variantIdMonthly: '1377285',
+    variantIdYearly: '1377279',
     features: [
       'Everything in Pro',
       'Unlimited AI requests',

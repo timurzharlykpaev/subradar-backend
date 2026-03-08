@@ -22,6 +22,7 @@ import { SubscriptionStatus } from '../subscriptions/entities/subscription.entit
 class CreateCheckoutDto {
   @IsOptional() @IsString() variantId?: string;
   @IsOptional() @IsString() planId?: string;
+  @IsOptional() @IsString() billing?: 'monthly' | 'yearly';
 }
 
 class InviteDto {
@@ -60,7 +61,7 @@ export class BillingController {
   async createCheckout(@Request() req, @Body() dto: CreateCheckoutDto) {
     const user = await this.usersService.findById(req.user.id);
     const variantId = dto.variantId || dto.planId || '';
-    return this.billingService.createCheckout(req.user.id, variantId, user.email);
+    return this.billingService.createCheckout(req.user.id, variantId, user.email, dto.billing || 'monthly');
   }
 
   @Get('plans')

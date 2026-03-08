@@ -17,7 +17,9 @@ export class BillingService {
   private readonly apiKey: string;
   private readonly storeId: string;
   private readonly proVariantId: string;
+  private readonly proYearlyVariantId: string;
   private readonly teamVariantId: string;
+  private readonly teamYearlyVariantId: string;
 
   constructor(
     private readonly cfg: ConfigService,
@@ -26,8 +28,17 @@ export class BillingService {
     this.webhookSecret = cfg.get('LEMON_SQUEEZY_WEBHOOK_SECRET', '');
     this.apiKey = cfg.get('LEMON_SQUEEZY_API_KEY', '');
     this.storeId = cfg.get('LEMON_SQUEEZY_STORE_ID', '');
-    this.proVariantId = cfg.get('LEMON_SQUEEZY_PRO_VARIANT_ID', '874616');
-    this.teamVariantId = cfg.get('LEMON_SQUEEZY_TEAM_VARIANT_ID', '874623');
+    // Support both old and new env variable names
+    this.proVariantId =
+      cfg.get('LEMON_SQUEEZY_PRO_MONTHLY_VARIANT_ID', '') ||
+      cfg.get('LEMON_SQUEEZY_PRO_VARIANT_ID', '874616');
+    this.proYearlyVariantId =
+      cfg.get('LEMON_SQUEEZY_PRO_YEARLY_VARIANT_ID', '') || this.proVariantId;
+    this.teamVariantId =
+      cfg.get('LEMON_SQUEEZY_TEAM_MONTHLY_VARIANT_ID', '') ||
+      cfg.get('LEMON_SQUEEZY_TEAM_VARIANT_ID', '874623');
+    this.teamYearlyVariantId =
+      cfg.get('LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID', '') || this.teamVariantId;
   }
 
   verifyWebhookSignature(payload: string, signature: string): boolean {
@@ -87,12 +98,16 @@ export class BillingService {
     }
   }
 
-  resolveVariantId(planIdOrVariantId: string): string {
+  resolveVariantId(planIdOrVariantId: string, billing: 'monthly' | 'yearly' = 'monthly'): string {
     // If it looks like a numeric variant ID, use directly
     if (/^\d+$/.test(planIdOrVariantId)) return planIdOrVariantId;
     // Resolve from env-based config
-    if (planIdOrVariantId === 'pro') return this.proVariantId;
-    if (planIdOrVariantId === 'organization' || planIdOrVariantId === 'team') return this.teamVariantId;
+    if (planIdOrVariantId === 'pro') {
+      return billing === 'yearly' ? this.proYearlyVariantId : this.proVariantId;
+    }
+    if (planIdOrVariantId === 'organization' || planIdOrVariantId === 'team') {
+      return billing === 'yearly' ? this.teamYearlyVariantId : this.teamVariantId;
+    }
     // Fallback to plan config
     const plan = PLAN_DETAILS.find((p) => p.id === planIdOrVariantId);
     if (plan && 'variantIdMonthly' in plan) {
@@ -101,8 +116,8 @@ export class BillingService {
     return planIdOrVariantId;
   }
 
-  async createCheckout(userId: string, planIdOrVariantId: string, email: string) {
-    const variantId = this.resolveVariantId(planIdOrVariantId);
+  async createCheckout(userId: string, planIdOrVariantId: string, email: string, billing: 'monthly' | 'yearly' = 'monthly') {
+    const variantId = this.resolveVariantId(planIdOrVariantId, billing);
     const response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
       method: 'POST',
       headers: {
