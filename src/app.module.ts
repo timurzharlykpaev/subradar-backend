@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
+import { ClientErrorController } from './common/client-error.controller';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -20,7 +21,7 @@ import { StorageModule } from './storage/storage.module';
 import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
-  controllers: [AppController],
+  controllers: [AppController, ClientErrorController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot([
