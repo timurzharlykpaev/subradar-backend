@@ -6,7 +6,9 @@ import {
   UseInterceptors,
   UploadedFile,
   Request,
+  Inject,
 } from '@nestjs/common';
+import { forwardRef } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsString, IsOptional } from 'class-validator';
@@ -45,6 +47,7 @@ class ParseTextDto {
 export class AiController {
   constructor(
     private readonly aiService: AiService,
+    @Inject(forwardRef(() => BillingService))
     private readonly billingService: BillingService,
   ) {}
 
