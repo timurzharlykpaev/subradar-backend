@@ -27,8 +27,10 @@ export class WorkspaceController {
   }
 
   @Get('me')
-  getMyWorkspace(@Request() req) {
-    return this.service.getMyWorkspace(req.user.id);
+  async getMyWorkspace(@Request() req) {
+    const workspace = await this.service.getMyWorkspace(req.user.id);
+    // Always return JSON (null → {}) to avoid empty body crash on frontend
+    return workspace ?? null;
   }
 
   @Get(':id')

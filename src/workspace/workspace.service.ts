@@ -37,7 +37,8 @@ export class WorkspaceService {
     });
     await this.memberRepo.save(member);
 
-    return saved;
+    // Return with members relation loaded
+    return this.findById(saved.id);
   }
 
   async findById(id: string): Promise<Workspace> {
