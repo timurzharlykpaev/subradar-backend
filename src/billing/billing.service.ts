@@ -137,6 +137,11 @@ export class BillingService {
                 email,
                 custom: { user_id: userId },
               },
+              product_options: {
+                redirect_url: 'https://app.subradar.ai/app/settings?checkout=success',
+                receipt_button_text: 'Go to SubRadar',
+                receipt_link_url: 'https://app.subradar.ai/app/settings',
+              },
             },
             relationships: {
               store: { data: { type: 'stores', id: String(this.storeId) } },
