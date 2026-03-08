@@ -118,32 +118,54 @@ export class BillingService {
 
   async createCheckout(userId: string, planIdOrVariantId: string, email: string, billing: 'monthly' | 'yearly' = 'monthly') {
     const variantId = this.resolveVariantId(planIdOrVariantId, billing);
-    const response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/vnd.api+json',
-        Accept: 'application/vnd.api+json',
-      },
-      body: JSON.stringify({
-        data: {
-          type: 'checkouts',
-          attributes: {
-            checkout_data: {
-              email,
-              custom: { user_id: userId },
+    this.logger.log(`Creating checkout: plan=${planIdOrVariantId} variantId=${variantId} billing=${billing} email=${email}`);
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/vnd.api+json',
+          Accept: 'application/vnd.api+json',
+        },
+        body: JSON.stringify({
+          data: {
+            type: 'checkouts',
+            attributes: {
+              checkout_data: {
+                email,
+                custom: { user_id: userId },
+              },
+            },
+            relationships: {
+              store: { data: { type: 'stores', id: String(this.storeId) } },
+              variant: { data: { type: 'variants', id: String(variantId) } },
             },
           },
-          relationships: {
-            store: { data: { type: 'stores', id: this.storeId } },
-            variant: { data: { type: 'variants', id: variantId } },
-          },
-        },
-      }),
-    });
+        }),
+      });
+    } catch (err) {
+      this.logger.error(`LS fetch failed: ${err}`);
+      throw new BadRequestException('Payment provider unavailable. Try again later.');
+    }
 
     const result = (await response.json()) as any;
-    return { url: result?.data?.attributes?.url };
+
+    if (!response.ok || result?.errors) {
+      const errDetail = result?.errors?.[0]?.detail || result?.errors?.[0]?.title || 'Unknown LS error';
+      this.logger.error(`LS checkout error (${response.status}): ${errDetail} | variantId=${variantId}`);
+      throw new BadRequestException(`Checkout failed: ${errDetail}`);
+    }
+
+    const url = result?.data?.attributes?.url;
+    if (!url) {
+      this.logger.error(`LS checkout: no URL in response: ${JSON.stringify(result).slice(0, 300)}`);
+      throw new BadRequestException('Checkout URL not returned by payment provider.');
+    }
+
+    this.logger.log(`Checkout created: ${url.slice(0, 60)}`);
+    return { url };
   }
 
   async startTrial(userId: string): Promise<void> {
