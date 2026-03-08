@@ -44,7 +44,7 @@ export class WorkspaceService {
   async findById(id: string): Promise<Workspace> {
     const ws = await this.workspaceRepo.findOne({
       where: { id },
-      relations: ['members'],
+      relations: ['members', 'members.user'],
     });
     if (!ws) throw new NotFoundException('Workspace not found');
     return ws;
@@ -57,7 +57,7 @@ export class WorkspaceService {
     if (!member) return null;
     return this.workspaceRepo.findOne({
       where: { id: member.workspaceId },
-      relations: ['members'],
+      relations: ['members', 'members.user'],
     });
   }
 

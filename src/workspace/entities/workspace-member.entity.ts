@@ -8,6 +8,7 @@ import {
   Index,
 } from 'typeorm';
 import { Workspace } from './workspace.entity';
+import { User } from '../../users/entities/user.entity';
 
 export enum WorkspaceMemberRole {
   OWNER = 'OWNER',
@@ -36,6 +37,10 @@ export class WorkspaceMember {
   @Index()
   @Column({ nullable: true })
   userId: string;
+
+  @ManyToOne(() => User, { nullable: true, eager: false })
+  @JoinColumn({ name: 'userId' })
+  user: User;
 
   @Column({
     type: 'enum',
