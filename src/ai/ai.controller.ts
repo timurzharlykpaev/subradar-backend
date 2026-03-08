@@ -35,6 +35,7 @@ class SuggestCancelDto {
 
 class ParseTextDto {
   @IsString() text: string;
+  @IsOptional() @IsString() locale?: string;
 }
 
 @ApiTags('ai')
@@ -125,5 +126,38 @@ export class AiController {
   @Post('suggest-cancel')
   suggestCancel(@Body() dto: SuggestCancelDto) {
     return this.aiService.suggestCancelUrl(dto.serviceName);
+  }
+
+  /**
+   * Parse MULTIPLE subscriptions from free text.
+   * POST /ai/parse-bulk { text: "Netflix $15, Spotify $10, iCloud $3" }
+   * Returns: { subscriptions: [...] }
+   */
+  @Post('parse-bulk')
+  async parseBulk(@Request() req, @Body() dto: ParseTextDto) {
+    await this.billingService.consumeAiRequest(req.user.id);
+    const result = await this.aiService.parseBulkSubscriptions(dto.text, dto.locale ?? 'ru');
+    const subscriptions = Array.isArray(result) ? result : (result ? [result] : []);
+    return { subscriptions, text: dto.text };
+  }
+
+  /**
+   * Transcribe voice and parse multiple subscriptions.
+   * POST /ai/voice-bulk { audioBase64?, locale? }
+   * Returns: { text, subscriptions: [...] }
+   */
+  @Post('voice-bulk')
+  @UseInterceptors(FileInterceptor('audio'))
+  async voiceBulk(
+    @Request() req,
+    @Body() dto: VoiceDto,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    await this.billingService.consumeAiRequest(req.user.id);
+    let audioBase64 = dto.audioBase64;
+    if (!audioBase64 && file) {
+      audioBase64 = file.buffer.toString('base64');
+    }
+    return this.aiService.voiceToBulkSubscriptions(audioBase64 || '', dto.locale ?? 'ru');
   }
 }

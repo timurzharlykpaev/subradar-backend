@@ -138,6 +138,46 @@ export class AiService {
     ]);
   }
 
+  /**
+   * Parse MULTIPLE subscriptions from free-form text or voice transcript.
+   * Returns array of subscription objects.
+   * E.g. "У меня Netflix за 15 долларов, Spotify 10 евро в месяц и iCloud 3 доллара"
+   */
+  async parseBulkSubscriptions(text: string, locale = 'en') {
+    return this.chat([
+      {
+        role: 'system',
+        content: `You are a bulk subscription extractor. The user describes multiple subscriptions in free text or voice. Extract ALL subscriptions mentioned and return a JSON array: [ { name, amount (number), currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY), category (STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER) } ]. If only one subscription is mentioned, still return an array with one item. Never return an object — always an array. Locale: ${locale}.`,
+      },
+      {
+        role: 'user',
+        content: text.slice(0, 4000),
+      },
+    ]);
+  }
+
+  /**
+   * Transcribe audio and parse multiple subscriptions from it.
+   */
+  async voiceToBulkSubscriptions(audioBase64: string, locale = 'en') {
+    await this.acquireSlot();
+    let text: string;
+    try {
+      const audioBuffer = Buffer.from(audioBase64, 'base64');
+      const audioFile = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
+      const transcription = await this.openai.audio.transcriptions.create({
+        file: audioFile,
+        model: 'whisper-1',
+        language: locale.split('-')[0],
+      });
+      text = transcription.text;
+    } finally {
+      this.releaseSlot();
+    }
+    const result = await this.parseBulkSubscriptions(text, locale);
+    return { text, subscriptions: Array.isArray(result) ? result : [result] };
+  }
+
   /** Parse subscription details from email/receipt text */
   async parseEmailText(text: string) {
     return this.chat([
