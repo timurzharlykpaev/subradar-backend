@@ -138,6 +138,20 @@ export class AiService {
     ]);
   }
 
+  /** Parse subscription details from email/receipt text */
+  async parseEmailText(text: string) {
+    return this.chat([
+      {
+        role: 'system',
+        content: 'You are a subscription parser. Extract subscription info from the given email/receipt text. Return JSON: { name, amount (number), currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY), category (STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER), nextPaymentDate (ISO string or null) }. If not a subscription email, return {}.',
+      },
+      {
+        role: 'user',
+        content: text.slice(0, 3000),
+      },
+    ]);
+  }
+
   async suggestCancelUrl(serviceName: string) {
     return this.chat([
       {

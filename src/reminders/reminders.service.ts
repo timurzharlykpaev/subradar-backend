@@ -93,4 +93,24 @@ export class RemindersService {
 
     this.logger.log(`Reminders sent: ${sent}, errors: ${errors}`);
   }
+
+  /** Downgrade users whose trial has expired — runs every hour */
+  @Cron('0 * * * *')
+  async expireTrials() {
+    const expired = await this.userRepo
+      .createQueryBuilder('u')
+      .where("u.plan = 'pro'")
+      .andWhere('u.trialUsed = true')
+      .andWhere('u.trialEndDate < NOW()')
+      .andWhere('u.lemonSqueezyCustomerId IS NULL')
+      .getMany();
+
+    for (const user of expired) {
+      await this.userRepo.update(user.id, { plan: 'free' } as any);
+      this.logger.log(`Trial expired → downgraded to free: ${user.email}`);
+    }
+    if (expired.length > 0) {
+      this.logger.log(`Expired ${expired.length} trials`);
+    }
+  }
 }

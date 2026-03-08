@@ -28,7 +28,15 @@ export class UsersService {
   }
 
   async create(data: Partial<User>): Promise<User> {
-    const user = this.repo.create(data);
+    // New users get 7-day Pro trial automatically
+    const trialEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const user = this.repo.create({
+      ...data,
+      plan: 'pro',
+      trialUsed: true,
+      trialStartDate: new Date(),
+      trialEndDate: trialEnd,
+    });
     return this.repo.save(user);
   }
 

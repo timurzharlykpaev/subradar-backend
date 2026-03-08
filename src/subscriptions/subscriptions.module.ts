@@ -4,10 +4,12 @@ import { Subscription } from './entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { SubscriptionsService } from './subscriptions.service';
 import { SubscriptionsController } from './subscriptions.controller';
+import { EmailImportController } from './email-import.controller';
 import { TrialCheckerCron } from './trial-checker.cron';
 import { ReceiptsModule } from '../receipts/receipts.module';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
   imports: [
@@ -15,9 +17,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ReceiptsModule,
     UsersModule,
     NotificationsModule,
+    AiModule,
   ],
   providers: [SubscriptionsService, TrialCheckerCron],
-  controllers: [SubscriptionsController],
+  controllers: [SubscriptionsController, EmailImportController],
   exports: [SubscriptionsService],
 })
 export class SubscriptionsModule {}
