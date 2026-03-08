@@ -15,7 +15,7 @@ export class Workspace {
   @Column()
   name: string;
 
-  @Column()
+  @Column({ type: 'uuid' })
   ownerId: string;
 
   @Column({ default: 'TEAM' })

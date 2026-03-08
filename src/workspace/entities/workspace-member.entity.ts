@@ -27,7 +27,7 @@ export class WorkspaceMember {
   id: string;
 
   @Index()
-  @Column()
+  @Column({ type: 'uuid' })
   workspaceId: string;
 
   @ManyToOne(() => Workspace, (w) => w.members, { onDelete: 'CASCADE' })
@@ -35,7 +35,7 @@ export class WorkspaceMember {
   workspace: Workspace;
 
   @Index()
-  @Column({ nullable: true })
+  @Column({ type: 'uuid', nullable: true })
   userId: string;
 
   @ManyToOne(() => User, { nullable: true, eager: false })
