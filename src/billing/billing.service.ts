@@ -56,19 +56,23 @@ export class BillingService {
         const customerId = data?.attributes?.customer_id;
         const email = data?.attributes?.user_email;
         const status = data?.attributes?.status;
+        const variantId = String(data?.attributes?.variant_id ?? '');
+        const teamVariants = [
+          process.env.LEMON_SQUEEZY_TEAM_MONTHLY_VARIANT_ID,
+          process.env.LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID,
+          '1377279', '1377285',
+        ].filter(Boolean);
+        const isTeam = teamVariants.includes(variantId);
+
         if (email) {
           const user = await this.usersService.findByEmail(email);
           if (user) {
-            const isTrialing = status === 'on_trial';
+            const isActive = status === 'active' || status === 'on_trial';
             const updates: any = {
-              plan: status === 'active' || isTrialing ? 'pro' : 'free',
+              plan: isActive ? (isTeam ? 'organization' : 'pro') : 'free',
               lemonSqueezyCustomerId: String(customerId),
             };
-            if (isTrialing && !user.trialUsed) {
-              updates.trialUsed = true;
-              updates.trialStartDate = new Date();
-              updates.trialEndDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-            }
+            this.logger.log(`Webhook upgrade: email=${email} variantId=${variantId} isTeam=${isTeam} plan=${updates.plan} status=${status}`);
             await this.usersService.update(user.id, updates);
           }
         }
