@@ -17,6 +17,8 @@ import {
   MagicLinkDto,
   RefreshTokenDto,
   AppleAuthDto,
+  OtpSendDto,
+  OtpVerifyDto,
 } from './dto/auth.dto';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -63,6 +65,16 @@ export class AuthController {
   @Post('apple')
   appleLogin(@Body() dto: AppleAuthDto) {
     return this.authService.appleLogin(dto);
+  }
+
+  @Post('otp/send')
+  sendOtp(@Body() dto: OtpSendDto) {
+    return this.authService.sendOtp(dto);
+  }
+
+  @Post('otp/verify')
+  verifyOtp(@Body() dto: OtpVerifyDto) {
+    return this.authService.verifyOtp(dto);
   }
 
   @Post('magic-link')

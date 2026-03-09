@@ -24,3 +24,12 @@ export class AppleAuthDto {
   @ApiProperty() @IsString() idToken: string;
   @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
 }
+
+export class OtpSendDto {
+  @ApiProperty() @IsEmail() email: string;
+}
+
+export class OtpVerifyDto {
+  @ApiProperty() @IsEmail() email: string;
+  @ApiProperty() @IsString() code: string;
+}
