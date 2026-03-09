@@ -17,18 +17,24 @@ import {
   LoginDto,
   MagicLinkDto,
   AppleAuthDto,
+  OtpSendDto,
+  OtpVerifyDto,
 } from './dto/auth.dto';
+import Redis from 'ioredis';
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly redis: Redis;
 
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly cfg: ConfigService,
     private readonly notifications: NotificationsService,
-  ) {}
+  ) {
+    this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
+  }
 
   private generateTokens(user: User) {
     const payload = { sub: user.id, email: user.email };
@@ -265,6 +271,52 @@ export class AuthService {
       this.logger.error(`googleTokenLogin DB error for ${email}: ${dbError?.message}`, dbError?.stack);
       throw new InternalServerErrorException(`Auth DB error: ${dbError?.message}`);
     }
+  }
+
+  async sendOtp(dto: OtpSendDto) {
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    await this.redis.set(`otp:${dto.email}`, code, 'EX', 900);
+
+    await this.notifications.sendEmail(
+      dto.email,
+      'Your SubRadar verification code',
+      `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+          <h2 style="margin-bottom:8px">Your verification code</h2>
+          <p style="color:#666;margin-bottom:24px">Enter this code to sign in to SubRadar. It expires in 15 minutes.</p>
+          <div style="background:#f4f0ff;border-radius:12px;padding:20px;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#8B5CF6;">
+            ${code}
+          </div>
+          <p style="color:#999;font-size:12px;margin-top:24px">If you didn't request this, ignore this email.</p>
+        </div>
+      `,
+    );
+
+    const isProd = this.cfg.get('NODE_ENV') === 'production';
+    return {
+      message: 'OTP sent',
+      ...(isProd ? {} : { code }),
+    };
+  }
+
+  async verifyOtp(dto: OtpVerifyDto) {
+    const stored = await this.redis.get(`otp:${dto.email}`);
+    if (!stored) throw new UnauthorizedException('OTP expired or not found');
+    if (stored !== dto.code) throw new UnauthorizedException('Invalid OTP code');
+
+    await this.redis.del(`otp:${dto.email}`);
+
+    let user = await this.usersService.findByEmail(dto.email);
+    if (!user) {
+      user = await this.usersService.create({
+        email: dto.email,
+        provider: AuthProvider.LOCAL,
+      });
+    }
+
+    const tokens = this.generateTokens(user);
+    await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
+    return { user, ...tokens };
   }
 
   async logout(userId: string) {
