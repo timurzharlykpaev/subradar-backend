@@ -26,6 +26,11 @@ export class WorkspaceController {
     return this.service.create(req.user.id, dto);
   }
 
+  @Get('me/analytics')
+  getMyWorkspaceAnalytics(@Request() req) {
+    return this.service.getWorkspaceAnalytics(req.user.id);
+  }
+
   @Get('me')
   async getMyWorkspace(@Request() req) {
     const workspace = await this.service.getMyWorkspace(req.user.id);
