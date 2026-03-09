@@ -1,22 +1,69 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Subscription, SubscriptionStatus } from './entities/subscription.entity';
+import { In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
+import { Cron } from '@nestjs/schedule';
+import {
+  Subscription,
+  BillingPeriod,
+  SubscriptionStatus,
+} from './entities/subscription.entity';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { UsersService } from '../users/users.service';
 import { PLANS } from '../billing/plans.config';
 
+function computeNextPaymentDate(
+  startDate: Date,
+  billingPeriod: BillingPeriod,
+): Date | null {
+  if (
+    billingPeriod === BillingPeriod.LIFETIME ||
+    billingPeriod === BillingPeriod.ONE_TIME
+  ) {
+    return null;
+  }
+
+  const now = new Date();
+  const next = new Date(startDate);
+
+  while (next <= now) {
+    switch (billingPeriod) {
+      case BillingPeriod.WEEKLY:
+        next.setDate(next.getDate() + 7);
+        break;
+      case BillingPeriod.MONTHLY:
+        next.setMonth(next.getMonth() + 1);
+        break;
+      case BillingPeriod.QUARTERLY:
+        next.setMonth(next.getMonth() + 3);
+        break;
+      case BillingPeriod.YEARLY:
+        next.setFullYear(next.getFullYear() + 1);
+        break;
+    }
+  }
+
+  return next;
+}
+
 @Injectable()
-export class SubscriptionsService {
+export class SubscriptionsService implements OnModuleInit {
+  private readonly logger = new Logger(SubscriptionsService.name);
+
   constructor(
     @InjectRepository(Subscription)
     private readonly repo: Repository<Subscription>,
     private readonly usersService: UsersService,
   ) {}
+
+  async onModuleInit() {
+    await this.recalculateNextPaymentDates();
+  }
 
   async create(
     userId: string,
@@ -40,6 +87,15 @@ export class SubscriptionsService {
     }
 
     const sub = this.repo.create({ ...dto, userId });
+
+    if (sub.startDate && sub.billingPeriod) {
+      const next = computeNextPaymentDate(
+        new Date(sub.startDate),
+        sub.billingPeriod,
+      );
+      sub.nextPaymentDate = next as Date;
+    }
+
     return this.repo.save(sub);
   }
 
@@ -68,6 +124,15 @@ export class SubscriptionsService {
   ): Promise<Subscription> {
     const sub = await this.findOne(userId, id);
     Object.assign(sub, dto);
+
+    if (dto.billingPeriod || dto.startDate) {
+      const startDate = sub.startDate ? new Date(sub.startDate) : null;
+      if (startDate && sub.billingPeriod) {
+        const next = computeNextPaymentDate(startDate, sub.billingPeriod);
+        sub.nextPaymentDate = next as Date;
+      }
+    }
+
     return this.repo.save(sub);
   }
 
@@ -91,5 +156,46 @@ export class SubscriptionsService {
 
   findAllForUser(userId: string) {
     return this.repo.find({ where: { userId } });
+  }
+
+  async recalculateNextPaymentDates(): Promise<number> {
+    const today = new Date().toISOString().split('T')[0];
+
+    const subs = await this.repo.find({
+      where: [
+        {
+          status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]),
+          nextPaymentDate: IsNull(),
+        },
+        {
+          status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]),
+          nextPaymentDate: LessThanOrEqual(new Date(today)),
+        },
+      ],
+    });
+
+    let updated = 0;
+    for (const sub of subs) {
+      if (!sub.startDate || !sub.billingPeriod) continue;
+
+      const next = computeNextPaymentDate(
+        new Date(sub.startDate),
+        sub.billingPeriod,
+      );
+      if (next && (!sub.nextPaymentDate || next > sub.nextPaymentDate)) {
+        sub.nextPaymentDate = next;
+        await this.repo.save(sub);
+        updated++;
+      }
+    }
+
+    this.logger.log(`Recalculated nextPaymentDate for ${updated} subscriptions`);
+    return updated;
+  }
+
+  @Cron('0 0 * * *')
+  async dailyNextPaymentUpdate(): Promise<void> {
+    this.logger.log('Running daily nextPaymentDate update');
+    await this.recalculateNextPaymentDates();
   }
 }
