@@ -64,13 +64,24 @@ export class AiService {
     const result = await this.chat([
       {
         role: 'system',
-        content: `You are a subscription service lookup assistant. Return JSON with fields: name, iconUrl, serviceUrl, cancelUrl, category (one of STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER), plans (array of {name, price, currency, period}). Locale: ${locale}, Country: ${country}.`,
+        content: `You are a subscription service lookup assistant. Return JSON with fields: name, serviceUrl (official website URL), cancelUrl, category (one of STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER), plans (array of {name, price, currency, period}). Locale: ${locale}, Country: ${country}.`,
       },
       {
         role: 'user',
         content: `Look up subscription service: "${query}"`,
       },
     ]);
+
+    // Generate reliable iconUrl from serviceUrl using Clearbit Logo API
+    if (result && result.serviceUrl) {
+      try {
+        const hostname = new URL(result.serviceUrl).hostname.replace(/^www\./, '');
+        result.iconUrl = `https://logo.clearbit.com/${hostname}`;
+      } catch {
+        // fallback to Google favicons
+        result.iconUrl = `https://www.google.com/s2/favicons?domain=${result.serviceUrl}&sz=128`;
+      }
+    }
 
     await this.redis.set(cacheKey, JSON.stringify(result), 'EX', 86400);
     return result;
