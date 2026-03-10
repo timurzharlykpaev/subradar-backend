@@ -274,6 +274,13 @@ export class AuthService {
   }
 
   async sendOtp(dto: OtpSendDto) {
+    // Demo/reviewer account — fixed OTP, no email sent
+    const DEMO_EMAILS = ['reviewer@subradar.ai', 'demo@subradar.ai'];
+    if (DEMO_EMAILS.includes(dto.email.toLowerCase())) {
+      await this.redis.set(`otp:${dto.email}`, '123456', 'EX', 86400); // 24h TTL
+      return { message: 'OTP sent' };
+    }
+
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     await this.redis.set(`otp:${dto.email}`, code, 'EX', 900);
 
@@ -306,12 +313,23 @@ export class AuthService {
 
     await this.redis.del(`otp:${dto.email}`);
 
+    const DEMO_EMAILS = ['reviewer@subradar.ai', 'demo@subradar.ai'];
+    const isDemo = DEMO_EMAILS.includes(dto.email.toLowerCase());
+
     let user = await this.usersService.findByEmail(dto.email);
     if (!user) {
       user = await this.usersService.create({
         email: dto.email,
         provider: AuthProvider.LOCAL,
       });
+    }
+
+    // Ensure demo accounts always have Pro plan
+    if (isDemo && user.plan !== 'pro' && user.plan !== 'organization') {
+      await this.usersService.update(user.id, { plan: 'pro' } as any);
+      user = { ...user, plan: 'pro' as any };
+      // Re-set OTP for next login (never expires for demo)
+      await this.redis.set(`otp:${dto.email}`, '123456', 'EX', 86400);
     }
 
     const tokens = this.generateTokens(user);
