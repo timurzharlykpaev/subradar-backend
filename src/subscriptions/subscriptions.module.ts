@@ -4,6 +4,7 @@ import { Subscription } from './entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { SubscriptionsService } from './subscriptions.service';
 import { SubscriptionsController } from './subscriptions.controller';
+import { SubscriptionLimitGuard } from './guards/subscription-limit.guard';
 import { EmailImportController } from './email-import.controller';
 import { TrialCheckerCron } from './trial-checker.cron';
 import { ReceiptsModule } from '../receipts/receipts.module';
@@ -19,7 +20,7 @@ import { AiModule } from '../ai/ai.module';
     NotificationsModule,
     AiModule,
   ],
-  providers: [SubscriptionsService, TrialCheckerCron],
+  providers: [SubscriptionsService, TrialCheckerCron, SubscriptionLimitGuard],
   controllers: [SubscriptionsController, EmailImportController],
   exports: [SubscriptionsService],
 })

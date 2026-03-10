@@ -99,6 +99,15 @@ export class SubscriptionsService implements OnModuleInit {
     return this.repo.save(sub);
   }
 
+  async countActive(userId: string): Promise<number> {
+    return this.repo.count({
+      where: [
+        { userId, status: SubscriptionStatus.ACTIVE },
+        { userId, status: SubscriptionStatus.TRIAL },
+      ],
+    });
+  }
+
   async findAll(userId: string): Promise<Subscription[]> {
     return this.repo.find({
       where: { userId },

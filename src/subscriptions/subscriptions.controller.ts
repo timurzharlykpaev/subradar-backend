@@ -19,6 +19,7 @@ import { SubscriptionsService } from './subscriptions.service';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { SubscriptionStatus } from './entities/subscription.entity';
 import { ReceiptsService } from '../receipts/receipts.service';
+import { SubscriptionLimitGuard, PLAN_LIMITS } from './guards/subscription-limit.guard';
 
 @ApiTags('subscriptions')
 @ApiBearerAuth()
@@ -36,7 +37,31 @@ export class SubscriptionsController {
     return {};
   }
 
+  @Get('limits/check')
+  async checkLimits(@Request() req: any) {
+    const user = req.user;
+    const plan = user.plan ?? 'free';
+    const limits = PLAN_LIMITS[plan as keyof typeof PLAN_LIMITS] ?? PLAN_LIMITS.free;
+
+    const activeCount = await this.service.countActive(user.id);
+
+    return {
+      plan,
+      subscriptions: {
+        used: activeCount,
+        max: limits.maxSubscriptions === Infinity ? null : limits.maxSubscriptions,
+        limitReached:
+          limits.maxSubscriptions !== Infinity &&
+          activeCount >= limits.maxSubscriptions,
+      },
+      ai: {
+        max: limits.maxAiRequests === Infinity ? null : limits.maxAiRequests,
+      },
+    };
+  }
+
   @Post()
+  @UseGuards(SubscriptionLimitGuard)
   create(@Request() req, @Body() dto: CreateSubscriptionDto) {
     return this.service.create(req.user.id, dto);
   }

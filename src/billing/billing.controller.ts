@@ -66,7 +66,49 @@ export class BillingController {
 
   @Get('plans')
   getPlans() {
-    return PLAN_DETAILS;
+    return [
+      {
+        id: 'free',
+        name: 'Free',
+        price: 0,
+        currency: 'USD',
+        period: null,
+        features: [
+          { key: 'subscriptions', value: 5, label: 'Up to 5 subscriptions' },
+          { key: 'ai_requests', value: 10, label: '10 AI requests/month' },
+        ],
+      },
+      {
+        id: 'pro',
+        name: 'Pro',
+        price: 2.99,
+        currency: 'USD',
+        period: 'month',
+        trialDays: 7,
+        variantId: '1377270',
+        features: [
+          { key: 'subscriptions', value: null, label: 'Unlimited subscriptions' },
+          { key: 'ai_requests', value: 200, label: '200 AI requests/month' },
+          { key: 'analytics', value: true, label: 'Advanced analytics' },
+          { key: 'invite', value: 1, label: '+1 invite slot' },
+        ],
+      },
+      {
+        id: 'organization',
+        name: 'Organization',
+        price: 9.99,
+        currency: 'USD',
+        period: 'month',
+        variantId: '1377279',
+        features: [
+          { key: 'subscriptions', value: null, label: 'Unlimited subscriptions' },
+          { key: 'ai_requests', value: null, label: 'Unlimited AI requests' },
+          { key: 'members', value: null, label: 'Unlimited team members' },
+          { key: 'analytics', value: true, label: 'Team analytics' },
+          { key: 'reports', value: true, label: 'PDF reports' },
+        ],
+      },
+    ];
   }
 
   @ApiBearerAuth()

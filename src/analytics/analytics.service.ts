@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Between, In, Repository } from 'typeorm';
 import {
   Subscription,
   SubscriptionStatus,
@@ -51,9 +51,24 @@ export class AnalyticsService {
         0,
       );
 
+    const upcomingNext30 = await this.subRepo.find({
+      where: {
+        userId,
+        status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]),
+        nextPaymentDate: Between(
+          new Date(),
+          new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        ),
+      },
+      order: { nextPaymentDate: 'ASC' },
+      take: 10,
+    });
+
     return {
       totalMonthly: Math.round(totalMonthly * 100) / 100,
       totalYearly: Math.round(totalYearly * 100) / 100,
+      monthlyTotal: Math.round(totalMonthly * 100) / 100,
+      yearlyEstimate: Math.round(totalYearly * 100) / 100,
       activeCount: totalSubscriptions,
       totalSubscriptions,
       pausedCount: subs.filter((s) => s.status === SubscriptionStatus.PAUSED).length,
@@ -64,6 +79,12 @@ export class AnalyticsService {
         totalSubscriptions > 0
           ? Math.round((totalMonthly / totalSubscriptions) * 100) / 100
           : 0,
+      upcomingNext30: upcomingNext30.map((s) => ({
+        id: s.id,
+        name: s.name,
+        amount: Number(s.amount),
+        nextPaymentDate: s.nextPaymentDate,
+      })),
     };
   }
 
