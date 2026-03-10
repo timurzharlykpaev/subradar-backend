@@ -129,3 +129,100 @@ Once running, visit: `http://localhost:3000/api/docs`
 | `summary` | High-level totals and category breakdown |
 | `detailed` | Full subscription list with all fields |
 | `tax` | Tax-ready table with Business expense column |
+
+---
+
+## Deployment
+
+### Server
+- **IP:** `46.101.197.19` (DigitalOcean)
+- **SSH:** `ssh -i ~/.ssh/id_steptogoal root@46.101.197.19`
+- **Docker Compose:** `/opt/subradar/docker-compose.yml`
+
+### Environments
+
+| Branch | Container | Port | API URL | Database |
+|--------|-----------|------|---------|----------|
+| `dev` | `subradar-api-dev` | 8083 | `api-dev.subradar.ai` | `subradar_dev` |
+| `main` | `subradar-api-prod` | 8082 | `api.subradar.ai` | `subradar` |
+
+### Dev deploy (automatic)
+
+```bash
+git checkout dev
+# make changes
+git add . && git commit -m "feat: ..."
+git push origin dev
+# → GitHub Actions: build Docker image → push GHCR → deploy to api-dev.subradar.ai
+```
+
+### Prod deploy (automatic on push to main)
+
+```bash
+git checkout main
+git merge dev
+git push origin main
+# → GitHub Actions: build Docker image → push GHCR → deploy to api.subradar.ai
+# Migrations run automatically on startup
+```
+
+### Manual deploy (emergency)
+
+```bash
+ssh -i ~/.ssh/id_steptogoal root@46.101.197.19
+cd /opt/subradar
+docker compose pull subradar-api-prod
+docker compose up -d --force-recreate --no-deps subradar-api-prod
+```
+
+### Migrations
+
+Migrations run automatically when container starts (`migrationsRun: true`).
+
+```bash
+# Create new migration (locally)
+npm run migration:generate -- src/migrations/MigrationName
+
+# Run migrations manually on server
+ssh -i ~/.ssh/id_steptogoal root@46.101.197.19
+docker exec subradar-api-prod npm run migration:run
+```
+
+**Rules:**
+- Migrations must be backward-compatible (add columns with defaults, never drop)
+- Test migration on `dev` before merging to `main`
+- To rollback: `docker exec subradar-api-prod npm run migration:revert`
+
+### Rollback
+
+```bash
+ssh -i ~/.ssh/id_steptogoal root@46.101.197.19
+cd /opt/subradar
+
+# Pull previous image version
+docker compose stop subradar-api-prod
+docker run --env-file .env.prod ghcr.io/timurzharlykpaev/subradar-backend:<previous-tag>
+```
+
+Or revert the commit and push — CI will redeploy automatically.
+
+### Logs
+
+```bash
+ssh -i ~/.ssh/id_steptogoal root@46.101.197.19
+
+# Prod logs
+docker logs --tail 100 -f subradar-api-prod
+
+# Dev logs
+docker logs --tail 100 -f subradar-api-dev
+
+# All containers status
+docker ps
+```
+
+### Monitoring
+
+- **Grafana:** `https://grafana.steptogoal.io` (admin/Admin123!)
+- **Telegram alerts:** `@StepToGoalAlertbot` — runtime errors auto-reported
+- **Auto-restart:** error-monitor restarts container on 5xx errors (5 min debounce)
