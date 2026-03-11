@@ -163,4 +163,15 @@ export class AiController {
     }
     return this.aiService.voiceToBulkSubscriptions(audioBase64 || '', dto.locale ?? 'ru');
   }
+
+  /**
+   * Conversational AI wizard — drives the whole add-subscription dialog.
+   * POST /ai/wizard { message, context?, locale? }
+   * Returns: { done: true, subscription: {...} } OR { done: false, question, field, partialContext }
+   */
+  @Post('wizard')
+  async wizard(@Request() req, @Body() body: { message: string; context?: Record<string, any>; locale?: string }) {
+    await this.billingService.consumeAiRequest(req.user.id);
+    return this.aiService.wizard(body.message, body.context ?? {}, body.locale ?? 'en');
+  }
 }

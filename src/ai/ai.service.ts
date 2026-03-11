@@ -203,6 +203,40 @@ export class AiService {
     ]);
   }
 
+  /**
+   * Conversational wizard — one endpoint drives the whole dialog.
+   * Returns { done, subscription } OR { done: false, question, field, partialContext }
+   */
+  async wizard(message: string, context: Record<string, any> = {}, locale = 'en') {
+    const contextStr = Object.keys(context).length
+      ? `\nAccumulated context so far: ${JSON.stringify(context)}`
+      : '';
+
+    const result = await this.chat([
+      {
+        role: 'system',
+        content: `You are a smart subscription assistant. Your job is to extract subscription details from the user's message and your own knowledge of well-known services.
+
+Rules:
+1. Use your knowledge to fill in typical price, billing period, website URL, cancel URL and category for known services (Netflix, Spotify, iCloud, YouTube Premium, ChatGPT Plus, Amazon Prime, Disney+, Apple TV+, Adobe CC, GitHub Copilot etc.)
+2. If the user mentions a known service, auto-fill its typical data and return done:true immediately.
+3. Ask clarifying questions ONLY if: (a) you can't identify the service, OR (b) user explicitly provided a price that differs from typical.
+4. Ask ONE question at a time. Keep questions short and friendly (locale: ${locale}).
+5. Return ONLY valid JSON, no markdown.
+
+Response schema:
+- If enough info: { "done": true, "subscription": { "name": string, "amount": number, "currency": "USD", "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY", "category": string, "serviceUrl": string|null, "cancelUrl": string|null, "iconUrl": string|null } }
+- If need more info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": { ...updated fields so far } }
+
+iconUrl format: https://logo.clearbit.com/{domain} for known services.${contextStr}`,
+      },
+      { role: 'user', content: message.slice(0, 1000) },
+    ]);
+
+    if (typeof result === 'object' && result !== null) return result;
+    try { return JSON.parse(String(result)); } catch { return { done: false, question: 'Что за сервис?', field: 'name', partialContext: {} }; }
+  }
+
   async suggestCancelUrl(serviceName: string) {
     return this.chat([
       {
