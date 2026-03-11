@@ -1,0 +1,121 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BillingService } from './billing.service';
+import { UsersService } from '../users/users.service';
+
+const mockUsersService = {
+  findById: jest.fn(), findByEmail: jest.fn(), update: jest.fn(),
+};
+
+const mockConfigService = {
+  get: jest.fn((key: string, defaultVal?: string) => defaultVal ?? ''),
+};
+
+const mockUser = {
+  id: 'user-1', email: 'test@example.com', plan: 'free', trialUsed: false,
+  trialEndDate: null, proInviteeEmail: null, aiRequestsUsed: 0, aiRequestsMonth: null,
+};
+
+describe('BillingService', () => {
+  let service: BillingService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        BillingService,
+        { provide: UsersService, useValue: mockUsersService },
+        { provide: ConfigService, useValue: mockConfigService },
+      ],
+    }).compile();
+    service = module.get<BillingService>(BillingService);
+    jest.clearAllMocks();
+  });
+
+  it('should be defined', () => { expect(service).toBeDefined(); });
+
+  describe('startTrial', () => {
+    it('sets pro plan and trialEndDate', async () => {
+      mockUsersService.findById.mockResolvedValue({ ...mockUser, trialUsed: false });
+      mockUsersService.update.mockResolvedValue(undefined);
+      await service.startTrial('user-1');
+      expect(mockUsersService.update).toHaveBeenCalledWith('user-1', expect.objectContaining({ plan: 'pro', trialUsed: true }));
+    });
+    it('throws BadRequestException if trial already used', async () => {
+      mockUsersService.findById.mockResolvedValue({ ...mockUser, trialUsed: true });
+      await expect(service.startTrial('user-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('getBillingInfo', () => {
+    it('returns plan and limits', async () => {
+      mockUsersService.findById.mockResolvedValue({ ...mockUser, plan: 'free' });
+      const result = await service.getBillingInfo('user-1', 2);
+      expect(result.plan).toBe('free');
+      expect(result.subscriptionCount).toBe(2);
+    });
+    it('returns trialing status when in trial', async () => {
+      const futureDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+      mockUsersService.findById.mockResolvedValue({ ...mockUser, plan: 'pro', trialEndDate: futureDate });
+      const result = await service.getBillingInfo('user-1', 0);
+      expect(result.status).toBe('trialing');
+    });
+  });
+
+  describe('handleWebhook', () => {
+    it('upgrades user to pro on subscription_created', async () => {
+      mockUsersService.findByEmail.mockResolvedValue({ ...mockUser, plan: 'free' });
+      mockUsersService.update.mockResolvedValue(undefined);
+      await service.handleWebhook('subscription_created', { attributes: { user_email: 'test@example.com', status: 'active', variant_id: '874616', customer_id: 'cust-1' } });
+      expect(mockUsersService.update).toHaveBeenCalledWith('user-1', expect.objectContaining({ plan: 'pro' }));
+    });
+    it('downgrades user on subscription_cancelled', async () => {
+      mockUsersService.findByEmail.mockResolvedValue({ ...mockUser, plan: 'pro' });
+      mockUsersService.update.mockResolvedValue(undefined);
+      await service.handleWebhook('subscription_cancelled', { attributes: { user_email: 'test@example.com' } });
+      expect(mockUsersService.update).toHaveBeenCalledWith('user-1', { plan: 'free' });
+    });
+    it('handles order_created without error', async () => {
+      await expect(service.handleWebhook('order_created', { id: 'order-1' })).resolves.toBeUndefined();
+    });
+    it('handles unknown event gracefully', async () => {
+      await expect(service.handleWebhook('unknown_event', {})).resolves.not.toThrow();
+    });
+  });
+
+  describe('consumeAiRequest', () => {
+    it('increments ai requests', async () => {
+      const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+      mockUsersService.findById.mockResolvedValue({ ...mockUser, plan: 'pro', aiRequestsUsed: 5, aiRequestsMonth: currentMonth });
+      mockUsersService.update.mockResolvedValue(undefined);
+      await service.consumeAiRequest('user-1');
+      expect(mockUsersService.update).toHaveBeenCalledWith('user-1', expect.objectContaining({ aiRequestsUsed: 6 }));
+    });
+    it('throws ForbiddenException when limit reached', async () => {
+      const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+      mockUsersService.findById.mockResolvedValue({ ...mockUser, plan: 'free', aiRequestsUsed: 10, aiRequestsMonth: currentMonth });
+      await expect(service.consumeAiRequest('user-1')).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('verifyWebhookSignature', () => {
+    it('verifies correct HMAC signature', () => {
+      const { createHmac } = require('crypto');
+      const secret = 'test-secret';
+      const svc = new BillingService({ get: () => secret } as any, mockUsersService as any);
+      const payload = 'test-payload';
+      const sig = createHmac('sha256', secret).update(payload).digest('hex');
+      expect(svc.verifyWebhookSignature(payload, sig)).toBe(true);
+    });
+  });
+
+  describe('resolveVariantId', () => {
+    it('returns numeric id directly', () => {
+      expect(service.resolveVariantId('12345')).toBe('12345');
+    });
+    it('resolves pro plan to variant id', () => {
+      const variantId = service.resolveVariantId('pro');
+      expect(typeof variantId).toBe('string');
+    });
+  });
+});
