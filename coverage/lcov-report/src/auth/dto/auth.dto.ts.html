@@ -23,9 +23,9 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">0% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>0/21</span>
+                <span class='fraction'>21/21</span>
             </div>
         
             
@@ -44,9 +44,9 @@
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">0% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>0/21</span>
+                <span class='fraction'>21/21</span>
             </div>
         
             
@@ -61,7 +61,7 @@
             </div>
         </template>
     </div>
-    <div class='status-line low'></div>
+    <div class='status-line high'></div>
     <pre><table class="coverage">
 <tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
 <a name='L2'></a><a href='#L2'>2</a>
@@ -98,75 +98,75 @@
 <a name='L33'></a><a href='#L33'>33</a>
 <a name='L34'></a><a href='#L34'>34</a>
 <a name='L35'></a><a href='#L35'>35</a>
-<a name='L36'></a><a href='#L36'>36</a></td><td class="line-coverage quiet"><span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<a name='L36'></a><a href='#L36'>36</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js"><span class="cstat-no" title="statement not covered" >import { IsEmail, IsString, MinLength, IsOptional } from 'class-validator';</span>
-<span class="cstat-no" title="statement not covered" >import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import { IsEmail, IsString, MinLength, IsOptional } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 &nbsp;
-<span class="cstat-no" title="statement not covered" >export class R</span>egisterDto {
-  @ApiProperty() @IsEmail() <span class="cstat-no" title="statement not covered" >email: string;</span>
-  @ApiProperty() @IsString() @MinLength(8) <span class="cstat-no" title="statement not covered" >password: string;</span>
-  @ApiPropertyOptional() @IsOptional() @IsString() <span class="cstat-no" title="statement not covered" >name?: string;</span>
+export class RegisterDto {
+  @ApiProperty() @IsEmail() email: string;
+  @ApiProperty() @IsString() @MinLength(8) password: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
 }
 &nbsp;
-<span class="cstat-no" title="statement not covered" >export class L</span>oginDto {
-  @ApiProperty() @IsEmail() <span class="cstat-no" title="statement not covered" >email: string;</span>
-  @ApiProperty() @IsString() <span class="cstat-no" title="statement not covered" >password: string;</span>
+export class LoginDto {
+  @ApiProperty() @IsEmail() email: string;
+  @ApiProperty() @IsString() password: string;
 }
 &nbsp;
-<span class="cstat-no" title="statement not covered" >export class M</span>agicLinkDto {
-  @ApiProperty() @IsEmail() <span class="cstat-no" title="statement not covered" >email: string;</span>
+export class MagicLinkDto {
+  @ApiProperty() @IsEmail() email: string;
 }
 &nbsp;
-<span class="cstat-no" title="statement not covered" >export class R</span>efreshTokenDto {
-  @ApiProperty() @IsString() <span class="cstat-no" title="statement not covered" >refreshToken: string;</span>
+export class RefreshTokenDto {
+  @ApiProperty() @IsString() refreshToken: string;
 }
 &nbsp;
-<span class="cstat-no" title="statement not covered" >export class A</span>ppleAuthDto {
-  @ApiProperty() @IsString() <span class="cstat-no" title="statement not covered" >idToken: string;</span>
-  @ApiPropertyOptional() @IsOptional() @IsString() <span class="cstat-no" title="statement not covered" >name?: string;</span>
+export class AppleAuthDto {
+  @ApiProperty() @IsString() idToken: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
 }
 &nbsp;
-<span class="cstat-no" title="statement not covered" >export class O</span>tpSendDto {
-  @ApiProperty() @IsEmail() <span class="cstat-no" title="statement not covered" >email: string;</span>
+export class OtpSendDto {
+  @ApiProperty() @IsEmail() email: string;
 }
 &nbsp;
-<span class="cstat-no" title="statement not covered" >export class O</span>tpVerifyDto {
-  @ApiProperty() @IsEmail() <span class="cstat-no" title="statement not covered" >email: string;</span>
-  @ApiProperty() @IsString() <span class="cstat-no" title="statement not covered" >code: string;</span>
+export class OtpVerifyDto {
+  @ApiProperty() @IsEmail() email: string;
+  @ApiProperty() @IsString() code: string;
 }
 &nbsp;</pre></td></tr></table></pre>
 
@@ -175,7 +175,7 @@
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-03-11T13:20:53.952Z
+                at 2026-03-11T14:06:14.547Z
             </div>
         <script src="../../../prettify.js"></script>
         <script>

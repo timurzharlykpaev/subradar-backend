@@ -116,23 +116,6 @@ describe('AuthService', () => {
     });
   });
 
-  describe('verifyOtp', () => {
-    it('throws UnauthorizedException when OTP not found', async () => {
-      // Redis.get returns null by default
-      await expect(service.verifyOtp({ email: 'test@test.com', code: '123456' }))
-        .rejects.toThrow(UnauthorizedException);
-    });
-  });
-
-  describe('logout', () => {
-    it('clears refresh token and returns message', async () => {
-      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
-      const result = await service.logout('user-1');
-      expect(result).toEqual({ message: 'Logged out' });
-      expect(mockUsersService.updateRefreshToken).toHaveBeenCalledWith('user-1', null);
-    });
-  });
-
   describe('googleLogin', () => {
     it('creates new user if not found', async () => {
       mockUsersService.findByEmail.mockResolvedValueOnce(null);
@@ -147,6 +130,137 @@ describe('AuthService', () => {
       mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
       const result = await service.googleLogin({ email: 'test@test.com', name: 'Test', avatarUrl: '', providerId: 'g-123' });
       expect(result).toHaveProperty('user');
+    });
+  });
+
+  describe('appleLogin', () => {
+    it('throws UnauthorizedException if token decode fails', async () => {
+      mockJwtService.decode.mockImplementationOnce(() => { throw new Error('bad token'); });
+      await expect(service.appleLogin({ idToken: 'bad', name: 'Test' } as any))
+        .rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws BadRequestException if no email in payload', async () => {
+      mockJwtService.decode.mockReturnValueOnce({ sub: 'apple-sub' }); // no email
+      await expect(service.appleLogin({ idToken: 'tok', name: 'Test' } as any))
+        .rejects.toThrow();
+    });
+
+    it('creates new user when not exists', async () => {
+      mockJwtService.decode.mockReturnValueOnce({ email: 'apple@test.com', sub: 'apple-sub' });
+      mockUsersService.findByEmail.mockResolvedValueOnce(null);
+      mockUsersService.create.mockResolvedValueOnce(mockUser);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      const result = await service.appleLogin({ idToken: 'tok', name: 'Apple User' } as any);
+      expect(result).toHaveProperty('accessToken');
+    });
+
+    it('uses existing user', async () => {
+      mockJwtService.decode.mockReturnValueOnce({ email: 'test@test.com', sub: 'apple-sub' });
+      mockUsersService.findByEmail.mockResolvedValueOnce(mockUser);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      const result = await service.appleLogin({ idToken: 'tok' } as any);
+      expect(result).toHaveProperty('user');
+    });
+  });
+
+  describe('sendMagicLink', () => {
+    it('sends magic link and returns message', async () => {
+      mockUsersService.findByEmail.mockResolvedValueOnce(mockUser);
+      mockUsersService.update.mockResolvedValueOnce(mockUser);
+      const result = await service.sendMagicLink({ email: 'test@test.com' });
+      expect(result).toHaveProperty('message', 'Magic link sent');
+      expect(mockNotificationsService.sendEmail).toHaveBeenCalled();
+    });
+
+    it('creates user if not found then sends magic link', async () => {
+      mockUsersService.findByEmail.mockResolvedValueOnce(null);
+      mockUsersService.create.mockResolvedValueOnce(mockUser);
+      mockUsersService.update.mockResolvedValueOnce(mockUser);
+      const result = await service.sendMagicLink({ email: 'new@test.com' });
+      expect(result).toHaveProperty('message', 'Magic link sent');
+      expect(mockUsersService.create).toHaveBeenCalled();
+    });
+
+    it('includes link in non-production response', async () => {
+      mockUsersService.findByEmail.mockResolvedValueOnce(mockUser);
+      mockUsersService.update.mockResolvedValueOnce(mockUser);
+      mockConfigService.get.mockImplementation((key: string, def?: any) => {
+        if (key === 'NODE_ENV') return 'development';
+        return def ?? null;
+      });
+      const result = await service.sendMagicLink({ email: 'test@test.com' });
+      expect(result).toHaveProperty('link');
+    });
+  });
+
+  describe('verifyMagicLink', () => {
+    it('throws UnauthorizedException for invalid token', async () => {
+      mockJwtService.verify.mockImplementationOnce(() => { throw new Error('expired'); });
+      await expect(service.verifyMagicLink('bad-token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException if token already used', async () => {
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
+      mockUsersService.findById.mockResolvedValueOnce({ ...mockUser, magicLinkToken: 'different-token' });
+      await expect(service.verifyMagicLink('magic-token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException if magic link expired', async () => {
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
+      mockUsersService.findById.mockResolvedValueOnce({
+        ...mockUser,
+        magicLinkToken: 'magic-token',
+        magicLinkExpiry: new Date(Date.now() - 60000), // expired
+      });
+      await expect(service.verifyMagicLink('magic-token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('verifies valid magic link and returns tokens', async () => {
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
+      mockUsersService.findById.mockResolvedValueOnce(mockUser);
+      mockUsersService.update.mockResolvedValueOnce(mockUser);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      const result = await service.verifyMagicLink('magic-token');
+      expect(result).toHaveProperty('accessToken');
+      expect(result).toHaveProperty('user');
+    });
+  });
+
+  describe('refresh', () => {
+    it('throws UnauthorizedException for invalid refresh token', async () => {
+      mockJwtService.verify.mockImplementationOnce(() => { throw new Error('invalid'); });
+      await expect(service.refresh('bad-token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException if token revoked', async () => {
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
+      mockUsersService.findById.mockResolvedValueOnce({ ...mockUser, refreshToken: 'different-token' });
+      await expect(service.refresh('some-token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('returns new tokens for valid refresh', async () => {
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
+      mockUsersService.findById.mockResolvedValueOnce({ ...mockUser, refreshToken: 'valid-refresh' });
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      const result = await service.refresh('valid-refresh');
+      expect(result).toHaveProperty('accessToken');
+    });
+  });
+
+  describe('verifyOtp', () => {
+    it('throws UnauthorizedException when OTP not found', async () => {
+      await expect(service.verifyOtp({ email: 'test@test.com', code: '123456' }))
+        .rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  describe('logout', () => {
+    it('clears refresh token and returns message', async () => {
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      const result = await service.logout('user-1');
+      expect(result).toEqual({ message: 'Logged out' });
+      expect(mockUsersService.updateRefreshToken).toHaveBeenCalledWith('user-1', null);
     });
   });
 });
