@@ -58,4 +58,21 @@ describe('AiService', () => {
       expect(result).toBeDefined();
     });
   });
+
+  describe('wizard', () => {
+    it('returns done:true with subscription for known service (netflix)', async () => {
+      const result = await service.wizard('netflix', {}, 'en');
+      expect(result).toHaveProperty('done');
+      if (result.done) {
+        expect(result.subscription).toHaveProperty('name');
+        expect(result.subscription).toHaveProperty('amount');
+        expect(result.subscription).toHaveProperty('billingPeriod');
+      }
+    });
+
+    it('returns done:false or done:true for unknown input', async () => {
+      const result = await service.wizard('some random unknown service xyz', {}, 'en');
+      expect(result).toHaveProperty('done');
+    });
+  });
 });

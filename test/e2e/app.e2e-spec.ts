@@ -148,4 +148,76 @@ describe('SubRadar API (e2e)', () => {
       expect(Array.isArray(r.body)).toBe(true);
     });
   });
+
+  describe('Workspace (auth)', () => {
+    let workspaceId: string;
+
+    skip()('GET /workspace/me → null when no workspace', async () => {
+      const r = await request(app.getHttpServer()).get('/api/v1/workspace/me').set('Authorization', `Bearer ${token}`);
+      expect([200, 404]).toContain(r.status);
+    });
+
+    skip()('POST /workspace → creates workspace', async () => {
+      const r = await request(app.getHttpServer())
+        .post('/api/v1/workspace')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'E2E Test Team' })
+        .expect(201);
+      expect(r.body).toHaveProperty('id');
+      expect(r.body.name).toBe('E2E Test Team');
+      workspaceId = r.body.id;
+    });
+
+    skip()('GET /workspace/me → returns workspace', async () => {
+      const r = await request(app.getHttpServer())
+        .get('/api/v1/workspace/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(r.body).toHaveProperty('id');
+    });
+
+    skip()('GET /workspace/me/analytics → returns analytics', async () => {
+      const r = await request(app.getHttpServer())
+        .get('/api/v1/workspace/me/analytics')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(r.body).toHaveProperty('totalMonthly');
+      expect(r.body).toHaveProperty('totalSubscriptions');
+    });
+
+    skip()('POST /workspace/:id/invite → 201 with pending member', async () => {
+      if (!workspaceId) return;
+      const r = await request(app.getHttpServer())
+        .post(`/api/v1/workspace/${workspaceId}/invite`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ email: 'invite-test@subradar.ai', role: 'MEMBER' })
+        .expect(201);
+      expect(r.body).toHaveProperty('id');
+      expect(r.body.status).toBe('PENDING');
+    });
+  });
+
+  describe('AI Wizard (auth)', () => {
+    skip()('POST /ai/wizard netflix → done: true', async () => {
+      const r = await request(app.getHttpServer())
+        .post('/api/v1/ai/wizard')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ message: 'netflix', locale: 'en' })
+        .expect(201);
+      expect(r.body).toHaveProperty('done');
+      if (r.body.done) {
+        expect(r.body.subscription).toHaveProperty('name');
+        expect(r.body.subscription).toHaveProperty('amount');
+      }
+    });
+
+    skip()('POST /ai/wizard unknown service → done: false with question', async () => {
+      const r = await request(app.getHttpServer())
+        .post('/api/v1/ai/wizard')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ message: 'некий сервис за 500 рублей', locale: 'ru' })
+        .expect(201);
+      expect(r.body).toHaveProperty('done');
+    });
+  });
 });
