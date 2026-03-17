@@ -55,4 +55,11 @@ export class UsersController {
   ) {
     return this.usersService.updatePreferences(req.user.id, body);
   }
+
+  @Delete('me')
+  @HttpCode(200)
+  async deleteMe(@Request() req) {
+    await this.usersService.deleteAccount(req.user.id);
+    return { success: true };
+  }
 }

@@ -126,4 +126,11 @@ describe('UsersService', () => {
       expect(result).toBeDefined();
     });
   });
+
+  describe('deleteAccount', () => {
+    it('deletes user by id', async () => {
+      mockRepo.delete = jest.fn().mockResolvedValue({ affected: 1 });
+      await expect(service.deleteAccount('user-1')).resolves.not.toThrow();
+    });
+  });
 });
