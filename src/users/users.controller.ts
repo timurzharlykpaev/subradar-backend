@@ -2,9 +2,11 @@ import {
   Controller,
   Get,
   Patch,
+  Delete,
   Body,
   UseGuards,
   Request,
+  HttpCode,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -29,6 +31,13 @@ export class UsersController {
     body: Partial<{ name: string; avatarUrl: string; fcmToken: string }>,
   ) {
     return this.usersService.update(req.user.id, body);
+  }
+
+  @Delete('me')
+  @HttpCode(200)
+  async deleteMe(@Request() req) {
+    await this.usersService.deleteAccount(req.user.id);
+    return { success: true };
   }
 
   @Patch('preferences')

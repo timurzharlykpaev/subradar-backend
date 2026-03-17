@@ -92,4 +92,8 @@ export class UsersService {
     }
     return this.findById(id);
   }
+
+  async deleteAccount(id: string): Promise<void> {
+    await this.repo.delete(id);
+  }
 }
