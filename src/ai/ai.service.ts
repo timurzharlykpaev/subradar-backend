@@ -124,9 +124,16 @@ export class AiService {
     let text: string;
     try {
       const audioBuffer = Buffer.from(audioBase64, 'base64');
-      const audioFile = new File([audioBuffer], 'audio.webm', {
-        type: 'audio/webm',
-      });
+      // Detect format: m4a starts with ftyp box (bytes 4-7), mp3 starts with ID3/FF
+      let mimeType = 'audio/mp4';
+      let fileName = 'audio.m4a';
+      if (audioBuffer.length > 4) {
+        const header = audioBuffer.slice(0, 4).toString('hex');
+        if (header.startsWith('1a45')) { mimeType = 'audio/webm'; fileName = 'audio.webm'; }
+        else if (header.startsWith('494433') || header.startsWith('fffb') || header.startsWith('fff3')) { mimeType = 'audio/mpeg'; fileName = 'audio.mp3'; }
+        else if (header.startsWith('4f676753')) { mimeType = 'audio/ogg'; fileName = 'audio.ogg'; }
+      }
+      const audioFile = new File([audioBuffer], fileName, { type: mimeType });
 
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioFile,
@@ -175,7 +182,13 @@ export class AiService {
     let text: string;
     try {
       const audioBuffer = Buffer.from(audioBase64, 'base64');
-      const audioFile = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
+      let mimeType2 = 'audio/mp4'; let fileName2 = 'audio.m4a';
+      if (audioBuffer.length > 4) {
+        const h = audioBuffer.slice(0, 4).toString('hex');
+        if (h.startsWith('1a45')) { mimeType2 = 'audio/webm'; fileName2 = 'audio.webm'; }
+        else if (h.startsWith('4f676753')) { mimeType2 = 'audio/ogg'; fileName2 = 'audio.ogg'; }
+      }
+      const audioFile = new File([audioBuffer], fileName2, { type: mimeType2 });
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioFile,
         model: 'whisper-1',
