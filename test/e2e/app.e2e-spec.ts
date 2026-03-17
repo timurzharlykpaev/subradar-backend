@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import * as request from 'supertest';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const request = require('supertest');
 import { AppModule } from '../../src/app.module';
 
 describe('SubRadar API (e2e)', () => {

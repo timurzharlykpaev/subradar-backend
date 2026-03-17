@@ -9,7 +9,7 @@ const mockUser: Partial<User> = {
   email: 'test@test.com',
   name: 'Test User',
   plan: 'free' as any,
-  refreshToken: null,
+  refreshToken: undefined,
 };
 
 const mockRepo = {

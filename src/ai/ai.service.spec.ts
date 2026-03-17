@@ -3,7 +3,20 @@ import { ConfigService } from '@nestjs/config';
 import { AiService } from './ai.service';
 
 jest.mock('openai', () => jest.fn().mockImplementation(() => ({
-  chat: { completions: { create: jest.fn().mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ name: 'Netflix', amount: 15, currency: 'USD' }) } }] }) } },
+  chat: {
+    completions: {
+      create: jest.fn().mockResolvedValue({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              done: true,
+              subscription: { name: 'Netflix', amount: 15.99, currency: 'USD', billingPeriod: 'MONTHLY', cancelUrl: 'https://netflix.com/cancel' },
+            }),
+          },
+        }],
+      }),
+    },
+  },
   audio: { transcriptions: { create: jest.fn().mockResolvedValue({ text: 'Netflix 15 dollars per month' }) } },
 })));
 

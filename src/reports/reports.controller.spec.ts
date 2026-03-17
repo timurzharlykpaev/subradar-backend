@@ -7,7 +7,7 @@ import { ReportType } from './entities/report.entity';
 describe('ReportsController', () => {
   let controller: ReportsController;
 
-  const mockReport = { id: 'report-1', type: ReportType.MONTHLY };
+  const mockReport = { id: 'report-1', type: ReportType.SUMMARY };
 
   const mockService = {
     generate: jest.fn().mockResolvedValue(mockReport),
@@ -30,9 +30,9 @@ describe('ReportsController', () => {
   it('should be defined', () => expect(controller).toBeDefined());
 
   it('generate → calls service.generate with from/to/type', async () => {
-    const dto = { from: '2024-01-01', to: '2024-01-31', type: ReportType.MONTHLY } as any;
+    const dto = { from: '2024-01-01', to: '2024-01-31', type: ReportType.SUMMARY } as any;
     const result = await controller.generate(req, dto);
-    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-01-01', '2024-01-31', ReportType.MONTHLY);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-01-01', '2024-01-31', ReportType.SUMMARY);
     expect(result).toHaveProperty('id');
   });
 
@@ -43,9 +43,9 @@ describe('ReportsController', () => {
   });
 
   it('generate → falls back to empty strings when no dates', async () => {
-    const dto = { type: ReportType.MONTHLY } as any;
+    const dto = { type: ReportType.SUMMARY } as any;
     await controller.generate(req, dto);
-    expect(mockService.generate).toHaveBeenCalledWith('user-1', '', '', ReportType.MONTHLY);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '', '', ReportType.SUMMARY);
   });
 
   it('findAll → returns array of reports', async () => {

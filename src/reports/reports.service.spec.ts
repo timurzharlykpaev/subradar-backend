@@ -77,14 +77,14 @@ describe('ReportsService', () => {
 
   describe('generate', () => {
     it('creates and saves a report', async () => {
-      const newReport = { id: 'rep-2', userId: 'user-1', type: ReportType.MONTHLY, status: ReportStatus.READY };
+      const newReport = { id: 'rep-2', userId: 'user-1', type: ReportType.SUMMARY, status: ReportStatus.READY };
       mockReportRepo.create.mockReturnValue(newReport);
       mockReportRepo.save.mockResolvedValue(newReport);
 
-      const result = await service.generate('user-1', '2024-01-01', '2024-01-31', ReportType.MONTHLY);
+      const result = await service.generate('user-1', '2024-01-01', '2024-01-31', ReportType.SUMMARY);
       expect(mockReportRepo.create).toHaveBeenCalledWith(expect.objectContaining({
         userId: 'user-1',
-        type: ReportType.MONTHLY,
+        type: ReportType.SUMMARY,
         status: ReportStatus.READY,
       }));
       expect(mockReportRepo.save).toHaveBeenCalledWith(newReport);
