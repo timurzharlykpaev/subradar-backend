@@ -53,6 +53,7 @@ export class RemindersService {
       try {
         const user = await this.userRepo.findOne({ where: { id: sub.userId } });
         if (!user) continue;
+        if (!user.notificationsEnabled) continue;
 
         const paymentDate = sub.nextPaymentDate as Date;
         const diffMs = paymentDate.getTime() - today.getTime();

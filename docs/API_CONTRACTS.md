@@ -140,8 +140,39 @@ Response: { "id": "uuid", "status": "PENDING" }
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/notifications/push-token` | Register push token (FCM) |
-| PATCH | `/notifications/settings` | Update notification preferences |
+| POST | `/notifications/push-token` | Register native FCM/APNs push token → saves to `user.fcmToken` |
+| GET | `/notifications/settings` | Get notification preferences (`enabled`, `daysBefore`) from user profile |
+| PUT | `/notifications/settings` | Update notification preferences → persists `notificationsEnabled`, `reminderDaysBefore` |
+| POST | `/notifications/test` | Send test push notification to current user's device |
+
+### POST `/notifications/push-token`
+```json
+// Request
+{ "token": "native-fcm-device-token", "platform": "ios" }
+// Response
+{ "message": "Push token registered" }
+```
+
+### GET `/notifications/settings`
+```json
+// Response
+{ "enabled": true, "daysBefore": 3 }
+```
+
+### PUT `/notifications/settings`
+```json
+// Request
+{ "enabled": true, "daysBefore": 7 }
+// Response
+{ "enabled": true, "daysBefore": 7 }
+```
+
+### Server-side Reminders (Cron)
+- Runs daily at 09:00 UTC
+- Finds ACTIVE/TRIAL subscriptions with `nextPaymentDate` in 1 or 3 days
+- Skips users with `notificationsEnabled: false`
+- Sends FCM push (if `user.fcmToken` set) + email (if `emailNotifications` enabled)
+- Email: branded HTML with subscription name, amount, currency, date
 
 ## Billing
 

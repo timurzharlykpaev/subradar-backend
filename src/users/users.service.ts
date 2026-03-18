@@ -47,7 +47,7 @@ export class UsersService {
       'lemonSqueezyCustomerId', 'plan', 'trialUsed', 'trialStartDate', 'trialEndDate',
       'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'isActive',
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
-      'onboardingCompleted', 'notificationsEnabled', 'emailNotifications',
+      'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore',
     ]);
     const safe: Partial<User> = {};
     for (const [k, v] of Object.entries(data)) {

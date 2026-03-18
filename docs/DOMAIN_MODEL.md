@@ -114,8 +114,10 @@ type CardBrand = 'VISA' | 'MASTERCARD' | 'AMEX' | 'MIR' | 'UNIONPAY' | 'OTHER'
   usageType?: 'PERSONAL' | 'TEAM'
 
   // Notifications
-  pushToken?: string
-  notificationsEnabled: boolean
+  fcmToken?: string                    // Native FCM (Android) / APNs (iOS) device token
+  notificationsEnabled: boolean        // Master toggle for push + email reminders
+  reminderDaysBefore?: number          // Days before billing to send reminder (default: 3)
+  emailNotifications?: boolean         // Email reminders toggle (default: true)
 
   createdAt: timestamp
   updatedAt: timestamp

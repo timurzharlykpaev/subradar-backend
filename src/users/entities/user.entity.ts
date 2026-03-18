@@ -98,6 +98,9 @@ export class User {
   @Column({ default: true })
   notificationsEnabled: boolean;
 
+  @Column({ nullable: true, default: 3 })
+  reminderDaysBefore: number;
+
   @Column({ nullable: true, default: true })
   emailNotifications: boolean;
 

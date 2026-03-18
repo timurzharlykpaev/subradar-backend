@@ -3,10 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsString, IsBoolean, IsNumber, IsOptional } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
-
-class UpdateFcmTokenDto {
-  @IsString() fcmToken: string;
-}
+import { UsersService } from '../users/users.service';
 
 class PushTokenDto {
   @IsString() token: string;
@@ -23,45 +20,56 @@ class NotificationSettingsDto {
 @UseGuards(JwtAuthGuard)
 @Controller('notifications')
 export class NotificationsController {
-  constructor(private readonly service: NotificationsService) {}
+  constructor(
+    private readonly service: NotificationsService,
+    private readonly usersService: UsersService,
+  ) {}
 
-  @Post('fcm-token')
-  async updateFcmToken(
-    @Request() _req: unknown,
-    @Body() _dto: UpdateFcmTokenDto,
-  ) {
-    return { message: 'Use PATCH /users/me with fcmToken field' };
-  }
-
-  /** Mobile uses POST /notifications/push-token with {token, platform} */
+  /** Mobile sends native FCM/APNs token via POST /notifications/push-token */
   @Post('push-token')
   async registerPushToken(
-    @Request() _req: unknown,
-    @Body() _dto: PushTokenDto,
+    @Request() req,
+    @Body() dto: PushTokenDto,
   ) {
+    await this.usersService.update(req.user.id, { fcmToken: dto.token } as any);
     return { message: 'Push token registered' };
   }
 
-  /** Mobile reads notification settings */
+  /** Mobile reads notification settings from user profile */
   @Get('settings')
-  getSettings(@Request() _req: unknown) {
-    return { enabled: true, daysBefore: 3 };
+  async getSettings(@Request() req) {
+    const user = await this.usersService.findById(req.user.id);
+    return {
+      enabled: user.notificationsEnabled ?? true,
+      daysBefore: (user as any).reminderDaysBefore ?? 3,
+    };
   }
 
   /** Mobile updates notification settings */
   @Put('settings')
-  updateSettings(
-    @Request() _req: unknown,
-    @Body() _dto: NotificationSettingsDto,
+  async updateSettings(
+    @Request() req,
+    @Body() dto: NotificationSettingsDto,
   ) {
-    return { enabled: _dto.enabled ?? true, daysBefore: _dto.daysBefore ?? 3 };
+    const data: any = {};
+    if (dto.enabled !== undefined) data.notificationsEnabled = dto.enabled;
+    if (dto.daysBefore !== undefined) data.reminderDaysBefore = dto.daysBefore;
+    await this.usersService.update(req.user.id, data);
+    return {
+      enabled: dto.enabled ?? true,
+      daysBefore: dto.daysBefore ?? 3,
+    };
   }
 
   @Post('test')
   async sendTest(
-    @Request() _req: unknown,
-    @Body() _body: { title: string; message: string },
+    @Request() req,
+    @Body() body: { title: string; message: string },
   ) {
-    return { message: 'Test notification queued' };
+    const user = await this.usersService.findById(req.user.id);
+    if (user.fcmToken) {
+      await this.service.sendPushNotification(user.fcmToken, body.title, body.message);
+    }
+    return { message: 'Test notification sent' };
   }
 }
