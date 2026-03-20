@@ -44,7 +44,7 @@ export class BillingController {
     @Body() body: any,
   ) {
     const secret = process.env.REVENUECAT_WEBHOOK_SECRET;
-    if (!secret || authorization !== `Bearer ${secret}`) {
+    if (!secret || (authorization !== secret && authorization !== `Bearer ${secret}`)) {
       throw new BadRequestException('Invalid webhook authorization');
     }
     await this.billingService.handleRevenueCatWebhook(body);
