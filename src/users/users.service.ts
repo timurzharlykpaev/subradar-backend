@@ -44,7 +44,7 @@ export class UsersService {
     // Whitelist only known User columns to avoid TypeORM "Property not found" errors
     const ALLOWED_KEYS = new Set([
       'name', 'avatarUrl', 'fcmToken', 'refreshToken', 'magicLinkToken', 'magicLinkExpiry',
-      'lemonSqueezyCustomerId', 'plan', 'trialUsed', 'trialStartDate', 'trialEndDate',
+      'lemonSqueezyCustomerId', 'plan', 'billingSource', 'trialUsed', 'trialStartDate', 'trialEndDate',
       'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'isActive',
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
       'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore',
@@ -91,6 +91,10 @@ export class UsersService {
       await this.repo.update(id, updateData);
     }
     return this.findById(id);
+  }
+
+  async save(user: User): Promise<User> {
+    return this.repo.save(user);
   }
 
   async deleteAccount(id: string): Promise<void> {

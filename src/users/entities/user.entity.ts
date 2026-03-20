@@ -110,6 +110,9 @@ export class User {
   @OneToMany(() => PaymentCard, (c) => c.user)
   paymentCards: PaymentCard[];
 
+  @Column({ nullable: true })
+  billingSource: string;
+
   @CreateDateColumn()
   createdAt: Date;
 

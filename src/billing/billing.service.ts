@@ -41,6 +41,13 @@ export class BillingService {
       cfg.get('LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID', '') || this.teamVariantId;
   }
 
+  private readonly RC_PRODUCT_TO_PLAN: Record<string, string> = {
+    'io.subradar.mobile.pro.monthly': 'pro',
+    'io.subradar.mobile.pro.yearly': 'pro',
+    'io.subradar.mobile.team.monthly': 'organization',
+    'io.subradar.mobile.team.yearly': 'organization',
+  };
+
   verifyWebhookSignature(payload: string, signature: string): boolean {
     const hmac = createHmac('sha256', this.webhookSecret);
     const digest = hmac.update(payload).digest('hex');
@@ -71,6 +78,7 @@ export class BillingService {
             const updates: any = {
               plan: isActive ? (isTeam ? 'organization' : 'pro') : 'free',
               lemonSqueezyCustomerId: String(customerId),
+              billingSource: 'lemon_squeezy',
             };
             this.logger.log(`Webhook upgrade: email=${email} variantId=${variantId} isTeam=${isTeam} plan=${updates.plan} status=${status}`);
             await this.usersService.update(user.id, updates);
@@ -99,6 +107,56 @@ export class BillingService {
         this.logger.log('Order created:', data?.id);
         break;
       }
+    }
+  }
+
+  async handleRevenueCatWebhook(body: any): Promise<void> {
+    const event = body?.event;
+    if (!event) return;
+
+    const type: string = event.type;
+    const appUserId: string = event.app_user_id;
+    const productId: string = event.product_id;
+
+    if (!appUserId || appUserId.startsWith('$RCAnonymousID')) {
+      this.logger.warn(`RevenueCat webhook: anonymous user, type: ${type}`);
+      return;
+    }
+
+    const user = await this.usersService.findById(appUserId).catch(() => null);
+    if (!user) {
+      this.logger.warn(`RevenueCat webhook: user ${appUserId} not found`);
+      return;
+    }
+
+    switch (type) {
+      case 'INITIAL_PURCHASE':
+      case 'RENEWAL':
+      case 'PRODUCT_CHANGE': {
+        const plan = this.RC_PRODUCT_TO_PLAN[productId] || 'pro';
+        user.plan = plan;
+        user.billingSource = 'revenuecat';
+        await this.usersService.save(user);
+        this.logger.log(`RevenueCat: ${type} — user ${appUserId} → plan ${plan}`);
+        break;
+      }
+      case 'CANCELLATION': {
+        this.logger.log(`RevenueCat: CANCELLATION — user ${appUserId}`);
+        break;
+      }
+      case 'EXPIRATION': {
+        user.plan = 'free';
+        user.billingSource = null as any;
+        await this.usersService.save(user);
+        this.logger.log(`RevenueCat: EXPIRATION — user ${appUserId} → free`);
+        break;
+      }
+      case 'BILLING_ISSUE': {
+        this.logger.warn(`RevenueCat: BILLING_ISSUE — user ${appUserId}`);
+        break;
+      }
+      default:
+        this.logger.log(`RevenueCat: unhandled event ${type}`);
     }
   }
 

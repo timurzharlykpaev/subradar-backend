@@ -38,6 +38,19 @@ export class BillingController {
     private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
+  @Post('revenuecat-webhook')
+  async revenuecatWebhook(
+    @Headers('authorization') authorization: string,
+    @Body() body: any,
+  ) {
+    const secret = process.env.REVENUECAT_WEBHOOK_SECRET;
+    if (!secret || authorization !== `Bearer ${secret}`) {
+      throw new BadRequestException('Invalid webhook authorization');
+    }
+    await this.billingService.handleRevenueCatWebhook(body);
+    return { received: true };
+  }
+
   @Post('webhook')
   async webhook(
     @Req() req: any,
