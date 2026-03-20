@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -59,47 +60,52 @@ export class ReportsService {
     const subs = await this.subRepo
       .createQueryBuilder('s')
       .where('s.userId = :userId', { userId })
-      .andWhere('(s.startDate IS NULL OR s.startDate >= :from)', {
-        from: report.from,
-      })
       .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', {
         to: report.to,
       })
+      .andWhere(
+        '(s.cancelledAt IS NULL OR s.cancelledAt >= :from)',
+        { from: report.from },
+      )
       .getMany();
 
-    return new Promise<Buffer>((resolve, reject) => {
-      const doc = new PDFDocument({ margin: 50 }) as any;
-      const buffers: Buffer[] = [];
+    try {
+      return await new Promise<Buffer>((resolve, reject) => {
+        const doc = new PDFDocument({ margin: 50 }) as any;
+        const buffers: Buffer[] = [];
 
-      doc.on('data', (chunk) => buffers.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(buffers)));
-      doc.on('error', reject);
+        doc.on('data', (chunk) => buffers.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(buffers)));
+        doc.on('error', reject);
 
-      // Header
-      doc
-        .fontSize(24)
-        .font('Helvetica-Bold')
-        .text('SubRadar AI', { align: 'center' });
-      doc
-        .fontSize(16)
-        .font('Helvetica')
-        .text(`${report.type.toUpperCase()} Report`, { align: 'center' });
-      doc.moveDown();
-      doc
-        .fontSize(12)
-        .text(`Period: ${report.from} to ${report.to}`, { align: 'center' });
-      doc.moveDown(2);
+        // Header
+        doc
+          .fontSize(24)
+          .font('Helvetica-Bold')
+          .text('SubRadar AI', { align: 'center' });
+        doc
+          .fontSize(16)
+          .font('Helvetica')
+          .text(`${report.type.toUpperCase()} Report`, { align: 'center' });
+        doc.moveDown();
+        doc
+          .fontSize(12)
+          .text(`Period: ${report.from} to ${report.to}`, { align: 'center' });
+        doc.moveDown(2);
 
-      if (report.type === ReportType.SUMMARY) {
-        this.addSummaryContent(doc, subs);
-      } else if (report.type === ReportType.DETAILED) {
-        this.addDetailedContent(doc, subs, cardMap);
-      } else if (report.type === ReportType.TAX) {
-        this.addTaxContent(doc, subs, cardMap);
-      }
+        if (report.type === ReportType.SUMMARY) {
+          this.addSummaryContent(doc, subs);
+        } else if (report.type === ReportType.DETAILED) {
+          this.addDetailedContent(doc, subs, cardMap);
+        } else if (report.type === ReportType.TAX) {
+          this.addTaxContent(doc, subs, cardMap);
+        }
 
-      doc.end();
-    });
+        doc.end();
+      });
+    } catch (error) {
+      throw new InternalServerErrorException('Failed to generate PDF report');
+    }
   }
 
   private addSummaryContent(doc: any, subs: Subscription[]) {
