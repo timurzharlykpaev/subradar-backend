@@ -144,6 +144,12 @@ export class Subscription {
   @JoinColumn({ name: 'paymentCardId' })
   paymentCard: PaymentCard;
 
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  color: string | null;
+
+  @Column({ type: 'simple-json', nullable: true })
+  tags: string[] | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

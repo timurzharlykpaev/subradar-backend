@@ -51,4 +51,6 @@ export class CreateSubscriptionDto {
   addedVia?: AddedVia;
   @ApiPropertyOptional() @IsOptional() aiMetadata?: object;
   @ApiPropertyOptional() @IsOptional() @IsString() paymentCardId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() color?: string;
+  @ApiPropertyOptional() @IsOptional() @IsArray() @IsString({ each: true }) tags?: string[];
 }
