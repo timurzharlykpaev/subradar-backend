@@ -19,7 +19,6 @@ const mockUserRepo = {
   findOne: jest.fn().mockResolvedValue({ id: 'user-1', email: 'test@test.com', fcmToken: null, notificationsEnabled: true }),
   find: jest.fn().mockResolvedValue([]),
   update: jest.fn().mockResolvedValue({ affected: 1 }),
-  update: jest.fn().mockResolvedValue(undefined),
   createQueryBuilder: jest.fn(() => ({
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),

@@ -22,6 +22,7 @@ const mockRepo = {
   create: jest.fn().mockImplementation((d) => ({ ...d })),
   save: jest.fn().mockImplementation((e) => Promise.resolve({ id: 'user-1', ...e })),
   update: jest.fn().mockResolvedValue({ affected: 1 }),
+  delete: jest.fn().mockResolvedValue({ affected: 1 }),
 };
 
 describe('UsersService', () => {
