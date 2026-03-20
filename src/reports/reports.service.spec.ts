@@ -148,5 +148,48 @@ describe('ReportsService', () => {
       const result = await service.generatePdf('user-1', 'rep-1');
       expect(Buffer.isBuffer(result)).toBe(true);
     });
+
+    it('filters subscriptions by date range including cancelled check', async () => {
+      mockReportRepo.findOne.mockResolvedValue(mockReport);
+      mockCardRepo.find.mockResolvedValue([]);
+
+      const andWhereCalls: Array<[string, Record<string, string>]> = [];
+      const mockQB = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn((condition: string, params: Record<string, string>) => {
+          andWhereCalls.push([condition, params]);
+          return mockQB;
+        }),
+        getMany: jest.fn().mockResolvedValue([
+          { name: 'Netflix', amount: 15.99, category: 'STREAMING', billingPeriod: 'MONTHLY', status: 'ACTIVE', currency: 'USD' },
+        ]),
+      };
+      (service as any).subRepo = { createQueryBuilder: jest.fn(() => mockQB) };
+
+      const result = await service.generatePdf('user-1', 'rep-1');
+      expect(result).toBeInstanceOf(Buffer);
+
+      // Verify userId filter is applied via where()
+      expect(mockQB.where).toHaveBeenCalledWith('s.userId = :userId', { userId: 'user-1' });
+
+      // Verify startDate <= to filter
+      const startDateCall = andWhereCalls.find(([condition]) =>
+        condition.includes('startDate') && condition.includes(':to'),
+      );
+      expect(startDateCall).toBeDefined();
+      expect(startDateCall![1]).toMatchObject({ to: mockReport.to });
+
+      // Verify cancelledAt IS NULL OR cancelledAt >= from filter
+      const cancelledAtCall = andWhereCalls.find(([condition]) =>
+        condition.includes('cancelledAt') && condition.includes(':from'),
+      );
+      expect(cancelledAtCall).toBeDefined();
+      expect(cancelledAtCall![1]).toMatchObject({ from: mockReport.from });
+    });
+
+    it('throws NotFoundException for non-existent report', async () => {
+      mockReportRepo.findOne.mockResolvedValue(null);
+      await expect(service.generatePdf('user-1', 'non-existent')).rejects.toThrow(NotFoundException);
+    });
   });
 });
