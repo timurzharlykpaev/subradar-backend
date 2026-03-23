@@ -290,8 +290,14 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
     locale = 'en',
     history: Array<{ role: 'user' | 'assistant'; content: string }> = [],
   ) {
-    const contextStr = Object.keys(context).length
-      ? `\nAccumulated context so far: ${JSON.stringify(context)}`
+    const preferredCurrency = context.preferredCurrency as string | undefined;
+    const currencyNote = preferredCurrency && preferredCurrency !== 'USD'
+      ? `\nUser's preferred currency: ${preferredCurrency}. If you know the price in ${preferredCurrency}, use it. Otherwise use USD and note the currency.`
+      : '';
+    const cleanContext = { ...context };
+    delete cleanContext.preferredCurrency;
+    const contextStr = Object.keys(cleanContext).length
+      ? `\nAccumulated context so far: ${JSON.stringify(cleanContext)}`
       : '';
 
     const systemMsg = {
@@ -333,7 +339,7 @@ Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, G
 Response schemas:
 A) Single plan: { "done": true, "subscription": { "name": string, "amount": number, "currency": "USD", "billingPeriod": "MONTHLY"|"YEARLY", "category": string, "serviceUrl": string, "cancelUrl": string|null, "iconUrl": string } }
 B) Multiple plans: { "done": true, "plans": [{ "name": string, "amount": number, "billingPeriod": "MONTHLY"|"YEARLY", "currency": "USD" }], "serviceName": string, "iconUrl": string, "serviceUrl": string, "cancelUrl": string|null, "category": string }
-C) Need info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": {} }${contextStr}`,
+C) Need info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": {} }${currencyNote}${contextStr}`,
     };
 
     // Build messages: system + history + current user message
