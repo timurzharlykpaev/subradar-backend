@@ -331,7 +331,9 @@ export class BillingService {
     let trialDaysLeft: number | null = null;
     let status: 'active' | 'cancelled' | 'trialing' = 'active';
 
-    if (user.trialEndDate) {
+    // If user has a paid subscription via RevenueCat, they are always 'active'
+    // regardless of any backend trial state (trial was superseded by real purchase)
+    if (user.billingSource !== 'revenuecat' && user.trialEndDate) {
       const now = Date.now();
       const end = new Date(user.trialEndDate).getTime();
       if (end > now) {
