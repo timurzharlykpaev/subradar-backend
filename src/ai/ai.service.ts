@@ -284,34 +284,48 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
    * Conversational wizard — one endpoint drives the whole dialog.
    * Returns { done, subscription } OR { done: false, question, field, partialContext }
    */
-  async wizard(message: string, context: Record<string, any> = {}, locale = 'en') {
+  async wizard(
+    message: string,
+    context: Record<string, any> = {},
+    locale = 'en',
+    history: Array<{ role: 'user' | 'assistant'; content: string }> = [],
+  ) {
     const contextStr = Object.keys(context).length
       ? `\nAccumulated context so far: ${JSON.stringify(context)}`
       : '';
 
-    const result = await this.chat([
-      {
-        role: 'system',
-        content: `You are a smart subscription assistant. Your job is to extract subscription details from the user's message and your own knowledge of well-known services.
+    const systemMsg = {
+      role: 'system' as const,
+      content: `You are a smart subscription assistant. Your job is to extract subscription details from the user's message and your own knowledge of well-known services.
 
 Rules:
-1. Use your knowledge to fill in typical price, billing period, website URL, cancel URL and category for known services (Netflix, Spotify, iCloud, YouTube Premium, ChatGPT Plus, Amazon Prime, Disney+, Apple TV+, Adobe CC, GitHub Copilot etc.)
-2. If the user mentions a known service, auto-fill its typical data and return done:true immediately.
-3. Ask clarifying questions ONLY if: (a) you can't identify the service, OR (b) user explicitly provided a price that differs from typical.
-4. Ask ONE question at a time. Keep questions short and friendly (locale: ${locale}).
-5. Return ONLY valid JSON, no markdown.
+1. Use your knowledge to fill in typical price, billing period, website URL, cancel URL and category for known services (Netflix, Spotify, iCloud, YouTube Premium, ChatGPT Plus, Amazon Prime, Disney+, Apple TV+, Adobe CC, GitHub Copilot, LinkedIn Premium, etc.)
+2. If the user mentions a known service, auto-fill ALL its typical data and return done:true IMMEDIATELY — do NOT ask follow-up questions.
+3. Ask clarifying questions ONLY if you truly cannot identify the service after considering all context and history.
+4. NEVER ask the same question twice. Check conversation history before asking.
+5. Ask ONE question at a time maximum. Keep questions short (locale: ${locale}).
+6. Return ONLY valid JSON, no markdown, no explanation.
+
+Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, GAMING, NEWS, HEALTH, OTHER
 
 Response schema:
-- If enough info: { "done": true, "subscription": { "name": string, "amount": number, "currency": "USD", "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY", "category": string, "serviceUrl": string|null, "cancelUrl": string|null, "iconUrl": string|null } }
+- If enough info: { "done": true, "subscription": { "name": string, "amount": number, "currency": string, "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY", "category": string, "serviceUrl": string|null, "cancelUrl": string|null, "iconUrl": string|null } }
 - If need more info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": { ...updated fields so far } }
 
-iconUrl format: https://logo.clearbit.com/{domain} for known services.${contextStr}`,
-      },
+iconUrl: use https://logo.clearbit.com/{domain} for known services.${contextStr}`,
+    };
+
+    // Build messages: system + history + current user message
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      systemMsg,
+      ...history.slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 500) })),
       { role: 'user', content: message.slice(0, 1000) },
-    ]);
+    ];
+
+    const result = await this.chat(messages);
 
     if (typeof result === 'object' && result !== null) return result;
-    try { return JSON.parse(String(result)); } catch { return { done: false, question: 'Что за сервис?', field: 'name', partialContext: {} }; }
+    try { return JSON.parse(String(result)); } catch { return { done: false, question: 'What service is this?', field: 'name', partialContext: {} }; }
   }
 
   async matchService(name: string) {

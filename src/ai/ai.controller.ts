@@ -191,8 +191,8 @@ export class AiController {
    * Returns: { done: true, subscription: {...} } OR { done: false, question, field, partialContext }
    */
   @Post('wizard')
-  async wizard(@Request() req, @Body() body: { message: string; context?: Record<string, any>; locale?: string }) {
+  async wizard(@Request() req, @Body() body: { message: string; context?: Record<string, any>; locale?: string; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.wizard(body.message, body.context ?? {}, body.locale ?? 'en');
+    return this.aiService.wizard(body.message, body.context ?? {}, body.locale ?? 'en', body.history ?? []);
   }
 }
