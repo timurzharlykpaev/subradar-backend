@@ -19,6 +19,9 @@ import {
   AppleAuthDto,
   OtpSendDto,
   OtpVerifyDto,
+  GoogleTokenDto,
+  VerifyTokenDto,
+  UpdateProfileDto,
 } from './dto/auth.dto';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -56,9 +59,9 @@ export class AuthController {
   }
 
   @Post('google/token')
-  googleTokenLogin(@Body() body: { idToken?: string; accessToken?: string }) {
+  googleTokenLogin(@Body() dto: GoogleTokenDto) {
     return this.authService.googleTokenLogin(
-      body.idToken || body.accessToken || '',
+      dto.idToken || dto.accessToken || '',
     );
   }
 
@@ -120,22 +123,22 @@ export class AuthController {
   @Post('profile')
   async updateProfile(
     @Request() req,
-    @Body() body: Partial<{ name: string; avatarUrl: string }>,
+    @Body() dto: UpdateProfileDto,
   ) {
-    return this.usersService.update(req.user.id, body);
+    return this.usersService.update(req.user.id, dto);
   }
 
   /** Mobile uses POST /auth/google with {idToken} in body — delegate to googleTokenLogin */
   @Post('google/mobile')
-  googleMobileLogin(@Body() body: { idToken?: string; accessToken?: string }) {
+  googleMobileLogin(@Body() dto: GoogleTokenDto) {
     return this.authService.googleTokenLogin(
-      body.idToken || body.accessToken || '',
+      dto.idToken || dto.accessToken || '',
     );
   }
 
   /** Alias: POST /auth/verify with {token} — mobile's magic-link verification */
   @Post('verify')
-  verifyMagicLinkPost(@Body() body: { token: string }) {
-    return this.authService.verifyMagicLink(body.token);
+  verifyMagicLinkPost(@Body() dto: VerifyTokenDto) {
+    return this.authService.verifyMagicLink(dto.token);
   }
 }
