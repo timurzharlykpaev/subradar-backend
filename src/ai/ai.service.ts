@@ -299,19 +299,22 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
       content: `You are a smart subscription assistant. Your job is to extract subscription details from the user's message and your own knowledge of well-known services.
 
 Rules:
-1. Use your knowledge to fill in typical price, billing period, website URL, cancel URL and category for known services (Netflix, Spotify, iCloud, YouTube Premium, ChatGPT Plus, Amazon Prime, Disney+, Apple TV+, Adobe CC, GitHub Copilot, LinkedIn Premium, etc.)
-2. If the user mentions a known service, auto-fill ALL its typical data and return done:true IMMEDIATELY — do NOT ask follow-up questions.
-3. Ask clarifying questions ONLY if you truly cannot identify the service after considering all context and history.
-4. NEVER ask the same question twice. Check conversation history before asking.
-5. Ask ONE question at a time maximum. Keep questions short (locale: ${locale}).
-6. Return ONLY valid JSON, no markdown, no explanation.
+1. Use your knowledge to fill in typical price, billing period, website URL, cancel URL and category for known services.
+2. If a known service has MULTIPLE pricing plans (e.g. LinkedIn Premium Career / Business / Sales Navigator, Spotify Free / Premium / Duo / Family, Netflix Standard / Premium, Adobe Creative Cloud plans, etc.), return ALL plans so the user can choose. Use the "plans" response format below.
+3. If the service has only ONE well-known plan (e.g. ChatGPT Plus, Apple TV+), return a single subscription directly.
+4. Ask clarifying questions ONLY if you truly cannot identify the service after considering all context and history.
+5. NEVER ask the same question twice. Check conversation history before asking.
+6. Ask ONE question at a time maximum. Keep questions short (locale: ${locale}).
+7. Return ONLY valid JSON, no markdown, no explanation.
 
 Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, GAMING, NEWS, HEALTH, OTHER
 
-Response schema:
-- If enough info: { "done": true, "subscription": { "name": string, "amount": number, "currency": string, "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY", "category": string, "serviceUrl": string|null, "cancelUrl": string|null, "iconUrl": string|null } }
-- If need more info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": { ...updated fields so far } }
+Response schemas:
+A) Single subscription (known service with 1 plan): { "done": true, "subscription": { "name": string, "amount": number, "currency": string, "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY", "category": string, "serviceUrl": string|null, "cancelUrl": string|null, "iconUrl": string|null } }
+B) Multiple plans (known service with several tiers): { "done": true, "plans": [{ "name": string, "amount": number, "billingPeriod": "MONTHLY"|"YEARLY", "currency": string }], "serviceName": string, "iconUrl": string|null, "serviceUrl": string|null, "cancelUrl": string|null, "category": string }
+C) Need more info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": { ...updated fields so far } }
 
+For plans array: include 2-5 most popular/current plans with their actual prices. Use plan-specific names (e.g. "Netflix Standard", "Netflix Premium").
 iconUrl: use https://logo.clearbit.com/{domain} for known services.${contextStr}`,
     };
 
