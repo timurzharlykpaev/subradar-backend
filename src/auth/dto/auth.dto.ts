@@ -33,3 +33,17 @@ export class OtpVerifyDto {
   @ApiProperty() @IsEmail() email: string;
   @ApiProperty() @IsString() code: string;
 }
+
+export class GoogleTokenDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() idToken?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() accessToken?: string;
+}
+
+export class VerifyTokenDto {
+  @ApiProperty() @IsString() token: string;
+}
+
+export class UpdateProfileDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() avatarUrl?: string;
+}

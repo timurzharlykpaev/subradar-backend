@@ -16,6 +16,7 @@ import { IsString, IsOptional } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AiService } from './ai.service';
 import { BillingService } from '../billing/billing.service';
+import { WizardDto, MatchServiceDto } from './dto/ai.dto';
 
 class LookupServiceDto {
   @IsString() query: string;
@@ -131,9 +132,9 @@ export class AiController {
   }
 
   @Post('match-service')
-  async matchService(@Request() req, @Body() body: { name: string }) {
+  async matchService(@Request() req, @Body() dto: MatchServiceDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.matchService(body.name);
+    return this.aiService.matchService(dto.name);
   }
 
   @Get('subscription-insights')
@@ -191,8 +192,8 @@ export class AiController {
    * Returns: { done: true, subscription: {...} } OR { done: false, question, field, partialContext }
    */
   @Post('wizard')
-  async wizard(@Request() req, @Body() body: { message: string; context?: Record<string, any>; locale?: string; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) {
+  async wizard(@Request() req, @Body() dto: WizardDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.wizard(body.message, body.context ?? {}, body.locale ?? 'en', body.history ?? []);
+    return this.aiService.wizard(dto.message, dto.context ?? {}, dto.locale ?? 'en', (dto.history ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>);
   }
 }
