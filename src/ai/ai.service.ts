@@ -23,11 +23,19 @@ export class AiService {
       this.activeRequests++;
       return;
     }
-    return new Promise((resolve) => {
-      this.waitQueue.push(() => {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.waitQueue.indexOf(fn);
+        if (idx > -1) this.waitQueue.splice(idx, 1);
+        reject(new Error('AI service busy, try again later'));
+      }, 30000);
+
+      const fn = () => {
+        clearTimeout(timer);
         this.activeRequests++;
         resolve();
-      });
+      };
+      this.waitQueue.push(fn);
     });
   }
 
@@ -48,7 +56,7 @@ export class AiService {
         messages,
         response_format: jsonMode ? { type: 'json_object' } : undefined,
         temperature: 0.2,
-      });
+      }, { timeout: 30000 });
       const content = response.choices[0].message.content || '{}';
       if (!jsonMode) return content;
       try {
@@ -132,7 +140,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
         ],
         response_format: { type: 'json_object' },
         temperature: 0.1,
-      });
+      }, { timeout: 30000 });
       return JSON.parse(response.choices[0].message.content || '{}');
     } finally {
       this.releaseSlot();
@@ -160,7 +168,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
         file: audioFile,
         model: 'whisper-1',
         language: locale.split('-')[0],
-      });
+      }, { timeout: 30000 });
       text = transcription.text;
     } finally {
       this.releaseSlot();
@@ -202,7 +210,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
         file: audioFile,
         model: 'whisper-1',
         language: locale.split('-')[0],
-      });
+      }, { timeout: 30000 });
       return { text: transcription.text || '' };
     } catch (err) {
       console.error('Whisper transcription error:', err);
@@ -249,7 +257,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
         file: audioFile,
         model: 'whisper-1',
         language: locale.split('-')[0],
-      });
+      }, { timeout: 30000 });
       text = transcription.text;
     } finally {
       this.releaseSlot();

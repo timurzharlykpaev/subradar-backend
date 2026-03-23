@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Between, In, Repository } from 'typeorm';
+import Redis from 'ioredis';
 import {
   Subscription,
   SubscriptionStatus,
@@ -10,12 +12,21 @@ import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
 
 @Injectable()
 export class AnalyticsService {
+  private readonly redis: Redis | null;
+
   constructor(
     @InjectRepository(Subscription)
     private readonly subRepo: Repository<Subscription>,
     @InjectRepository(PaymentCard)
     private readonly cardRepo: Repository<PaymentCard>,
-  ) {}
+    private readonly cfg: ConfigService,
+  ) {
+    try {
+      this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
+    } catch {
+      this.redis = null;
+    }
+  }
 
   private toMonthlyAmount(amount: number, period: BillingPeriod): number {
     const map: Record<BillingPeriod, number> = {
@@ -30,6 +41,12 @@ export class AnalyticsService {
   }
 
   async getSummary(userId: string, _month?: number, _year?: number) {
+    const cacheKey = `analytics:summary:${userId}:${_month || 'all'}:${_year || 'all'}`;
+    try {
+      const cached = await this.redis?.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch { /* redis unavailable, proceed without cache */ }
+
     const subs = await this.subRepo.find({ where: { userId } });
     const active = subs.filter(
       (s) =>
@@ -64,7 +81,7 @@ export class AnalyticsService {
       take: 10,
     });
 
-    return {
+    const result = {
       totalMonthly: Math.round(totalMonthly * 100) / 100,
       totalYearly: Math.round(totalYearly * 100) / 100,
       monthlyTotal: Math.round(totalMonthly * 100) / 100,
@@ -86,6 +103,12 @@ export class AnalyticsService {
         nextPaymentDate: s.nextPaymentDate,
       })),
     };
+
+    try {
+      await this.redis?.set(cacheKey, JSON.stringify(result), 'EX', 300);
+    } catch { /* redis unavailable, skip cache */ }
+
+    return result;
   }
 
   async getMonthly(userId: string, months = 12) {

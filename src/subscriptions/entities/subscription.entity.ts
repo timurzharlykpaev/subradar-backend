@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { PaymentCard } from '../../payment-cards/entities/payment-card.entity';
@@ -50,6 +51,7 @@ export class Subscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Index()
   @Column()
   userId: string;
 
@@ -82,6 +84,7 @@ export class Subscription {
   @Column({ nullable: true, type: 'date' })
   startDate: Date;
 
+  @Index()
   @Column({ nullable: true, type: 'date' })
   nextPaymentDate: Date;
 
@@ -91,6 +94,7 @@ export class Subscription {
   @Column({ type: 'jsonb', nullable: true })
   availablePlans: object[];
 
+  @Index()
   @Column({
     type: 'enum',
     enum: SubscriptionStatus,

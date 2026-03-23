@@ -10,8 +10,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // Increase body size limit for audio/image uploads (base64)
-  app.use(bodyParser.json({ limit: '50mb' }));
-  app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+  app.use(bodyParser.json({ limit: '10mb' }));
+  app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
 
   // CORS — must be before helmet
   const allowedOrigins = (process.env.CORS_ORIGINS || 'https://app.subradar.ai')
