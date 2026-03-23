@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import OpenAI from 'openai';
+import OpenAI, { toFile } from 'openai';
 import Redis from 'ioredis';
 
 @Injectable()
@@ -154,7 +154,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
         else if (header.startsWith('494433') || header.startsWith('fffb') || header.startsWith('fff3')) { mimeType = 'audio/mpeg'; fileName = 'audio.mp3'; }
         else if (header.startsWith('4f676753')) { mimeType = 'audio/ogg'; fileName = 'audio.ogg'; }
       }
-      const audioFile = new File([audioBuffer], fileName, { type: mimeType });
+      const audioFile = await toFile(audioBuffer, fileName, { type: mimeType });
 
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioFile,
@@ -196,7 +196,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
         else if (header.startsWith('494433') || header.startsWith('fffb') || header.startsWith('fff3')) { mimeType = 'audio/mpeg'; fileName = 'audio.mp3'; }
         else if (header.startsWith('4f676753')) { mimeType = 'audio/ogg'; fileName = 'audio.ogg'; }
       }
-      const audioFile = new File([audioBuffer], fileName, { type: mimeType });
+      const audioFile = await toFile(audioBuffer, fileName, { type: mimeType });
 
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioFile,
@@ -244,7 +244,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
         if (h.startsWith('1a45')) { mimeType2 = 'audio/webm'; fileName2 = 'audio.webm'; }
         else if (h.startsWith('4f676753')) { mimeType2 = 'audio/ogg'; fileName2 = 'audio.ogg'; }
       }
-      const audioFile = new File([audioBuffer], fileName2, { type: mimeType2 });
+      const audioFile = await toFile(audioBuffer, fileName2, { type: mimeType2 });
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioFile,
         model: 'whisper-1',
