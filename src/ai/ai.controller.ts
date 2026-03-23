@@ -117,7 +117,10 @@ export class AiController {
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
     }
-    return this.aiService.voiceToSubscription(audioBase64 || '', dto.locale);
+    if (!audioBase64) {
+      return { text: '' };
+    }
+    return this.aiService.transcribeAudio(audioBase64, dto.locale);
   }
 
   @Post('parse-text')

@@ -50,7 +50,16 @@ export class AiService {
         temperature: 0.2,
       });
       const content = response.choices[0].message.content || '{}';
-      return jsonMode ? JSON.parse(content) : content;
+      if (!jsonMode) return content;
+      try {
+        return JSON.parse(content);
+      } catch {
+        const match = content.match(/\{[\s\S]*\}/);
+        if (match) {
+          try { return JSON.parse(match[0]); } catch { /* fall through */ }
+        }
+        return {};
+      }
     } finally {
       this.releaseSlot();
     }
@@ -64,7 +73,19 @@ export class AiService {
     const result = await this.chat([
       {
         role: 'system',
-        content: `You are a subscription service lookup assistant. Return JSON with fields: name, serviceUrl (official website URL), cancelUrl, category (one of STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER), plans (array of {name, price, currency, period}). Locale: ${locale}, Country: ${country}.`,
+        content: `You are a subscription service lookup assistant with deep knowledge of SaaS pricing.
+
+Return JSON with fields:
+- name: official service name
+- serviceUrl: official website URL
+- cancelUrl: direct cancellation URL (not generic help page)
+- category: one of STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER
+- plans: array of { name, price (number), currency (3-letter ISO), period (MONTHLY/YEARLY) }
+  Include ALL known plans (free tier excluded). Use the most current pricing you know.
+- priceNote: string — if you are confident the price is current (within last 6 months), say "Current as of [date]". If uncertain, say "Price may have changed — verify at [serviceUrl]".
+
+Locale: ${locale}, Country: ${country}.
+IMPORTANT: Always return at least one plan with a non-zero price for paid services.`,
       },
       {
         role: 'user',
@@ -154,6 +175,41 @@ export class AiService {
       },
       { role: 'user', content: `Voice transcript: "${text}"` },
     ]);
+  }
+
+  /**
+   * Transcribe audio only — return { text } without parsing subscription.
+   * Used by mobile AIWizard which sends transcript to wizard endpoint separately.
+   */
+  async transcribeAudio(audioBase64: string, locale = 'en'): Promise<{ text: string }> {
+    if (!audioBase64) return { text: '' };
+    await this.acquireSlot();
+    try {
+      const audioBuffer = Buffer.from(audioBase64, 'base64');
+      if (audioBuffer.length < 100) return { text: '' };
+
+      let mimeType = 'audio/mp4';
+      let fileName = 'audio.m4a';
+      if (audioBuffer.length > 4) {
+        const header = audioBuffer.slice(0, 4).toString('hex');
+        if (header.startsWith('1a45')) { mimeType = 'audio/webm'; fileName = 'audio.webm'; }
+        else if (header.startsWith('494433') || header.startsWith('fffb') || header.startsWith('fff3')) { mimeType = 'audio/mpeg'; fileName = 'audio.mp3'; }
+        else if (header.startsWith('4f676753')) { mimeType = 'audio/ogg'; fileName = 'audio.ogg'; }
+      }
+      const audioFile = new File([audioBuffer], fileName, { type: mimeType });
+
+      const transcription = await this.openai.audio.transcriptions.create({
+        file: audioFile,
+        model: 'whisper-1',
+        language: locale.split('-')[0],
+      });
+      return { text: transcription.text || '' };
+    } catch (err) {
+      console.error('Whisper transcription error:', err);
+      return { text: '' };
+    } finally {
+      this.releaseSlot();
+    }
   }
 
   /**
