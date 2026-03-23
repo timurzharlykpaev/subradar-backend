@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
   UseGuards,
@@ -127,6 +128,23 @@ export class AiController {
   async parseText(@Request() req, @Body() dto: ParseTextDto) {
     await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.text);
+  }
+
+  @Post('match-service')
+  async matchService(@Request() req, @Body() body: { name: string }) {
+    await this.billingService.consumeAiRequest(req.user.id);
+    return this.aiService.matchService(body.name);
+  }
+
+  @Get('subscription-insights')
+  async subscriptionInsights(@Request() req) {
+    return this.aiService.getSubscriptionInsights(req.user.id);
+  }
+
+  @Post('run-audit')
+  async runAudit(@Request() req) {
+    await this.billingService.consumeAiRequest(req.user.id);
+    return { success: true, reportId: null };
   }
 
   @Post('suggest-cancel')

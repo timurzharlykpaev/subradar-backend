@@ -306,6 +306,25 @@ iconUrl format: https://logo.clearbit.com/{domain} for known services.${contextS
     try { return JSON.parse(String(result)); } catch { return { done: false, question: 'Что за сервис?', field: 'name', partialContext: {} }; }
   }
 
+  async matchService(name: string) {
+    const result = await this.chat([
+      {
+        role: 'system',
+        content: 'You are a subscription service matcher. Given a fuzzy name, return JSON with: matches (array of { id (uuid), name (official name), confidence (0-1), iconUrl (clearbit logo URL), website (official URL) }). Return top 3 matches. If no match, return empty array.',
+      },
+      { role: 'user', content: `Match subscription service: "${name}"` },
+    ]);
+    return { matches: Array.isArray(result.matches) ? result.matches : [] };
+  }
+
+  async getSubscriptionInsights(_userId: string) {
+    return {
+      estimatedMonthlySavings: 0,
+      duplicates: [],
+      insights: [],
+    };
+  }
+
   async suggestCancelUrl(serviceName: string) {
     return this.chat([
       {

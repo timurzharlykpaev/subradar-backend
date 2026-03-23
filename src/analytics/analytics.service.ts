@@ -205,6 +205,60 @@ export class AnalyticsService {
     });
   }
 
+  async getForecast(userId: string) {
+    const subscriptions = await this.subRepo.find({
+      where: { userId, status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]) },
+    });
+
+    const monthlyTotal = subscriptions.reduce(
+      (sum, s) => sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
+      0,
+    );
+
+    return {
+      forecast30d: Math.round(monthlyTotal * 100) / 100,
+      forecast6mo: Math.round(monthlyTotal * 6 * 100) / 100,
+      forecast12mo: Math.round(monthlyTotal * 12 * 100) / 100,
+      currency: 'USD',
+    };
+  }
+
+  async getSavings(userId: string) {
+    const subscriptions = await this.subRepo.find({
+      where: { userId, status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]) },
+    });
+
+    const byCategory: Record<string, any[]> = {};
+    for (const sub of subscriptions) {
+      const cat = sub.category || 'OTHER';
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(sub);
+    }
+
+    const duplicates: { subscriptionIds: string[]; name: string; potentialSavings: number }[] = [];
+    for (const [, subs] of Object.entries(byCategory)) {
+      if (subs.length > 1) {
+        const sorted = [...subs].sort((a, b) => a.amount - b.amount);
+        const savings = sorted.slice(1).reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+        if (savings > 0) {
+          duplicates.push({
+            subscriptionIds: sorted.slice(1).map((s) => s.id),
+            name: sorted.map((s) => s.name).join(', '),
+            potentialSavings: Math.round(savings * 100) / 100,
+          });
+        }
+      }
+    }
+
+    const estimatedMonthlySavings = duplicates.reduce((sum, d) => sum + d.potentialSavings, 0);
+
+    return {
+      estimatedMonthlySavings: Math.round(estimatedMonthlySavings * 100) / 100,
+      duplicates,
+      insights: [],
+    };
+  }
+
   async getByCard(userId: string) {
     const cards = await this.cardRepo.find({ where: { userId } });
     const subs = await this.subRepo.find({ where: { userId } });

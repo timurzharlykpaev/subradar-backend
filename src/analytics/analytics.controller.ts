@@ -90,6 +90,16 @@ export class AnalyticsController {
     return this.service.getTrials(req.user.id);
   }
 
+  @Get('forecast')
+  async forecast(@Request() req) {
+    return this.service.getForecast(req.user.id);
+  }
+
+  @Get('savings')
+  async savings(@Request() req) {
+    return this.service.getSavings(req.user.id);
+  }
+
   /** Mobile uses POST /analytics/report — stub that delegates to reports service */
   @Post('report')
   generateReport(@Body() body: { startDate?: string; endDate?: string; type?: string }) {
