@@ -306,6 +306,20 @@ export class BillingService {
     });
   }
 
+  async syncRevenueCat(userId: string, productId: string): Promise<void> {
+    const plan = this.RC_PRODUCT_TO_PLAN[productId];
+    if (!plan) {
+      this.logger.warn(`syncRevenueCat: unknown productId ${productId}`);
+      throw new BadRequestException(`Unknown product: ${productId}`);
+    }
+
+    const user = await this.usersService.findById(userId);
+    user.plan = plan;
+    user.billingSource = 'revenuecat';
+    await this.usersService.save(user);
+    this.logger.log(`syncRevenueCat: user ${userId} → plan ${plan} (product: ${productId})`);
+  }
+
   async getBillingInfo(userId: string, subscriptionCount: number) {
     const user = await this.usersService.findById(userId);
     const planConfig = PLANS[user.plan] ?? PLANS.free;

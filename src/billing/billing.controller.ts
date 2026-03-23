@@ -11,7 +11,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsString, IsOptional, IsEmail } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
@@ -23,6 +23,12 @@ class CreateCheckoutDto {
   @IsOptional() @IsString() variantId?: string;
   @IsOptional() @IsString() planId?: string;
   @IsOptional() @IsString() billing?: 'monthly' | 'yearly';
+}
+
+class SyncRevenueCatDto {
+  @IsString()
+  @IsNotEmpty()
+  productId: string;
 }
 
 class InviteDto {
@@ -157,6 +163,14 @@ export class BillingController {
   async removeInvite(@Request() req) {
     await this.billingService.removeProInvite(req.user.id);
     return { success: true, message: 'Invite removed' };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('sync-revenuecat')
+  async syncRevenueCat(@Request() req, @Body() dto: SyncRevenueCatDto) {
+    await this.billingService.syncRevenueCat(req.user.id, dto.productId);
+    return { success: true };
   }
 
   @ApiBearerAuth()
