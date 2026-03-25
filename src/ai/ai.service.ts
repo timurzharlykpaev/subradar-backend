@@ -105,7 +105,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
     if (result && result.serviceUrl) {
       try {
         const hostname = new URL(result.serviceUrl).hostname.replace(/^www\./, '');
-        result.iconUrl = `https://logo.clearbit.com/${hostname}`;
+        result.iconUrl = `https://icon.horse/icon/${hostname}`;
       } catch {
         // fallback to Google favicons
         result.iconUrl = `https://www.google.com/s2/favicons?domain=${result.serviceUrl}&sz=128`;
@@ -434,20 +434,20 @@ CRITICAL RULES (follow strictly):
 3. If user names a SERVICE with MULTIPLE tiers but NOT a specific plan → return "plans" array (schema B). NEVER ask "which plan?", show options instead.
 4. For single-plan services → return single "subscription" (schema A).
 5. ONLY ask a question if service is completely unknown AND not in database.
-6. Always include iconUrl: https://logo.clearbit.com/{domain}
+6. Always include iconUrl: https://icon.horse/icon/{domain}
 7. Return ONLY valid JSON. No markdown. No explanation.
 
 EXAMPLE — user says "LinkedIn Premium Career" (specific plan → schema A):
-{"done":true,"subscription":{"name":"LinkedIn Premium Career","amount":39.99,"currency":"USD","billingPeriod":"MONTHLY","category":"PRODUCTIVITY","serviceUrl":"https://linkedin.com/premium","cancelUrl":"https://linkedin.com/premium/cancel","iconUrl":"https://logo.clearbit.com/linkedin.com"}}
+{"done":true,"subscription":{"name":"LinkedIn Premium Career","amount":39.99,"currency":"USD","billingPeriod":"MONTHLY","category":"PRODUCTIVITY","serviceUrl":"https://linkedin.com/premium","cancelUrl":"https://linkedin.com/premium/cancel","iconUrl":"https://icon.horse/icon/linkedin.com"}}
 
 EXAMPLE — user says "LinkedIn" or "LinkedIn Premium" (ambiguous → schema B):
-{"done":true,"plans":[{"name":"LinkedIn Premium Career","amount":39.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"LinkedIn Premium Business","amount":59.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"LinkedIn Sales Navigator","amount":99.99,"billingPeriod":"MONTHLY","currency":"USD"}],"serviceName":"LinkedIn Premium","iconUrl":"https://logo.clearbit.com/linkedin.com","serviceUrl":"https://linkedin.com/premium","cancelUrl":"https://linkedin.com/premium/cancel","category":"PRODUCTIVITY"}
+{"done":true,"plans":[{"name":"LinkedIn Premium Career","amount":39.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"LinkedIn Premium Business","amount":59.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"LinkedIn Sales Navigator","amount":99.99,"billingPeriod":"MONTHLY","currency":"USD"}],"serviceName":"LinkedIn Premium","iconUrl":"https://icon.horse/icon/linkedin.com","serviceUrl":"https://linkedin.com/premium","cancelUrl":"https://linkedin.com/premium/cancel","category":"PRODUCTIVITY"}
 
 EXAMPLE — user says "Netflix" (ambiguous → schema B):
-{"done":true,"plans":[{"name":"Netflix Standard with Ads","amount":7.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"Netflix Standard","amount":15.49,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"Netflix Premium","amount":22.99,"billingPeriod":"MONTHLY","currency":"USD"}],"serviceName":"Netflix","iconUrl":"https://logo.clearbit.com/netflix.com","serviceUrl":"https://netflix.com","cancelUrl":"https://netflix.com/cancelplan","category":"STREAMING"}
+{"done":true,"plans":[{"name":"Netflix Standard with Ads","amount":7.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"Netflix Standard","amount":15.49,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"Netflix Premium","amount":22.99,"billingPeriod":"MONTHLY","currency":"USD"}],"serviceName":"Netflix","iconUrl":"https://icon.horse/icon/netflix.com","serviceUrl":"https://netflix.com","cancelUrl":"https://netflix.com/cancelplan","category":"STREAMING"}
 
 EXAMPLE — user says "ChatGPT Plus" (specific → schema A):
-{"done":true,"subscription":{"name":"ChatGPT Plus","amount":20.00,"currency":"USD","billingPeriod":"MONTHLY","category":"AI_SERVICES","serviceUrl":"https://chat.openai.com","cancelUrl":"https://help.openai.com","iconUrl":"https://logo.clearbit.com/openai.com"}}
+{"done":true,"subscription":{"name":"ChatGPT Plus","amount":20.00,"currency":"USD","billingPeriod":"MONTHLY","category":"AI_SERVICES","serviceUrl":"https://chat.openai.com","cancelUrl":"https://help.openai.com","iconUrl":"https://icon.horse/icon/openai.com"}}
 
 Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, GAMING, NEWS, HEALTH, EDUCATION, FINANCE, SECURITY, DEVELOPER, SPORT, BUSINESS, OTHER
 
