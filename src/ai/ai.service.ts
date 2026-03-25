@@ -305,25 +305,85 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
       content: `You are a precise subscription tracking assistant. Extract subscription details accurately.
 
 PRICING DATABASE (use EXACT prices, do not invent):
+
+🎬 STREAMING & MEDIA:
 - YouTube Premium: $13.99/mo (individual), $22.99/mo (family) | youtube.com | STREAMING
-- Netflix: Standard $15.49/mo, Premium $22.99/mo, Standard+Ads $7.99/mo | netflix.com | STREAMING  
-- Spotify: Premium $11.99/mo, Duo $16.99/mo, Family $19.99/mo | spotify.com | MUSIC
-- Apple Music: Individual $10.99/mo, Family $16.99/mo | music.apple.com | MUSIC
-- Apple iCloud+: 50GB $0.99/mo, 200GB $2.99/mo, 2TB $9.99/mo | icloud.com | INFRASTRUCTURE
-- ChatGPT Plus: $20/mo | chat.openai.com | AI_SERVICES
-- ChatGPT Pro: $200/mo | chat.openai.com | AI_SERVICES
-- LinkedIn Premium Career: $39.99/mo, Business: $59.99/mo, Sales Navigator: $99.99/mo | linkedin.com | PRODUCTIVITY
-- Adobe Creative Cloud: All Apps $59.99/mo, Photography $19.99/mo, Single App $35.99/mo | adobe.com | PRODUCTIVITY
-- Microsoft 365: Personal $6.99/mo, Family $9.99/mo | microsoft.com | PRODUCTIVITY
-- Amazon Prime: $14.99/mo or $139/yr | amazon.com | STREAMING
+- Netflix: Standard with Ads $7.99/mo, Standard $15.49/mo, Premium $22.99/mo | netflix.com | STREAMING
 - Disney+: Basic $7.99/mo, Premium $13.99/mo | disneyplus.com | STREAMING
 - Hulu: With Ads $7.99/mo, No Ads $17.99/mo | hulu.com | STREAMING
 - Apple TV+: $9.99/mo | tv.apple.com | STREAMING
-- GitHub Copilot: Individual $10/mo, Business $19/mo | github.com | INFRASTRUCTURE
-- Notion: Plus $10/mo, Business $15/mo | notion.so | PRODUCTIVITY
-- Figma: Professional $12/mo, Organization $45/mo | figma.com | PRODUCTIVITY
-- DigitalOcean: variable | digitalocean.com | INFRASTRUCTURE
-- Dropbox: Plus $11.99/mo, Essentials $22/mo | dropbox.com | INFRASTRUCTURE
+- Amazon Prime Video: $8.99/mo or included in Prime | amazon.com | STREAMING
+- Amazon Prime: $14.99/mo or $139/yr (includes Video+Music+Shipping) | amazon.com | STREAMING
+- Twitch Turbo: $8.99/mo | twitch.tv | STREAMING
+- Crunchyroll: Fan $7.99/mo, Mega Fan $9.99/mo, Ultimate $14.99/mo | crunchyroll.com | STREAMING
+
+🎵 MUSIC:
+- Spotify: Premium $11.99/mo, Duo $16.99/mo, Family $19.99/mo | spotify.com | MUSIC
+- Apple Music: Individual $10.99/mo, Student $5.99/mo, Family $16.99/mo | music.apple.com | MUSIC
+- YouTube Music: Individual $10.99/mo, Family $16.99/mo | music.youtube.com | MUSIC
+- Tidal: Individual $10.99/mo, HiFi Plus $19.99/mo, Family $14.99/mo | tidal.com | MUSIC
+- Deezer: Individual $10.99/mo, Family $17.99/mo | deezer.com | MUSIC
+
+🤖 AI SERVICES:
+- ChatGPT Plus: $20/mo | chat.openai.com | AI_SERVICES
+- ChatGPT Pro: $200/mo | chat.openai.com | AI_SERVICES
+- Claude Pro: $20/mo | claude.ai | AI_SERVICES
+- Claude Max: $100/mo | claude.ai | AI_SERVICES
+- Midjourney: Basic $10/mo, Standard $30/mo, Pro $60/mo | midjourney.com | AI_SERVICES
+- Gemini Advanced: $19.99/mo | gemini.google.com | AI_SERVICES
+- Perplexity Pro: $20/mo | perplexity.ai | AI_SERVICES
+- Cursor Pro: $20/mo | cursor.com | AI_SERVICES
+- GitHub Copilot: Individual $10/mo, Business $19/mo, Enterprise $39/mo | github.com | AI_SERVICES
+
+💼 PRODUCTIVITY:
+- LinkedIn Premium Career: $39.99/mo | Business: $59.99/mo | Sales Navigator Core: $99.99/mo | linkedin.com | PRODUCTIVITY
+- Notion: Plus $10/mo, Business $15/mo, AI add-on $8/mo | notion.so | PRODUCTIVITY
+- Figma: Starter free, Professional $12/mo, Organization $45/mo | figma.com | PRODUCTIVITY
+- Adobe Creative Cloud: All Apps $59.99/mo, Photography $19.99/mo, Acrobat $22.99/mo | adobe.com | PRODUCTIVITY
+- Microsoft 365: Personal $6.99/mo, Family $9.99/mo, Business Basic $6/mo | microsoft.com | PRODUCTIVITY
+- Slack: Pro $7.25/mo, Business+ $12.50/mo | slack.com | PRODUCTIVITY
+- Zoom: Pro $13.32/mo, Business $18.32/mo | zoom.us | PRODUCTIVITY
+- Loom: Business $12.50/mo | loom.com | PRODUCTIVITY
+- Canva: Pro $14.99/mo, Teams $29.99/mo | canva.com | PRODUCTIVITY
+- Grammarly: Premium $12/mo, Business $15/mo | grammarly.com | PRODUCTIVITY
+
+☁️ INFRASTRUCTURE (для разработчиков):
+- DigitalOcean Droplet: Basic $4/mo (512MB), Standard $6/mo (1GB), $12/mo (2GB), $24/mo (4GB) | digitalocean.com | INFRASTRUCTURE
+- DigitalOcean App Platform: Basic $5/mo, Professional $12/mo | digitalocean.com | INFRASTRUCTURE
+- DigitalOcean Managed DB: PostgreSQL from $15/mo | digitalocean.com | INFRASTRUCTURE
+- AWS EC2: t3.micro $0.0104/hr (~$7.5/mo), t3.small $0.0208/hr (~$15/mo) | aws.amazon.com | INFRASTRUCTURE
+- AWS RDS: db.t3.micro $14.46/mo | aws.amazon.com | INFRASTRUCTURE
+- AWS S3: $0.023/GB/mo | aws.amazon.com | INFRASTRUCTURE
+- Google Cloud (GCP): e2-micro free tier, e2-small $13.85/mo | cloud.google.com | INFRASTRUCTURE
+- Vercel: Pro $20/mo, Team $20/mo per member | vercel.com | INFRASTRUCTURE
+- Netlify: Pro $19/mo | netlify.com | INFRASTRUCTURE
+- Heroku: Eco $5/mo, Basic $7/mo, Standard $25/mo | heroku.com | INFRASTRUCTURE
+- Railway: Hobby $5/mo, Pro $20/mo | railway.app | INFRASTRUCTURE
+- Render: Individual $7/mo, Team $20/mo | render.com | INFRASTRUCTURE
+- Cloudflare: Pro $20/mo, Business $200/mo | cloudflare.com | INFRASTRUCTURE
+- Cloudflare Workers: Free 100k/day, Paid $5/mo | cloudflare.com | INFRASTRUCTURE
+- GitHub: Free, Team $4/mo, Enterprise $21/mo | github.com | INFRASTRUCTURE
+- GitLab: Premium $29/mo, Ultimate $99/mo | gitlab.com | INFRASTRUCTURE
+- Sentry: Team $26/mo, Business $80/mo | sentry.io | INFRASTRUCTURE
+- Datadog: Pro $15/host/mo, Enterprise $23/host/mo | datadoghq.com | INFRASTRUCTURE
+- New Relic: Full platform $99/mo | newrelic.com | INFRASTRUCTURE
+- MongoDB Atlas: Serverless from $0, Dedicated M10 $57/mo | mongodb.com | INFRASTRUCTURE
+- PlanetScale: Hobby free, Scaler $39/mo | planetscale.com | INFRASTRUCTURE
+- Supabase: Pro $25/mo | supabase.com | INFRASTRUCTURE
+- Firebase Blaze: pay-as-you-go, typically $25-100/mo | firebase.google.com | INFRASTRUCTURE
+- Twilio: pay-as-you-go, ~$1/mo base | twilio.com | INFRASTRUCTURE
+- SendGrid: Essentials $19.95/mo, Pro $89.95/mo | sendgrid.com | INFRASTRUCTURE
+- Resend: Pro $20/mo | resend.com | INFRASTRUCTURE
+- Postmark: Developer $15/mo | postmarkapp.com | INFRASTRUCTURE
+- Stripe: 2.9%+30¢ per transaction (no subscription fee) | stripe.com | INFRASTRUCTURE
+- 1Password: Individual $2.99/mo, Family $4.99/mo, Teams $19.95/mo | 1password.com | INFRASTRUCTURE
+- LastPass: Premium $3/mo, Families $4/mo | lastpass.com | INFRASTRUCTURE
+
+💾 STORAGE & CLOUD:
+- Apple iCloud+: 50GB $0.99/mo, 200GB $2.99/mo, 2TB $9.99/mo | icloud.com | INFRASTRUCTURE
+- Google One: 100GB $1.99/mo, 200GB $2.99/mo, 2TB $9.99/mo | one.google.com | INFRASTRUCTURE
+- Dropbox: Plus $11.99/mo, Essentials $22/mo, Business $18/mo | dropbox.com | INFRASTRUCTURE
+- Box: Personal Pro $10/mo, Business $15/mo | box.com | INFRASTRUCTURE
 
 CRITICAL RULES (follow strictly):
 1. Use EXACT prices from the database above. NEVER guess or ask about prices for known services.
