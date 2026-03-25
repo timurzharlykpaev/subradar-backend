@@ -351,7 +351,9 @@ Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, G
 Response schemas:
 A) Single plan: { "done": true, "subscription": { "name": string, "amount": number, "currency": "USD", "billingPeriod": "MONTHLY"|"YEARLY", "category": string, "serviceUrl": string, "cancelUrl": string|null, "iconUrl": string } }
 B) Multiple plans: { "done": true, "plans": [{ "name": string, "amount": number, "billingPeriod": "MONTHLY"|"YEARLY", "currency": "USD" }], "serviceName": string, "iconUrl": string, "serviceUrl": string, "cancelUrl": string|null, "category": string }
-C) Need info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": {} }${currencyNote}${contextStr}`,
+C) Need info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": {} }
+
+LANGUAGE: Always write the "question" field in the user's language. User locale is "${locale}". If locale starts with "ru" → write question in Russian. If "de" → German. If "es" → Spanish. Otherwise English.${currencyNote}${contextStr}`,
     };
 
     // Build messages: system + history + current user message
