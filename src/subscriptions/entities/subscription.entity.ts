@@ -22,6 +22,7 @@ export enum SubscriptionCategory {
   HEALTH = 'HEALTH',
   EDUCATION = 'EDUCATION',
   FINANCE = 'FINANCE',
+  DESIGN = 'DESIGN',
   SECURITY = 'SECURITY',
   DEVELOPER = 'DEVELOPER',
   SPORT = 'SPORT',
