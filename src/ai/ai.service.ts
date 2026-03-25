@@ -363,10 +363,50 @@ LANGUAGE: Always write the "question" field in the user's language. User locale 
       { role: 'user', content: message.slice(0, 1000) },
     ];
 
+    // Try chat with built-in knowledge first
     const result = await this.chat(messages);
 
-    if (typeof result === 'object' && result !== null) return result;
-    try { return JSON.parse(String(result)); } catch { return { done: false, question: 'What service is this?', field: 'name', partialContext: {} }; }
+    if (typeof result === 'object' && result !== null) {
+      // If GPT returned a question (doesn't know the service), try web search to find pricing
+      if (result.done === false && result.question) {
+        const webResult = await this.wizardWithWebSearch(message, systemMsg.content, locale);
+        if (webResult) return webResult;
+      }
+      return result;
+    }
+    try { return JSON.parse(String(result)); } catch { return { done: false, question: locale.startsWith('ru') ? 'Какой это сервис?' : 'What service is this?', field: 'name', partialContext: {} }; }
+  }
+
+  private async wizardWithWebSearch(
+    userMessage: string,
+    systemPrompt: string,
+    locale: string,
+  ): Promise<any | null> {
+    try {
+      await this.acquireSlot();
+      const response = await (this.openai as any).responses.create({
+        model: 'gpt-4o-mini',
+        tools: [{ type: 'web_search_preview' }],
+        input: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Search the web for current pricing of: "${userMessage}". Find the official pricing page and return subscription plans in the required JSON format.` },
+        ],
+        temperature: 0.2,
+      });
+
+      const content = response.output_text || response.output?.[response.output?.length - 1]?.content?.[0]?.text || '';
+      if (!content) return null;
+
+      const match = content.match(/\{[\s\S]*\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (parsed.done !== undefined) return parsed;
+      }
+      return null;
+    } catch (e) {
+      console.warn(`Wizard web search failed: ${e}`);
+      return null;
+    }
   }
 
   async matchService(name: string) {
