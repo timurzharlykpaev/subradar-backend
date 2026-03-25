@@ -376,14 +376,57 @@ PRICING DATABASE (use EXACT prices, do not invent):
 - Resend: Pro $20/mo | resend.com | INFRASTRUCTURE
 - Postmark: Developer $15/mo | postmarkapp.com | INFRASTRUCTURE
 - Stripe: 2.9%+30¢ per transaction (no subscription fee) | stripe.com | INFRASTRUCTURE
-- 1Password: Individual $2.99/mo, Family $4.99/mo, Teams $19.95/mo | 1password.com | INFRASTRUCTURE
-- LastPass: Premium $3/mo, Families $4/mo | lastpass.com | INFRASTRUCTURE
-
 💾 STORAGE & CLOUD:
 - Apple iCloud+: 50GB $0.99/mo, 200GB $2.99/mo, 2TB $9.99/mo | icloud.com | INFRASTRUCTURE
 - Google One: 100GB $1.99/mo, 200GB $2.99/mo, 2TB $9.99/mo | one.google.com | INFRASTRUCTURE
 - Dropbox: Plus $11.99/mo, Essentials $22/mo, Business $18/mo | dropbox.com | INFRASTRUCTURE
 - Box: Personal Pro $10/mo, Business $15/mo | box.com | INFRASTRUCTURE
+
+📚 EDUCATION:
+- Coursera: Plus $59/mo, Coursera for Teams $399/yr per seat | coursera.org | EDUCATION
+- Udemy Business: $360/yr per seat | udemy.com | EDUCATION
+- Duolingo Plus: $6.99/mo | duolingo.com | EDUCATION
+- MasterClass: Individual $10/mo, Duo $15/mo | masterclass.com | EDUCATION
+- LinkedIn Learning: $29.99/mo | linkedin.com/learning | EDUCATION
+- Skillshare: Individual $14/mo | skillshare.com | EDUCATION
+
+💰 FINANCE:
+- YNAB: $14.99/mo or $99/yr | ynab.com | FINANCE
+- QuickBooks Simple Start: $30/mo, Essentials: $60/mo | quickbooks.com | FINANCE
+- Xero: Starter $13/mo, Standard $37/mo | xero.com | FINANCE
+- TradingView: Essential $12.95/mo, Plus $24.95/mo, Premium $49.95/mo | tradingview.com | FINANCE
+- Expensify: Collect $5/mo/user | expensify.com | FINANCE
+
+🔒 SECURITY:
+- 1Password: Individual $2.99/mo, Family $4.99/mo, Teams $19.95/mo | 1password.com | SECURITY
+- NordVPN: Standard $3.99/mo (yearly), Plus $5.49/mo | nordvpn.com | SECURITY
+- ExpressVPN: $8.32/mo (yearly plan) | expressvpn.com | SECURITY
+- Dashlane: Premium $4.99/mo | dashlane.com | SECURITY
+- Bitwarden: Premium $0.83/mo, Families $3.33/mo | bitwarden.com | SECURITY
+- LastPass: Premium $3/mo, Families $4/mo | lastpass.com | SECURITY
+
+🏃 SPORT:
+- Strava: Summit $11.99/mo or $59.99/yr | strava.com | SPORT
+- Peloton App: $12.99/mo | onepeloton.com | SPORT
+- MyFitnessPal Premium: $9.99/mo | myfitnesspal.com | SPORT
+- Headspace: $12.99/mo, Family $19.99/mo | headspace.com | SPORT
+- Calm: $14.99/mo or $69.99/yr | calm.com | SPORT
+
+💼 BUSINESS:
+- Jira: Standard $7.53/mo per user, Premium $13.53/mo | atlassian.com | BUSINESS
+- Asana: Starter $10.99/mo, Advanced $24.99/mo | asana.com | BUSINESS
+- Monday.com: Basic $9/mo, Standard $12/mo | monday.com | BUSINESS
+- Notion (business): $15/mo per member | notion.so | BUSINESS
+- HubSpot Starter: $18/mo, Professional $800/mo | hubspot.com | BUSINESS
+- Salesforce: Essentials $25/mo per user | salesforce.com | BUSINESS
+- Intercom: Essential $39/mo | intercom.com | BUSINESS
+
+👨‍💻 DEVELOPER:
+- JetBrains All Products: $24.90/mo | jetbrains.com | DEVELOPER
+- Linear: Plus $8/mo per user | linear.app | DEVELOPER
+- Postman: Basic $14/mo, Professional $29/mo | postman.com | DEVELOPER
+- Retool: Free, Team $10/mo per user | retool.com | DEVELOPER
+- Segment: Developer free, Team $120/mo | segment.com | DEVELOPER
 
 CRITICAL RULES (follow strictly):
 1. Use EXACT prices from the database above. NEVER guess or ask about prices for known services.
@@ -406,7 +449,7 @@ EXAMPLE — user says "Netflix" (ambiguous → schema B):
 EXAMPLE — user says "ChatGPT Plus" (specific → schema A):
 {"done":true,"subscription":{"name":"ChatGPT Plus","amount":20.00,"currency":"USD","billingPeriod":"MONTHLY","category":"AI_SERVICES","serviceUrl":"https://chat.openai.com","cancelUrl":"https://help.openai.com","iconUrl":"https://logo.clearbit.com/openai.com"}}
 
-Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, GAMING, NEWS, HEALTH, OTHER
+Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, GAMING, NEWS, HEALTH, EDUCATION, FINANCE, SECURITY, DEVELOPER, SPORT, BUSINESS, OTHER
 
 Response schemas:
 A) Single plan: { "done": true, "subscription": { "name": string, "amount": number, "currency": "USD", "billingPeriod": "MONTHLY"|"YEARLY", "category": string, "serviceUrl": string, "cancelUrl": string|null, "iconUrl": string } }
