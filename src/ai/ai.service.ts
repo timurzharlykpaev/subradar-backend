@@ -325,14 +325,20 @@ PRICING DATABASE (use EXACT prices, do not invent):
 - DigitalOcean: variable | digitalocean.com | INFRASTRUCTURE
 - Dropbox: Plus $11.99/mo, Essentials $22/mo | dropbox.com | INFRASTRUCTURE
 
-Rules:
-1. Use EXACT prices from the database above. NEVER guess prices.
-2. For services with multiple tiers → return "plans" array (all tiers, 2-5 options).
+CRITICAL RULES (follow strictly):
+1. Use EXACT prices from the database above. NEVER guess or ask about prices for known services.
+2. For services with MULTIPLE tiers (LinkedIn, Netflix, Spotify, Adobe, Apple iCloud, Microsoft 365, ChatGPT) → ALWAYS return "plans" array immediately. NEVER ask "which plan?".
 3. For single-plan services → return single "subscription".
-4. If service is unknown → ask ONE clarifying question about price/tier (locale: ${locale}).
-5. NEVER repeat a question already asked in history.
+4. ONLY ask a question if the service is completely unknown AND not in the database above.
+5. NEVER ask about price or plan for services listed in the database — show plans instead.
 6. Always include iconUrl: https://logo.clearbit.com/{domain}
-7. Return ONLY valid JSON. No markdown.
+7. Return ONLY valid JSON. No markdown. No explanation.
+
+EXAMPLE — when user says "LinkedIn" or "LinkedIn Premium":
+{"done":true,"plans":[{"name":"LinkedIn Premium Career","amount":39.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"LinkedIn Premium Business","amount":59.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"LinkedIn Sales Navigator","amount":99.99,"billingPeriod":"MONTHLY","currency":"USD"}],"serviceName":"LinkedIn Premium","iconUrl":"https://logo.clearbit.com/linkedin.com","serviceUrl":"https://linkedin.com/premium","cancelUrl":"https://linkedin.com/premium/cancel","category":"PRODUCTIVITY"}
+
+EXAMPLE — when user says "Netflix":
+{"done":true,"plans":[{"name":"Netflix Standard with Ads","amount":7.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"Netflix Standard","amount":15.49,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"Netflix Premium","amount":22.99,"billingPeriod":"MONTHLY","currency":"USD"}],"serviceName":"Netflix","iconUrl":"https://logo.clearbit.com/netflix.com","serviceUrl":"https://netflix.com","cancelUrl":"https://netflix.com/cancelplan","category":"STREAMING"}
 
 Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, GAMING, NEWS, HEALTH, OTHER
 
