@@ -327,18 +327,24 @@ PRICING DATABASE (use EXACT prices, do not invent):
 
 CRITICAL RULES (follow strictly):
 1. Use EXACT prices from the database above. NEVER guess or ask about prices for known services.
-2. For services with MULTIPLE tiers (LinkedIn, Netflix, Spotify, Adobe, Apple iCloud, Microsoft 365, ChatGPT) → ALWAYS return "plans" array immediately. NEVER ask "which plan?".
-3. For single-plan services → return single "subscription".
-4. ONLY ask a question if the service is completely unknown AND not in the database above.
-5. NEVER ask about price or plan for services listed in the database — show plans instead.
+2. If user specifies an EXACT plan name (e.g. "LinkedIn Premium Career", "Netflix Premium", "Spotify Family") → return single subscription immediately with that plan's exact price (schema A).
+3. If user names a SERVICE with MULTIPLE tiers but NOT a specific plan → return "plans" array (schema B). NEVER ask "which plan?", show options instead.
+4. For single-plan services → return single "subscription" (schema A).
+5. ONLY ask a question if service is completely unknown AND not in database.
 6. Always include iconUrl: https://logo.clearbit.com/{domain}
 7. Return ONLY valid JSON. No markdown. No explanation.
 
-EXAMPLE — when user says "LinkedIn" or "LinkedIn Premium":
+EXAMPLE — user says "LinkedIn Premium Career" (specific plan → schema A):
+{"done":true,"subscription":{"name":"LinkedIn Premium Career","amount":39.99,"currency":"USD","billingPeriod":"MONTHLY","category":"PRODUCTIVITY","serviceUrl":"https://linkedin.com/premium","cancelUrl":"https://linkedin.com/premium/cancel","iconUrl":"https://logo.clearbit.com/linkedin.com"}}
+
+EXAMPLE — user says "LinkedIn" or "LinkedIn Premium" (ambiguous → schema B):
 {"done":true,"plans":[{"name":"LinkedIn Premium Career","amount":39.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"LinkedIn Premium Business","amount":59.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"LinkedIn Sales Navigator","amount":99.99,"billingPeriod":"MONTHLY","currency":"USD"}],"serviceName":"LinkedIn Premium","iconUrl":"https://logo.clearbit.com/linkedin.com","serviceUrl":"https://linkedin.com/premium","cancelUrl":"https://linkedin.com/premium/cancel","category":"PRODUCTIVITY"}
 
-EXAMPLE — when user says "Netflix":
+EXAMPLE — user says "Netflix" (ambiguous → schema B):
 {"done":true,"plans":[{"name":"Netflix Standard with Ads","amount":7.99,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"Netflix Standard","amount":15.49,"billingPeriod":"MONTHLY","currency":"USD"},{"name":"Netflix Premium","amount":22.99,"billingPeriod":"MONTHLY","currency":"USD"}],"serviceName":"Netflix","iconUrl":"https://logo.clearbit.com/netflix.com","serviceUrl":"https://netflix.com","cancelUrl":"https://netflix.com/cancelplan","category":"STREAMING"}
+
+EXAMPLE — user says "ChatGPT Plus" (specific → schema A):
+{"done":true,"subscription":{"name":"ChatGPT Plus","amount":20.00,"currency":"USD","billingPeriod":"MONTHLY","category":"AI_SERVICES","serviceUrl":"https://chat.openai.com","cancelUrl":"https://help.openai.com","iconUrl":"https://logo.clearbit.com/openai.com"}}
 
 Valid categories: STREAMING, AI_SERVICES, INFRASTRUCTURE, PRODUCTIVITY, MUSIC, GAMING, NEWS, HEALTH, OTHER
 
