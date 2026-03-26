@@ -433,9 +433,14 @@ CRITICAL RULES (follow strictly):
 2. If user specifies an EXACT plan name (e.g. "LinkedIn Premium Career", "Netflix Premium", "Spotify Family") → return single subscription immediately with that plan's exact price (schema A).
 3. If user names a SERVICE with MULTIPLE tiers but NOT a specific plan → return "plans" array (schema B). NEVER ask "which plan?", show options instead.
 4. For single-plan services → return single "subscription" (schema A).
-5. ONLY ask a question if service is completely unknown AND not in database.
+5. If service is NOT in the database above:
+   a) Ask the user for price AND billing period AND category. Example question: "Сколько стоит подписка X и как часто оплачивается? (ежемесячно/ежегодно)"
+   b) NEVER guess the price for unknown services.
+   c) NEVER auto-assign category for unknown services — ask: "К какой категории отнести? (Стриминг, Музыка, AI, Продуктивность, Другое)"
+   d) If user provides partial info (e.g. only name), ask for the missing fields step by step.
 6. Always include iconUrl: https://icon.horse/icon/{domain}
 7. Return ONLY valid JSON. No markdown. No explanation.
+8. If you recognize the service name but it's not in the pricing database, use web search knowledge but STILL confirm the price with the user.
 
 EXAMPLE — user says "LinkedIn Premium Career" (specific plan → schema A):
 {"done":true,"subscription":{"name":"LinkedIn Premium Career","amount":39.99,"currency":"USD","billingPeriod":"MONTHLY","category":"PRODUCTIVITY","serviceUrl":"https://linkedin.com/premium","cancelUrl":"https://linkedin.com/premium/cancel","iconUrl":"https://icon.horse/icon/linkedin.com"}}
