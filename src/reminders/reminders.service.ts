@@ -95,6 +95,71 @@ export class RemindersService {
     this.logger.log(`Reminders sent: ${sent}, errors: ${errors}`);
   }
 
+  /** Notify users whose trial is about to expire — runs daily at 10:00 */
+  @Cron('0 10 * * *')
+  async sendTrialExpiryReminders() {
+    this.logger.log('Running trial expiry reminders cron...');
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const in1Day = new Date(today);
+    in1Day.setDate(today.getDate() + 1);
+
+    const in4Days = new Date(today);
+    in4Days.setDate(today.getDate() + 4);
+
+    const users = await this.userRepo
+      .createQueryBuilder('u')
+      .where("u.plan = 'pro'")
+      .andWhere('u.trialUsed = true')
+      .andWhere('u.lemonSqueezyCustomerId IS NULL')
+      .andWhere('u.trialEndDate IS NOT NULL')
+      .getMany();
+
+    let sent = 0;
+    let errors = 0;
+
+    for (const user of users) {
+      try {
+        if (!user.trialEndDate) continue;
+
+        const trialEnd = new Date(user.trialEndDate);
+        trialEnd.setHours(0, 0, 0, 0);
+
+        const diffMs = trialEnd.getTime() - today.getTime();
+        const daysLeft = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+        if (daysLeft !== 1 && daysLeft !== 4) continue;
+        if (!user.notificationsEnabled) continue;
+
+        const title = `Your Pro trial ends in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`;
+        const body =
+          'Upgrade now to keep unlimited subscriptions and AI features';
+
+        if (user.fcmToken) {
+          await this.notificationsService.sendPushNotification(
+            user.fcmToken,
+            title,
+            body,
+          );
+        }
+
+        sent++;
+      } catch (err) {
+        errors++;
+        this.logger.error(
+          `Failed to send trial expiry reminder for user ${user.id}:`,
+          err,
+        );
+      }
+    }
+
+    this.logger.log(
+      `Trial expiry reminders sent: ${sent}, errors: ${errors}`,
+    );
+  }
+
   /** Downgrade users whose trial has expired — runs every hour */
   @Cron('0 * * * *')
   async expireTrials() {

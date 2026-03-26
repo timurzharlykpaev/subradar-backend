@@ -29,8 +29,8 @@ describe('SubscriptionsController', () => {
 
   it('findAll calls service.findAll', async () => {
     mockService.findAll.mockResolvedValue([]);
-    const result = await controller.findAll(mockReq as any);
-    expect(mockService.findAll).toHaveBeenCalledWith('user-1');
+    const result = await controller.findAll(mockReq as any, {});
+    expect(mockService.findAll).toHaveBeenCalledWith('user-1', {});
     expect(result).toEqual([]);
   });
 

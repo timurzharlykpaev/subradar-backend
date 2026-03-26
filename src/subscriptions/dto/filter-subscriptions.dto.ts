@@ -1,4 +1,4 @@
-import { IsOptional, IsEnum, IsString } from 'class-validator';
+import { IsOptional, IsEnum, IsString, IsIn } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   SubscriptionCategory,
@@ -20,4 +20,16 @@ export class FilterSubscriptionsDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({
+    enum: ['name', 'amount', 'nextPaymentDate', 'createdAt'],
+  })
+  @IsOptional()
+  @IsIn(['name', 'amount', 'nextPaymentDate', 'createdAt'])
+  sort?: 'name' | 'amount' | 'nextPaymentDate' | 'createdAt';
+
+  @ApiPropertyOptional({ enum: ['ASC', 'DESC'] })
+  @IsOptional()
+  @IsIn(['ASC', 'DESC'])
+  order?: 'ASC' | 'DESC';
 }

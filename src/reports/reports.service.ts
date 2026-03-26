@@ -5,7 +5,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Between } from 'typeorm';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const PDFDocument = require('pdfkit');
 import { Report, ReportType, ReportStatus } from './entities/report.entity';
@@ -31,6 +31,27 @@ export class ReportsService {
     to: string,
     type: ReportType,
   ): Promise<Report> {
+    // Enforce monthly report limit for free users
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (user && user.plan === 'free') {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+      const reportsThisMonth = await this.reportRepo.count({
+        where: {
+          userId,
+          createdAt: Between(monthStart, monthEnd),
+        },
+      });
+
+      if (reportsThisMonth >= 1) {
+        throw new ForbiddenException(
+          'Free plan allows 1 report per month. Upgrade to Pro for unlimited reports.',
+        );
+      }
+    }
+
     const report = this.reportRepo.create({
       userId,
       from,

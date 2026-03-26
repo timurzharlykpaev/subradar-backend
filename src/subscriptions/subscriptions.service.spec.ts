@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { SubscriptionsService } from './subscriptions.service';
 import { Subscription, BillingPeriod, SubscriptionStatus } from './entities/subscription.entity';
@@ -15,8 +16,10 @@ const mockRepo = {
   remove: jest.fn(),
   count: jest.fn(),
   createQueryBuilder: jest.fn(() => ({
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
     select: jest.fn().mockReturnThis(),
     getRawMany: jest.fn().mockResolvedValue([]),
     getMany: jest.fn().mockResolvedValue([]),
@@ -26,6 +29,10 @@ const mockRepo = {
 
 const mockUsersService = {
   findById: jest.fn(),
+};
+
+const mockConfigService = {
+  get: jest.fn().mockReturnValue(undefined),
 };
 
 const mockSub = {
@@ -48,6 +55,7 @@ describe('SubscriptionsService', () => {
         SubscriptionsService,
         { provide: getRepositoryToken(Subscription), useValue: mockRepo },
         { provide: UsersService, useValue: mockUsersService },
+        { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
 
@@ -61,7 +69,17 @@ describe('SubscriptionsService', () => {
 
   describe('findAll', () => {
     it('should return all subscriptions for user', async () => {
-      mockRepo.find.mockResolvedValue([mockSub]);
+      const qb = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
+        getMany: jest.fn().mockResolvedValue([mockSub]),
+        getOne: jest.fn().mockResolvedValue(null),
+      };
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
       const result = await service.findAll('user-1');
       expect(result).toEqual([mockSub]);
     });
@@ -97,7 +115,7 @@ describe('SubscriptionsService', () => {
 
     it('should throw ForbiddenException when free plan limit reached', async () => {
       mockUsersService.findById.mockResolvedValue({ plan: 'free' });
-      mockRepo.count.mockResolvedValue(5);
+      mockRepo.count.mockResolvedValue(3);
       await expect(service.create('user-1', {} as any)).rejects.toThrow(ForbiddenException);
     });
   });

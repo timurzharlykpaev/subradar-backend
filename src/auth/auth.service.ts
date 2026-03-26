@@ -187,8 +187,8 @@ export class AuthService {
     const user = await this.usersService.findById(payload.sub);
     if (user.magicLinkToken !== token)
       throw new UnauthorizedException('Token already used');
-    if (new Date() > user.magicLinkExpiry)
-      throw new UnauthorizedException('Magic link expired');
+    if (!user.magicLinkExpiry || new Date() > new Date(user.magicLinkExpiry))
+      throw new UnauthorizedException('Link expired');
 
     await this.usersService.update(user.id, {
       magicLinkToken: undefined,

@@ -6,14 +6,17 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
+import Redis from 'ioredis';
 import {
   Subscription,
   BillingPeriod,
   SubscriptionStatus,
 } from './entities/subscription.entity';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
+import { FilterSubscriptionsDto } from './dto/filter-subscriptions.dto';
 import { UsersService } from '../users/users.service';
 import { PLANS } from '../billing/plans.config';
 
@@ -30,18 +33,33 @@ function computeNextPaymentDate(
 
   const now = new Date();
   const next = new Date(startDate);
+  const originalDay = next.getDate();
 
   while (next <= now) {
     switch (billingPeriod) {
       case BillingPeriod.WEEKLY:
         next.setDate(next.getDate() + 7);
         break;
-      case BillingPeriod.MONTHLY:
-        next.setMonth(next.getMonth() + 1);
+      case BillingPeriod.MONTHLY: {
+        const m = next.getMonth() + 1;
+        const y = next.getFullYear() + (m > 11 ? 1 : 0);
+        const newMonth = m % 12;
+        const lastDay = new Date(y, newMonth + 1, 0).getDate();
+        next.setFullYear(y);
+        next.setMonth(newMonth);
+        next.setDate(Math.min(originalDay, lastDay));
         break;
-      case BillingPeriod.QUARTERLY:
-        next.setMonth(next.getMonth() + 3);
+      }
+      case BillingPeriod.QUARTERLY: {
+        const mq = next.getMonth() + 3;
+        const yq = next.getFullYear() + Math.floor(mq / 12);
+        const newMonthQ = mq % 12;
+        const lastDayQ = new Date(yq, newMonthQ + 1, 0).getDate();
+        next.setFullYear(yq);
+        next.setMonth(newMonthQ);
+        next.setDate(Math.min(originalDay, lastDayQ));
         break;
+      }
       case BillingPeriod.YEARLY:
         next.setFullYear(next.getFullYear() + 1);
         break;
@@ -54,15 +72,38 @@ function computeNextPaymentDate(
 @Injectable()
 export class SubscriptionsService implements OnModuleInit {
   private readonly logger = new Logger(SubscriptionsService.name);
+  private readonly redis: Redis | null;
 
   constructor(
     @InjectRepository(Subscription)
     private readonly repo: Repository<Subscription>,
     private readonly usersService: UsersService,
-  ) {}
+    private readonly cfg: ConfigService,
+  ) {
+    try {
+      this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
+    } catch {
+      this.redis = null;
+    }
+  }
 
   async onModuleInit() {
     await this.recalculateNextPaymentDates();
+  }
+
+  private async invalidateAnalyticsCache(userId: string): Promise<void> {
+    if (!this.redis) return;
+    try {
+      const patterns = [`ai:*${userId}*`, `analytics:*${userId}*`];
+      for (const pattern of patterns) {
+        const keys = await this.redis.keys(pattern);
+        if (keys.length > 0) {
+          await this.redis.del(...keys);
+        }
+      }
+    } catch {
+      this.logger.warn('Failed to invalidate analytics cache');
+    }
   }
 
   async create(
@@ -96,7 +137,9 @@ export class SubscriptionsService implements OnModuleInit {
       sub.nextPaymentDate = next as Date;
     }
 
-    return this.repo.save(sub);
+    const saved = await this.repo.save(sub);
+    await this.invalidateAnalyticsCache(userId);
+    return saved;
   }
 
   async countActive(userId: string): Promise<number> {
@@ -108,12 +151,29 @@ export class SubscriptionsService implements OnModuleInit {
     });
   }
 
-  async findAll(userId: string): Promise<Subscription[]> {
-    return this.repo.find({
-      where: { userId },
-      relations: ['paymentCard'],
-      order: { createdAt: 'DESC' },
-    });
+  async findAll(userId: string, filters?: FilterSubscriptionsDto): Promise<Subscription[]> {
+    const qb = this.repo
+      .createQueryBuilder('sub')
+      .leftJoinAndSelect('sub.paymentCard', 'paymentCard')
+      .where('sub.userId = :userId', { userId });
+
+    if (filters?.status) {
+      qb.andWhere('sub.status = :status', { status: filters.status });
+    }
+
+    if (filters?.category) {
+      qb.andWhere('sub.category = :category', { category: filters.category });
+    }
+
+    if (filters?.search) {
+      qb.andWhere('sub.name ILIKE :search', { search: `%${filters.search}%` });
+    }
+
+    const sortField = filters?.sort || 'createdAt';
+    const sortOrder = filters?.order || 'DESC';
+    qb.orderBy(`sub.${sortField}`, sortOrder);
+
+    return qb.getMany();
   }
 
   async findOne(userId: string, id: string): Promise<Subscription> {
@@ -142,12 +202,15 @@ export class SubscriptionsService implements OnModuleInit {
       }
     }
 
-    return this.repo.save(sub);
+    const saved = await this.repo.save(sub);
+    await this.invalidateAnalyticsCache(userId);
+    return saved;
   }
 
   async remove(userId: string, id: string): Promise<void> {
     const sub = await this.findOne(userId, id);
     await this.repo.remove(sub);
+    await this.invalidateAnalyticsCache(userId);
   }
 
   async updateStatus(
@@ -160,7 +223,9 @@ export class SubscriptionsService implements OnModuleInit {
     if (status === SubscriptionStatus.CANCELLED) {
       sub.cancelledAt = new Date();
     }
-    return this.repo.save(sub);
+    const saved = await this.repo.save(sub);
+    await this.invalidateAnalyticsCache(userId);
+    return saved;
   }
 
   findAllForUser(userId: string) {

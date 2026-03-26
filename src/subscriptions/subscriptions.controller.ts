@@ -7,6 +7,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   UseInterceptors,
@@ -17,6 +18,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SubscriptionsService } from './subscriptions.service';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
+import { FilterSubscriptionsDto } from './dto/filter-subscriptions.dto';
 import { SubscriptionStatus } from './entities/subscription.entity';
 import { ReceiptsService } from '../receipts/receipts.service';
 import { SubscriptionLimitGuard, PLAN_LIMITS } from './guards/subscription-limit.guard';
@@ -67,8 +69,8 @@ export class SubscriptionsController {
   }
 
   @Get()
-  findAll(@Request() req) {
-    return this.service.findAll(req.user.id);
+  findAll(@Request() req, @Query() filters: FilterSubscriptionsDto) {
+    return this.service.findAll(req.user.id, filters);
   }
 
   @Get(':id')
