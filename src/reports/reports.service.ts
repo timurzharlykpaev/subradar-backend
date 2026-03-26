@@ -11,6 +11,7 @@ const PDFDocument = require('pdfkit');
 import { Report, ReportType, ReportStatus } from './entities/report.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class ReportsService {
@@ -20,6 +21,8 @@ export class ReportsService {
     private readonly subRepo: Repository<Subscription>,
     @InjectRepository(PaymentCard)
     private readonly cardRepo: Repository<PaymentCard>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
   ) {}
 
   async generate(
@@ -52,54 +55,128 @@ export class ReportsService {
     });
   }
 
+  private async fetchIcon(url: string): Promise<Buffer | null> {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return null;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.startsWith('image/')) return null;
+      return Buffer.from(await res.arrayBuffer());
+    } catch {
+      return null;
+    }
+  }
+
+  private getMonthlyAmount(sub: Subscription): number {
+    const amt = Number(sub.amount) || 0;
+    switch (sub.billingPeriod) {
+      case 'YEARLY': return amt / 12;
+      case 'QUARTERLY': return amt / 3;
+      case 'WEEKLY': return amt * 4.33;
+      default: return amt;
+    }
+  }
+
+  private formatDate(d?: string | Date | null): string {
+    if (!d) return '—';
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return '—';
+    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  private periodLabel(p: string): string {
+    const map: Record<string, string> = {
+      MONTHLY: '/mo', YEARLY: '/yr', WEEKLY: '/wk', QUARTERLY: '/qtr',
+      LIFETIME: 'lifetime', ONE_TIME: 'one-time',
+    };
+    return map[p] || p;
+  }
+
   async generatePdf(userId: string, id: string): Promise<Buffer> {
     const report = await this.findOne(userId, id);
+    const user = await this.userRepo.findOne({ where: { id: userId } });
     const cards = await this.cardRepo.find({ where: { userId } });
     const cardMap = Object.fromEntries(cards.map((c) => [c.id, c]));
 
     const subs = await this.subRepo
       .createQueryBuilder('s')
       .where('s.userId = :userId', { userId })
-      .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', {
-        to: report.to,
-      })
-      .andWhere(
-        '(s.cancelledAt IS NULL OR s.cancelledAt >= :from)',
-        { from: report.from },
-      )
+      .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', { to: report.to })
+      .andWhere('(s.cancelledAt IS NULL OR s.cancelledAt >= :from)', { from: report.from })
+      .orderBy('s.amount', 'DESC')
       .getMany();
+
+    // Pre-fetch icons
+    const iconMap = new Map<string, Buffer>();
+    const iconPromises = subs
+      .filter((s) => s.iconUrl)
+      .slice(0, 30)
+      .map(async (s) => {
+        const buf = await this.fetchIcon(s.iconUrl);
+        if (buf) iconMap.set(s.id, buf);
+      });
+    await Promise.all(iconPromises);
 
     try {
       return await new Promise<Buffer>((resolve, reject) => {
-        const doc = new PDFDocument({ margin: 50 }) as any;
+        const doc = new PDFDocument({ margin: 50, size: 'A4' }) as any;
         const buffers: Buffer[] = [];
-
         doc.on('data', (chunk) => buffers.push(chunk));
         doc.on('end', () => resolve(Buffer.concat(buffers)));
         doc.on('error', reject);
 
-        // Header
-        doc
-          .fontSize(24)
-          .font('Helvetica-Bold')
-          .text('SubRadar AI', { align: 'center' });
-        doc
-          .fontSize(16)
-          .font('Helvetica')
-          .text(`${report.type.toUpperCase()} Report`, { align: 'center' });
-        doc.moveDown();
-        doc
-          .fontSize(12)
-          .text(`Period: ${report.from} to ${report.to}`, { align: 'center' });
-        doc.moveDown(2);
+        const pageW = 595.28;
+        const marginL = 50;
+        const marginR = 50;
+        const contentW = pageW - marginL - marginR;
+
+        // ── Header ──────────────────────────────────────────────
+        doc.rect(0, 0, pageW, 100).fill('#6C47FF');
+        doc.fontSize(22).font('Helvetica-Bold').fillColor('#FFFFFF')
+          .text('SubRadar', marginL, 28, { continued: true })
+          .fontSize(22).fillColor('rgba(255,255,255,0.6)').text(' AI');
+        doc.fontSize(11).fillColor('rgba(255,255,255,0.85)')
+          .text(`${report.type.toUpperCase()} REPORT`, marginL, 58);
+
+        // User info — right side
+        if (user) {
+          doc.fontSize(10).fillColor('rgba(255,255,255,0.9)')
+            .text(user.name || user.email, marginL, 75, { align: 'right', width: contentW });
+        }
+
+        doc.fillColor('#000000');
+        doc.y = 115;
+
+        // ── Meta info ──────────────────────────────────────────
+        doc.fontSize(9).fillColor('#888888')
+          .text(`Period: ${this.formatDate(report.from)} — ${this.formatDate(report.to)}`, marginL, doc.y);
+        doc.text(`Generated: ${this.formatDate(new Date().toISOString())}`, marginL, doc.y, { align: 'right', width: contentW });
+        if (user?.email) {
+          doc.text(`Account: ${user.email}`, marginL);
+        }
+        doc.moveDown(1.5);
+        doc.fillColor('#000000');
+
+        // ── Divider ─────────────────────────────────────────────
+        const drawDivider = () => {
+          const y = doc.y;
+          doc.moveTo(marginL, y).lineTo(pageW - marginR, y).lineWidth(0.5).strokeColor('#E0E0E0').stroke();
+          doc.moveDown(0.5);
+        };
 
         if (report.type === ReportType.SUMMARY) {
-          this.addSummaryContent(doc, subs);
+          this.addSummaryContent(doc, subs, marginL, contentW, drawDivider);
         } else if (report.type === ReportType.DETAILED) {
-          this.addDetailedContent(doc, subs, cardMap);
+          this.addDetailedContent(doc, subs, cardMap, iconMap, marginL, contentW, drawDivider);
         } else if (report.type === ReportType.TAX) {
-          this.addTaxContent(doc, subs, cardMap);
+          this.addTaxContent(doc, subs, cardMap, marginL, contentW, drawDivider);
         }
+
+        // ── Footer ──────────────────────────────────────────────
+        doc.moveDown(2);
+        drawDivider();
+        doc.fontSize(8).fillColor('#AAAAAA')
+          .text('Generated by SubRadar AI — app.subradar.ai', marginL, doc.y, { align: 'center', width: contentW });
 
         doc.end();
       });
@@ -108,105 +185,211 @@ export class ReportsService {
     }
   }
 
-  private addSummaryContent(doc: any, subs: Subscription[]) {
+  private addSummaryContent(
+    doc: any, subs: Subscription[], marginL: number, contentW: number, drawDivider: () => void,
+  ) {
     const total = subs.reduce((sum, s) => sum + Number(s.amount), 0);
-    doc.fontSize(14).font('Helvetica-Bold').text('Summary');
-    doc.moveDown();
-    doc.fontSize(12).font('Helvetica');
-    doc.text(`Total Subscriptions: ${subs.length}`);
-    doc.text(`Total Amount: $${total.toFixed(2)}`);
-    doc.moveDown();
+    const totalMonthly = subs.reduce((sum, s) => sum + this.getMonthlyAmount(s), 0);
+    const activeSubs = subs.filter((s) => s.status === 'ACTIVE' || s.status === 'TRIAL');
+    const currency = subs[0]?.currency || 'USD';
 
-    // Category breakdown
-    const byCat: Record<string, number> = {};
+    // Summary cards
+    doc.fontSize(16).font('Helvetica-Bold').fillColor('#1A1A1A').text('Overview');
+    doc.moveDown(0.5);
+
+    doc.fontSize(12).font('Helvetica');
+    doc.fillColor('#6C47FF').text(`${activeSubs.length}`, marginL, doc.y, { continued: true })
+      .fillColor('#333333').text(` active subscriptions`);
+    doc.fillColor('#6C47FF').text(`${currency} ${totalMonthly.toFixed(2)}`, marginL, doc.y, { continued: true })
+      .fillColor('#333333').text(` / month`);
+    doc.fillColor('#6C47FF').text(`${currency} ${(totalMonthly * 12).toFixed(2)}`, marginL, doc.y, { continued: true })
+      .fillColor('#333333').text(` / year (estimated)`);
+    doc.moveDown(1);
+
+    drawDivider();
+
+    // By category
+    doc.fontSize(14).font('Helvetica-Bold').fillColor('#1A1A1A').text('By Category');
+    doc.moveDown(0.5);
+    const byCat: Record<string, { count: number; amount: number }> = {};
     subs.forEach((s) => {
-      byCat[s.category] = (byCat[s.category] || 0) + Number(s.amount);
+      if (!byCat[s.category]) byCat[s.category] = { count: 0, amount: 0 };
+      byCat[s.category].count++;
+      byCat[s.category].amount += this.getMonthlyAmount(s);
     });
-    doc.font('Helvetica-Bold').text('By Category:');
-    doc.font('Helvetica');
-    Object.entries(byCat).forEach(([cat, amt]) => {
-      doc.text(`  ${cat}: $${amt.toFixed(2)}`);
+
+    doc.fontSize(11).font('Helvetica');
+    Object.entries(byCat)
+      .sort((a, b) => b[1].amount - a[1].amount)
+      .forEach(([cat, data]) => {
+        doc.fillColor('#333333').text(`${cat}`, marginL, doc.y, { continued: true, width: 200 });
+        doc.fillColor('#888888').text(`  ${data.count} subs`, { continued: true });
+        doc.fillColor('#1A1A1A').text(`  ${currency} ${data.amount.toFixed(2)}/mo`, { align: 'right', width: contentW - 280 });
+      });
+    doc.moveDown(1);
+
+    drawDivider();
+
+    // Top subscriptions
+    doc.fontSize(14).font('Helvetica-Bold').fillColor('#1A1A1A').text('Top Subscriptions');
+    doc.moveDown(0.5);
+    doc.fontSize(11).font('Helvetica');
+    subs.slice(0, 10).forEach((s, i) => {
+      const monthly = this.getMonthlyAmount(s);
+      doc.fillColor('#888888').text(`${i + 1}.`, marginL, doc.y, { continued: true, width: 20 });
+      doc.fillColor('#1A1A1A').text(` ${s.name}`, { continued: true, width: 250 });
+      doc.fillColor('#6C47FF').text(`${s.currency} ${monthly.toFixed(2)}/mo`, { align: 'right', width: contentW - 280 });
+    });
+
+    // Status breakdown
+    doc.moveDown(1);
+    drawDivider();
+    doc.fontSize(14).font('Helvetica-Bold').fillColor('#1A1A1A').text('By Status');
+    doc.moveDown(0.5);
+    doc.fontSize(11).font('Helvetica');
+    const byStatus: Record<string, number> = {};
+    subs.forEach((s) => { byStatus[s.status] = (byStatus[s.status] || 0) + 1; });
+    Object.entries(byStatus).forEach(([status, count]) => {
+      doc.fillColor('#333333').text(`${status}: ${count} subscription${count > 1 ? 's' : ''}`);
     });
   }
 
   private addDetailedContent(
-    doc: any,
-    subs: Subscription[],
-    cardMap: Record<string, PaymentCard>,
+    doc: any, subs: Subscription[], cardMap: Record<string, PaymentCard>,
+    iconMap: Map<string, Buffer>, marginL: number, contentW: number, drawDivider: () => void,
   ) {
-    doc.fontSize(14).font('Helvetica-Bold').text('Subscription Details');
-    doc.moveDown();
+    const totalMonthly = subs.reduce((sum, s) => sum + this.getMonthlyAmount(s), 0);
+    const currency = subs[0]?.currency || 'USD';
+
+    doc.fontSize(16).font('Helvetica-Bold').fillColor('#1A1A1A')
+      .text(`Subscriptions (${subs.length})`);
+    doc.fontSize(10).font('Helvetica').fillColor('#888888')
+      .text(`Total: ${currency} ${totalMonthly.toFixed(2)}/mo`);
+    doc.moveDown(1);
 
     subs.forEach((s, i) => {
+      // Check if we need a new page
+      if (doc.y > 700) doc.addPage();
+
       const card = s.paymentCardId ? cardMap[s.paymentCardId] : null;
-      doc
-        .fontSize(12)
-        .font('Helvetica-Bold')
-        .text(`${i + 1}. ${s.name}`);
-      doc.font('Helvetica');
-      doc.text(
-        `   Category: ${s.category} | Amount: ${s.currency} ${s.amount} | Period: ${s.billingPeriod}`,
-      );
-      doc.text(`   Status: ${s.status} | Added: ${s.addedVia}`);
-      if (card) doc.text(`   Card: ••••${card.last4} (${card.brand})`);
-      doc.moveDown(0.5);
+      const iconBuf = iconMap.get(s.id);
+      const startY = doc.y;
+
+      // Icon
+      let textX = marginL;
+      if (iconBuf) {
+        try {
+          doc.image(iconBuf, marginL, startY, { width: 24, height: 24 });
+          textX = marginL + 32;
+        } catch { /* icon failed, skip */ }
+      } else {
+        // Draw letter circle
+        doc.circle(marginL + 12, startY + 12, 12).fill('#6C47FF');
+        doc.fontSize(12).font('Helvetica-Bold').fillColor('#FFFFFF')
+          .text((s.name?.[0] || '?').toUpperCase(), marginL + 4, startY + 5, { width: 16, align: 'center' });
+        textX = marginL + 32;
+        doc.fillColor('#000000');
+      }
+
+      // Name + amount
+      doc.fontSize(13).font('Helvetica-Bold').fillColor('#1A1A1A')
+        .text(s.name, textX, startY, { width: contentW - 180 });
+      doc.fontSize(13).font('Helvetica-Bold').fillColor('#6C47FF')
+        .text(`${s.currency} ${Number(s.amount).toFixed(2)}${this.periodLabel(s.billingPeriod)}`,
+          marginL, startY, { align: 'right', width: contentW });
+
+      // Details line
+      doc.y = startY + 20;
+      doc.fontSize(9).font('Helvetica').fillColor('#888888');
+      const details: string[] = [];
+      details.push(`${s.category}`);
+      details.push(`Status: ${s.status}`);
+      if (s.currentPlan) details.push(`Plan: ${s.currentPlan}`);
+      if (card) details.push(`Card: ••••${card.last4} (${card.brand})`);
+      doc.text(details.join('  ·  '), textX, doc.y);
+
+      // Dates line
+      const dates: string[] = [];
+      if (s.startDate) dates.push(`Started: ${this.formatDate(s.startDate)}`);
+      if (s.nextPaymentDate) dates.push(`Next payment: ${this.formatDate(s.nextPaymentDate)}`);
+      if (s.cancelledAt) dates.push(`Cancelled: ${this.formatDate(s.cancelledAt)}`);
+      if (dates.length) {
+        doc.text(dates.join('  ·  '), textX, doc.y);
+      }
+
+      doc.moveDown(0.8);
+      if (i < subs.length - 1) drawDivider();
     });
   }
 
   private addTaxContent(
-    doc: any,
-    subs: Subscription[],
-    cardMap: Record<string, PaymentCard>,
+    doc: any, subs: Subscription[], cardMap: Record<string, PaymentCard>,
+    marginL: number, contentW: number, drawDivider: () => void,
   ) {
-    doc.fontSize(14).font('Helvetica-Bold').text('Tax Report');
-    doc.moveDown();
+    const businessSubs = subs.filter((s) => s.isBusinessExpense);
+    const personalSubs = subs.filter((s) => !s.isBusinessExpense);
+    const businessTotal = businessSubs.reduce((sum, s) => sum + Number(s.amount), 0);
+    const personalTotal = personalSubs.reduce((sum, s) => sum + Number(s.amount), 0);
+    const currency = subs[0]?.currency || 'USD';
 
-    // Table header
-    const cols = [50, 180, 280, 340, 390, 460, 510];
-    const headers = [
-      'Service',
-      'Category',
-      'Amount',
-      'Currency',
-      'Card',
-      'Period',
-      'Business',
-    ];
-    doc.fontSize(9).font('Helvetica-Bold');
-    headers.forEach((h, i) =>
-      doc.text(h, cols[i], doc.y, { continued: i < headers.length - 1 }),
-    );
+    // Summary
+    doc.fontSize(16).font('Helvetica-Bold').fillColor('#1A1A1A').text('Tax Summary');
     doc.moveDown(0.5);
+    doc.fontSize(12).font('Helvetica');
+    doc.fillColor('#10B981').text(`Business expenses: ${currency} ${businessTotal.toFixed(2)}`, marginL, doc.y, { continued: true })
+      .fillColor('#888888').text(`  (${businessSubs.length} subscriptions)`);
+    doc.fillColor('#333333').text(`Personal expenses: ${currency} ${personalTotal.toFixed(2)}`, marginL, doc.y, { continued: true })
+      .fillColor('#888888').text(`  (${personalSubs.length} subscriptions)`);
+    doc.moveDown(1);
+    drawDivider();
 
-    const lineY = doc.y;
-    doc.moveTo(50, lineY).lineTo(550, lineY).stroke();
-    doc.moveDown(0.3);
+    // Business expenses table
+    if (businessSubs.length > 0) {
+      doc.fontSize(14).font('Helvetica-Bold').fillColor('#1A1A1A').text('Business Expenses');
+      doc.moveDown(0.5);
 
-    // Table rows
-    doc.font('Helvetica').fontSize(9);
-    subs.forEach((s) => {
-      const card = s.paymentCardId ? cardMap[s.paymentCardId] : null;
-      const rowY = doc.y;
-      const row = [
-        s.name.substring(0, 18),
-        s.category,
-        String(s.amount),
-        s.currency,
-        card ? `••••${card.last4}` : 'N/A',
-        s.billingPeriod,
-        s.isBusinessExpense ? 'Yes' : 'No',
-      ];
-      row.forEach((val, i) => {
-        doc.text(val, cols[i], rowY, { continued: i < row.length - 1 });
+      // Table header
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#888888');
+      doc.text('Service', marginL, doc.y, { width: 150, continued: false });
+      const headerY = doc.y - 11;
+      doc.text('Category', marginL + 155, headerY, { width: 90 });
+      doc.text('Amount', marginL + 250, headerY, { width: 80 });
+      doc.text('Period', marginL + 335, headerY, { width: 60 });
+      doc.text('Card', marginL + 400, headerY, { width: 95 });
+      doc.moveDown(0.3);
+      drawDivider();
+
+      doc.font('Helvetica').fontSize(9).fillColor('#333333');
+      businessSubs.forEach((s) => {
+        if (doc.y > 740) doc.addPage();
+        const card = s.paymentCardId ? cardMap[s.paymentCardId] : null;
+        const rowY = doc.y;
+        doc.text(s.name.substring(0, 22), marginL, rowY, { width: 150 });
+        doc.text(s.category, marginL + 155, rowY, { width: 90 });
+        doc.fillColor('#1A1A1A').text(`${s.currency} ${Number(s.amount).toFixed(2)}`, marginL + 250, rowY, { width: 80 });
+        doc.fillColor('#333333').text(s.billingPeriod, marginL + 335, rowY, { width: 60 });
+        doc.text(card ? `••••${card.last4}` : '—', marginL + 400, rowY, { width: 95 });
+        doc.moveDown(0.6);
       });
-      doc.moveDown(0.4);
-    });
 
-    doc.moveDown();
-    const businessTotal = subs
-      .filter((s) => s.isBusinessExpense)
-      .reduce((sum, s) => sum + Number(s.amount), 0);
-    doc.font('Helvetica-Bold').fontSize(11);
-    doc.text(`Business Expenses Total: $${businessTotal.toFixed(2)}`);
+      doc.moveDown(0.5);
+      doc.fontSize(12).font('Helvetica-Bold').fillColor('#10B981')
+        .text(`Total deductible: ${currency} ${businessTotal.toFixed(2)}`);
+      doc.moveDown(1);
+      drawDivider();
+    }
+
+    // Personal expenses
+    if (personalSubs.length > 0) {
+      doc.fontSize(14).font('Helvetica-Bold').fillColor('#1A1A1A').text('Personal Expenses');
+      doc.moveDown(0.5);
+      doc.font('Helvetica').fontSize(9).fillColor('#888888');
+      personalSubs.forEach((s) => {
+        if (doc.y > 740) doc.addPage();
+        doc.fillColor('#333333').text(`${s.name}`, marginL, doc.y, { continued: true, width: 200 });
+        doc.fillColor('#888888').text(`  ${s.category}`, { continued: true });
+        doc.fillColor('#333333').text(`  ${s.currency} ${Number(s.amount).toFixed(2)}`, { align: 'right', width: contentW - 300 });
+      });
+    }
   }
 }
