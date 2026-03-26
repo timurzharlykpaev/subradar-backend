@@ -49,6 +49,9 @@ export class Report {
   @Column({ type: 'enum', enum: ReportStatus, default: ReportStatus.PENDING })
   status: ReportStatus;
 
+  @Column({ type: 'text', nullable: true })
+  error: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 }

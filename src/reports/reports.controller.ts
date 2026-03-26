@@ -8,6 +8,8 @@ import {
   Request,
   Res,
   NotFoundException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -15,7 +17,7 @@ import { IsEnum, IsDateString, IsOptional, IsString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ReportsService } from './reports.service';
-import { ReportType } from './entities/report.entity';
+import { ReportType, ReportStatus } from './entities/report.entity';
 
 class GenerateReportDto {
   /** ISO date string — primary field */
@@ -37,7 +39,12 @@ class GenerateReportDto {
 export class ReportsController {
   constructor(private readonly service: ReportsService) {}
 
+  /**
+   * Enqueue a new report for async PDF generation.
+   * Returns the report with status=PENDING immediately.
+   */
   @Post('generate')
+  @HttpCode(HttpStatus.ACCEPTED)
   generate(@Request() req, @Body() dto: GenerateReportDto) {
     const from = dto.from || dto.startDate || '';
     const to = dto.to || dto.endDate || '';
@@ -49,21 +56,25 @@ export class ReportsController {
     return this.service.findAll(req.user.id);
   }
 
+  /**
+   * Get a single report (includes current status: PENDING / GENERATING / READY / FAILED).
+   */
   @Get(':id')
   async findOne(@Request() req, @Param('id') id: string) {
-    const reports = await this.service.findAll(req.user.id);
-    const report = reports.find((r: any) => r.id === id);
-    if (!report) throw new NotFoundException('Report not found');
-    return report;
+    return this.service.findOne(req.user.id, id);
   }
 
+  /**
+   * Download the generated PDF.
+   * Returns 404 if the report is not READY or the PDF has expired in Redis.
+   */
   @Get(':id/download')
   async download(
     @Request() req,
     @Param('id') id: string,
     @Res() res: Response,
   ) {
-    const buffer = await this.service.generatePdf(req.user.id, id);
+    const buffer = await this.service.downloadPdf(req.user.id, id);
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="report-${id}.pdf"`,

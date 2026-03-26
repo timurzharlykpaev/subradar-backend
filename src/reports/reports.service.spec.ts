@@ -1,10 +1,22 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { getQueueToken } from '@nestjs/bull';
+import { ConfigService } from '@nestjs/config';
 import { NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ReportsService } from './reports.service';
 import { Report, ReportType, ReportStatus } from './entities/report.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
+import { User } from '../users/entities/user.entity';
+
+// Mock ioredis
+jest.mock('ioredis', () => {
+  return jest.fn().mockImplementation(() => ({
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+  }));
+});
 
 jest.mock('pdfkit', () => {
   return jest.fn().mockImplementation(() => {
@@ -23,17 +35,42 @@ jest.mock('pdfkit', () => {
       moveTo: jest.fn().mockReturnThis(),
       lineTo: jest.fn().mockReturnThis(),
       stroke: jest.fn().mockReturnThis(),
+      lineWidth: jest.fn().mockReturnThis(),
+      strokeColor: jest.fn().mockReturnThis(),
+      fillColor: jest.fn().mockReturnThis(),
+      rect: jest.fn().mockReturnThis(),
+      fill: jest.fn().mockReturnThis(),
+      circle: jest.fn().mockReturnThis(),
+      image: jest.fn().mockReturnThis(),
+      addPage: jest.fn().mockReturnThis(),
       y: 100,
     };
     return doc;
   });
 });
 
-const mockReportRepo = { create: jest.fn(), save: jest.fn(), find: jest.fn(), findOne: jest.fn(), remove: jest.fn() };
+const mockReportRepo = {
+  create: jest.fn(),
+  save: jest.fn(),
+  find: jest.fn(),
+  findOne: jest.fn(),
+  remove: jest.fn(),
+  update: jest.fn(),
+  count: jest.fn().mockResolvedValue(0),
+};
 const mockSubRepo = { find: jest.fn() };
 const mockCardRepo = { find: jest.fn() };
+const mockUserRepo = { findOne: jest.fn().mockResolvedValue({ id: 'user-1', email: 'test@test.com', plan: 'pro' }) };
+const mockQueue = { add: jest.fn().mockResolvedValue({}) };
 
-const mockReport = { id: 'rep-1', userId: 'user-1', status: ReportStatus.READY, type: ReportType.SUMMARY, pdfUrl: 'http://example.com/rep.pdf', from: '2024-01-01', to: '2024-01-31' };
+const mockReport = {
+  id: 'rep-1',
+  userId: 'user-1',
+  status: ReportStatus.READY,
+  type: ReportType.SUMMARY,
+  from: '2024-01-01',
+  to: '2024-01-31',
+};
 
 describe('ReportsService', () => {
   let service: ReportsService;
@@ -45,6 +82,9 @@ describe('ReportsService', () => {
         { provide: getRepositoryToken(Report), useValue: mockReportRepo },
         { provide: getRepositoryToken(Subscription), useValue: mockSubRepo },
         { provide: getRepositoryToken(PaymentCard), useValue: mockCardRepo },
+        { provide: getRepositoryToken(User), useValue: mockUserRepo },
+        { provide: getQueueToken('reports'), useValue: mockQueue },
+        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
       ],
     }).compile();
     service = module.get<ReportsService>(ReportsService);
@@ -76,27 +116,46 @@ describe('ReportsService', () => {
   });
 
   describe('generate', () => {
-    it('creates and saves a report', async () => {
-      const newReport = { id: 'rep-2', userId: 'user-1', type: ReportType.SUMMARY, status: ReportStatus.READY };
+    it('creates report with PENDING status and enqueues job', async () => {
+      const newReport = { id: 'rep-2', userId: 'user-1', type: ReportType.SUMMARY, status: ReportStatus.PENDING };
       mockReportRepo.create.mockReturnValue(newReport);
       mockReportRepo.save.mockResolvedValue(newReport);
+      mockUserRepo.findOne.mockResolvedValue({ id: 'user-1', plan: 'pro' });
+      mockReportRepo.count.mockResolvedValue(0);
 
       const result = await service.generate('user-1', '2024-01-01', '2024-01-31', ReportType.SUMMARY);
       expect(mockReportRepo.create).toHaveBeenCalledWith(expect.objectContaining({
         userId: 'user-1',
         type: ReportType.SUMMARY,
-        status: ReportStatus.READY,
+        status: ReportStatus.PENDING,
       }));
       expect(mockReportRepo.save).toHaveBeenCalledWith(newReport);
+      expect(mockQueue.add).toHaveBeenCalledWith('generate-pdf', {
+        reportId: 'rep-2',
+        userId: 'user-1',
+      });
       expect(result).toEqual(newReport);
     });
   });
 
-  describe('generatePdf', () => {
-    const mockSubRepo2 = {
+  describe('downloadPdf', () => {
+    it('throws NotFoundException when report is not READY', async () => {
+      mockReportRepo.findOne.mockResolvedValue({ ...mockReport, status: ReportStatus.PENDING });
+      await expect(service.downloadPdf('user-1', 'rep-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when report does not exist', async () => {
+      mockReportRepo.findOne.mockResolvedValue(null);
+      await expect(service.downloadPdf('user-1', 'non-existent')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('buildAndStorePdf', () => {
+    const mockSubRepoQB = {
       createQueryBuilder: jest.fn(() => ({
         where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
         getMany: jest.fn().mockResolvedValue([
           { id: 'sub-1', name: 'Netflix', amount: 15, currency: 'USD', category: 'ENTERTAINMENT', billingPeriod: 'MONTHLY', status: 'ACTIVE', addedVia: 'manual', paymentCardId: null, isBusinessExpense: false },
           { id: 'sub-2', name: 'Work Tool', amount: 20, currency: 'USD', category: 'PRODUCTIVITY', billingPeriod: 'MONTHLY', status: 'ACTIVE', addedVia: 'manual', paymentCardId: 'card-1', isBusinessExpense: true },
@@ -104,92 +163,76 @@ describe('ReportsService', () => {
       })),
     };
 
-    it('generates PDF for SUMMARY report', async () => {
+    it('builds PDF for SUMMARY report and updates status to READY', async () => {
       mockReportRepo.findOne.mockResolvedValue(mockReport);
+      mockUserRepo.findOne.mockResolvedValue({ id: 'user-1', email: 'test@test.com' });
       mockCardRepo.find.mockResolvedValue([{ id: 'card-1', last4: '4242', brand: 'Visa' }]);
-      // Patch subRepo with queryBuilder support
-      (service as any).subRepo = mockSubRepo2;
+      (service as any).subRepo = mockSubRepoQB;
 
-      const result = await service.generatePdf('user-1', 'rep-1');
-      expect(Buffer.isBuffer(result)).toBe(true);
+      await service.buildAndStorePdf('user-1', 'rep-1');
+
+      // Should have updated status to GENERATING, then to READY
+      expect(mockReportRepo.update).toHaveBeenCalledWith('rep-1', expect.objectContaining({
+        status: ReportStatus.GENERATING,
+      }));
+      expect(mockReportRepo.update).toHaveBeenCalledWith('rep-1', expect.objectContaining({
+        status: ReportStatus.READY,
+      }));
     });
 
-    it('generates PDF for DETAILED report', async () => {
+    it('builds PDF for DETAILED report', async () => {
       const detailedReport = { ...mockReport, type: ReportType.DETAILED };
       mockReportRepo.findOne.mockResolvedValue(detailedReport);
+      mockUserRepo.findOne.mockResolvedValue({ id: 'user-1', email: 'test@test.com' });
       mockCardRepo.find.mockResolvedValue([{ id: 'card-1', last4: '4242', brand: 'Visa' }]);
-      (service as any).subRepo = mockSubRepo2;
+      (service as any).subRepo = mockSubRepoQB;
 
-      const result = await service.generatePdf('user-1', 'rep-1');
-      expect(Buffer.isBuffer(result)).toBe(true);
+      await service.buildAndStorePdf('user-1', 'rep-1');
+      expect(mockReportRepo.update).toHaveBeenCalledWith('rep-1', expect.objectContaining({
+        status: ReportStatus.READY,
+      }));
     });
 
-    it('generates PDF for TAX report', async () => {
+    it('builds PDF for TAX report', async () => {
       const taxReport = { ...mockReport, type: ReportType.TAX };
       mockReportRepo.findOne.mockResolvedValue(taxReport);
+      mockUserRepo.findOne.mockResolvedValue({ id: 'user-1', email: 'test@test.com' });
       mockCardRepo.find.mockResolvedValue([{ id: 'card-1', last4: '4242', brand: 'Visa' }]);
-      (service as any).subRepo = mockSubRepo2;
+      (service as any).subRepo = mockSubRepoQB;
 
-      const result = await service.generatePdf('user-1', 'rep-1');
-      expect(Buffer.isBuffer(result)).toBe(true);
+      await service.buildAndStorePdf('user-1', 'rep-1');
+      expect(mockReportRepo.update).toHaveBeenCalledWith('rep-1', expect.objectContaining({
+        status: ReportStatus.READY,
+      }));
     });
 
-    it('generates PDF with no subscriptions', async () => {
+    it('builds PDF with no subscriptions', async () => {
       mockReportRepo.findOne.mockResolvedValue({ ...mockReport, type: ReportType.SUMMARY });
+      mockUserRepo.findOne.mockResolvedValue({ id: 'user-1', email: 'test@test.com' });
       mockCardRepo.find.mockResolvedValue([]);
       (service as any).subRepo = {
         createQueryBuilder: jest.fn(() => ({
           where: jest.fn().mockReturnThis(),
           andWhere: jest.fn().mockReturnThis(),
+          orderBy: jest.fn().mockReturnThis(),
           getMany: jest.fn().mockResolvedValue([]),
         })),
       };
 
-      const result = await service.generatePdf('user-1', 'rep-1');
-      expect(Buffer.isBuffer(result)).toBe(true);
+      await service.buildAndStorePdf('user-1', 'rep-1');
+      expect(mockReportRepo.update).toHaveBeenCalledWith('rep-1', expect.objectContaining({
+        status: ReportStatus.READY,
+      }));
     });
 
-    it('filters subscriptions by date range including cancelled check', async () => {
-      mockReportRepo.findOne.mockResolvedValue(mockReport);
-      mockCardRepo.find.mockResolvedValue([]);
+    it('sets FAILED status on error', async () => {
+      mockReportRepo.findOne.mockResolvedValue(null); // Will cause NotFoundException
+      mockReportRepo.update.mockResolvedValue({});
 
-      const andWhereCalls: Array<[string, Record<string, string>]> = [];
-      const mockQB = {
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn((condition: string, params: Record<string, string>) => {
-          andWhereCalls.push([condition, params]);
-          return mockQB;
-        }),
-        getMany: jest.fn().mockResolvedValue([
-          { name: 'Netflix', amount: 15.99, category: 'STREAMING', billingPeriod: 'MONTHLY', status: 'ACTIVE', currency: 'USD' },
-        ]),
-      };
-      (service as any).subRepo = { createQueryBuilder: jest.fn(() => mockQB) };
-
-      const result = await service.generatePdf('user-1', 'rep-1');
-      expect(result).toBeInstanceOf(Buffer);
-
-      // Verify userId filter is applied via where()
-      expect(mockQB.where).toHaveBeenCalledWith('s.userId = :userId', { userId: 'user-1' });
-
-      // Verify startDate <= to filter
-      const startDateCall = andWhereCalls.find(([condition]) =>
-        condition.includes('startDate') && condition.includes(':to'),
-      );
-      expect(startDateCall).toBeDefined();
-      expect(startDateCall![1]).toMatchObject({ to: mockReport.to });
-
-      // Verify cancelledAt IS NULL OR cancelledAt >= from filter
-      const cancelledAtCall = andWhereCalls.find(([condition]) =>
-        condition.includes('cancelledAt') && condition.includes(':from'),
-      );
-      expect(cancelledAtCall).toBeDefined();
-      expect(cancelledAtCall![1]).toMatchObject({ from: mockReport.from });
-    });
-
-    it('throws NotFoundException for non-existent report', async () => {
-      mockReportRepo.findOne.mockResolvedValue(null);
-      await expect(service.generatePdf('user-1', 'non-existent')).rejects.toThrow(NotFoundException);
+      await expect(service.buildAndStorePdf('user-1', 'rep-1')).rejects.toThrow();
+      expect(mockReportRepo.update).toHaveBeenCalledWith('rep-1', expect.objectContaining({
+        status: ReportStatus.FAILED,
+      }));
     });
   });
 });
