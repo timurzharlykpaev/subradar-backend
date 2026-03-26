@@ -4,12 +4,14 @@ import type { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
 import { Resend } from 'resend';
+import Expo, { ExpoPushMessage } from 'expo-server-sdk';
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
   private readonly resend: Resend | null = null;
   private readonly fromEmail: string;
+  private readonly expo = new Expo();
 
   constructor(
     @InjectQueue('notifications') private readonly queue: Queue,
@@ -60,15 +62,41 @@ export class NotificationsService {
   }
 
   async sendPushNotification(
-    fcmToken: string,
+    token: string,
     title: string,
     body: string,
     data?: Record<string, string>,
   ) {
-    if (!admin.apps.length) return;
+    // Route by token type
+    if (Expo.isExpoPushToken(token)) {
+      // Expo Push Token: "ExponentPushToken[xxx]"
+      const message: ExpoPushMessage = {
+        to: token,
+        title,
+        body,
+        data: data ?? {},
+        sound: 'default',
+        priority: 'high',
+      };
+      const chunks = this.expo.chunkPushNotifications([message]);
+      for (const chunk of chunks) {
+        try {
+          const receipts = await this.expo.sendPushNotificationsAsync(chunk);
+          this.logger.log(`Expo push sent: ${JSON.stringify(receipts)}`);
+        } catch (e) {
+          this.logger.error(`Expo push failed: ${e}`);
+        }
+      }
+      return;
+    }
 
+    // Firebase FCM / APNs native token (legacy)
+    if (!admin.apps.length) {
+      this.logger.warn('Firebase not initialized, skipping push');
+      return;
+    }
     return admin.messaging().send({
-      token: fcmToken,
+      token,
       notification: { title, body },
       data,
     });
