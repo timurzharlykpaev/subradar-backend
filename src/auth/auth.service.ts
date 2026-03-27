@@ -293,8 +293,8 @@ export class AuthService {
   async sendOtp(dto: OtpSendDto) {
     // Demo/reviewer account — fixed OTP, no email sent (non-production only)
     const DEMO_EMAILS = ['reviewer@subradar.ai', 'demo@subradar.ai'];
-    const isProduction = process.env.NODE_ENV === 'production';
-    if (!isProduction && DEMO_EMAILS.includes(dto.email.toLowerCase())) {
+    const allowDemo = process.env.NODE_ENV !== 'production' || process.env.ALLOW_DEMO_ACCOUNTS === 'true';
+    if (allowDemo && DEMO_EMAILS.includes(dto.email.toLowerCase())) {
       await this.redis.set(`otp:${dto.email}`, '123456', 'EX', 86400); // 24h TTL
       return { message: 'OTP sent' };
     }
