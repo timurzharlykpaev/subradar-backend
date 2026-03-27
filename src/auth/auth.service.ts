@@ -38,12 +38,23 @@ export class AuthService {
 
   private generateTokens(user: User) {
     const payload = { sub: user.id, email: user.email };
+
+    const jwtSecret = this.cfg.get('JWT_SECRET');
+    if (!jwtSecret && process.env.NODE_ENV === 'production') {
+      throw new Error('JWT_SECRET must be set in production');
+    }
+
+    const jwtRefreshSecret = this.cfg.get('JWT_REFRESH_SECRET');
+    if (!jwtRefreshSecret && process.env.NODE_ENV === 'production') {
+      throw new Error('JWT_REFRESH_SECRET must be set in production');
+    }
+
     const accessToken = this.jwtService.sign(payload, {
-      secret: this.cfg.get('JWT_SECRET', 'secret'),
+      secret: jwtSecret || 'secret',
       expiresIn: this.cfg.get('JWT_EXPIRES_IN', '7d'),
     });
     const refreshToken = this.jwtService.sign(payload, {
-      secret: this.cfg.get('JWT_REFRESH_SECRET', 'refresh-secret'),
+      secret: jwtRefreshSecret || 'refresh-secret',
       expiresIn: this.cfg.get('JWT_REFRESH_EXPIRES_IN', '30d'),
     });
     return { accessToken, refreshToken };
@@ -133,10 +144,15 @@ export class AuthService {
       });
     }
 
+    const magicLinkSecret = this.cfg.get('MAGIC_LINK_SECRET');
+    if (!magicLinkSecret && process.env.NODE_ENV === 'production') {
+      throw new Error('MAGIC_LINK_SECRET must be set in production');
+    }
+
     const token = this.jwtService.sign(
       { sub: user.id, email: user.email, type: 'magic-link' },
       {
-        secret: this.cfg.get('MAGIC_LINK_SECRET', 'magic-secret'),
+        secret: magicLinkSecret || 'magic-secret',
         expiresIn: '15m',
       },
     );
@@ -178,7 +194,7 @@ export class AuthService {
     let payload: any;
     try {
       payload = this.jwtService.verify(token, {
-        secret: this.cfg.get('MAGIC_LINK_SECRET', 'magic-secret'),
+        secret: this.cfg.get('MAGIC_LINK_SECRET') || 'magic-secret',
       });
     } catch {
       throw new UnauthorizedException('Invalid or expired magic link');
@@ -204,15 +220,16 @@ export class AuthService {
     let payload: any;
     try {
       payload = this.jwtService.verify(token, {
-        secret: this.cfg.get('JWT_REFRESH_SECRET', 'refresh-secret'),
+        secret: this.cfg.get('JWT_REFRESH_SECRET') || 'refresh-secret',
       });
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
     const user = await this.usersService.findById(payload.sub);
-    if (user.refreshToken !== token)
-      throw new UnauthorizedException('Refresh token revoked');
+    if (!user.refreshToken) throw new UnauthorizedException('Refresh token revoked');
+    const valid = await bcrypt.compare(token, user.refreshToken);
+    if (!valid) throw new UnauthorizedException('Refresh token revoked');
 
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
@@ -274,9 +291,10 @@ export class AuthService {
   }
 
   async sendOtp(dto: OtpSendDto) {
-    // Demo/reviewer account — fixed OTP, no email sent
+    // Demo/reviewer account — fixed OTP, no email sent (non-production only)
     const DEMO_EMAILS = ['reviewer@subradar.ai', 'demo@subradar.ai'];
-    if (DEMO_EMAILS.includes(dto.email.toLowerCase())) {
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (!isProduction && DEMO_EMAILS.includes(dto.email.toLowerCase())) {
       await this.redis.set(`otp:${dto.email}`, '123456', 'EX', 86400); // 24h TTL
       return { message: 'OTP sent' };
     }

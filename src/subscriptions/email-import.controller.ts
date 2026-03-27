@@ -33,6 +33,12 @@ export class EmailImportController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Process inbound forwarded email for subscription import' })
   async handleInbound(@Body() payload: InboundEmail, @Headers('x-import-token') token: string) {
+    const expectedToken = process.env.EMAIL_IMPORT_TOKEN;
+    if (!expectedToken || token !== expectedToken) {
+      this.logger.warn('Email import: invalid or missing x-import-token');
+      return { ok: false, reason: 'invalid_token' };
+    }
+
     const to = payload.To ?? '';
     // Extract userId from address: import+{userId}@subradar.ai
     const match = to.match(/import\+([a-zA-Z0-9-]+)@/);
@@ -65,7 +71,9 @@ export class EmailImportController {
     // Use AI to parse subscription details from the email text
     let parsed: any;
     try {
-      parsed = await this.aiService.parseEmailText(combined);
+      const result = await this.aiService.parseBulkSubscriptions(combined, 'en');
+      // parseBulkSubscriptions returns an array or a single object
+      parsed = Array.isArray(result) ? result[0] : result;
     } catch (e) {
       this.logger.error(`Email import AI parse failed: ${e}`);
       return { ok: false, reason: 'ai_parse_failed' };

@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { UsersService } from '../users/users.service';
 import { PLANS, PLAN_DETAILS } from './plans.config';
 
@@ -51,7 +51,10 @@ export class BillingService {
   verifyWebhookSignature(payload: string, signature: string): boolean {
     const hmac = createHmac('sha256', this.webhookSecret);
     const digest = hmac.update(payload).digest('hex');
-    return digest === signature;
+    const digestBuf = Buffer.from(digest);
+    const signatureBuf = Buffer.from(signature);
+    if (digestBuf.length !== signatureBuf.length) return false;
+    return timingSafeEqual(digestBuf, signatureBuf);
   }
 
   async handleWebhook(event: string, data: any) {

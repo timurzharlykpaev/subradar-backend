@@ -13,7 +13,7 @@ import {
 import { PLANS } from '../../billing/plans.config';
 
 export const PLAN_LIMITS = {
-  free: { maxSubscriptions: 5, maxAiRequests: 10 },
+  free: { maxSubscriptions: 3, maxAiRequests: 5 },
   pro: { maxSubscriptions: Infinity, maxAiRequests: 200 },
   organization: { maxSubscriptions: Infinity, maxAiRequests: Infinity },
 };

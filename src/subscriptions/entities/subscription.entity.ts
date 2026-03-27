@@ -54,6 +54,9 @@ export enum AddedVia {
 }
 
 @Entity('subscriptions')
+@Index(['userId', 'status'])
+@Index(['userId', 'category'])
+@Index(['userId', 'createdAt'])
 export class Subscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;

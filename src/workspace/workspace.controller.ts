@@ -7,6 +7,7 @@ import {
   Param,
   UseGuards,
   Request,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -39,8 +40,15 @@ export class WorkspaceController {
   }
 
   @Get(':id')
-  findById(@Param('id') id: string) {
-    return this.service.findById(id);
+  async findById(@Param('id') id: string, @Request() req) {
+    const workspace = await this.service.findById(id);
+    const isMember = workspace.members?.some(
+      (m) => m.userId === req.user.id,
+    );
+    if (workspace.ownerId !== req.user.id && !isMember) {
+      throw new ForbiddenException('You are not a member of this workspace');
+    }
+    return workspace;
   }
 
   @Post(':id/invite')

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { User } from './entities/user.entity';
 
 @Injectable()
@@ -64,7 +65,8 @@ export class UsersService {
   }
 
   async updateRefreshToken(id: string, token: string | null): Promise<void> {
-    await this.repo.update(id, { refreshToken: token ?? undefined });
+    const hashed = token ? await bcrypt.hash(token, 10) : undefined;
+    await this.repo.update(id, { refreshToken: hashed });
   }
 
   async updatePreferences(

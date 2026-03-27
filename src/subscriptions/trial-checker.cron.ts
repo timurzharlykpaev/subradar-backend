@@ -84,4 +84,37 @@ export class TrialCheckerCron {
 
     this.logger.log(`Trial check complete. Processed ${trials.length} trials.`);
   }
+
+  /**
+   * Auto-downgrade users whose Pro trial has expired.
+   * Runs daily at midnight: find users with plan='pro', trialEndDate < now,
+   * and downgrade them back to 'free'.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async downgradeExpiredTrials() {
+    this.logger.log('Checking for expired Pro trials to downgrade...');
+
+    const now = new Date();
+    const expiredUsers = await this.userRepo
+      .createQueryBuilder('u')
+      .where('u.plan = :plan', { plan: 'pro' })
+      .andWhere('u.trialUsed = true')
+      .andWhere('u.trialEndDate IS NOT NULL')
+      .andWhere('u.trialEndDate < :now', { now })
+      .andWhere('u.lemonSqueezyCustomerId IS NULL') // not a paying customer
+      .getMany();
+
+    let downgraded = 0;
+    for (const user of expiredUsers) {
+      try {
+        await this.userRepo.update(user.id, { plan: 'free' });
+        downgraded++;
+        this.logger.log(`Downgraded user ${user.email} (${user.id}) from pro trial to free`);
+      } catch (err) {
+        this.logger.error(`Failed to downgrade user ${user.id}: ${err.message}`);
+      }
+    }
+
+    this.logger.log(`Trial downgrade complete. Downgraded ${downgraded}/${expiredUsers.length} users.`);
+  }
 }

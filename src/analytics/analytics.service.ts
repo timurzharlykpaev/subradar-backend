@@ -112,31 +112,36 @@ export class AnalyticsService {
   }
 
   async getMonthly(userId: string, months = 12) {
+    const now = new Date();
+
+    // Load all active/trial subscriptions once (fixes N+1)
+    const allSubs = await this.subRepo
+      .createQueryBuilder('s')
+      .where('s.userId = :userId', { userId })
+      .andWhere('s.status IN (:...statuses)', {
+        statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
+      })
+      .getMany();
+
     const result: Array<{
       month: number;
       year: number;
       label: string;
       total: number;
     }> = [];
-    const now = new Date();
 
     for (let i = months - 1; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const month = d.getMonth() + 1;
       const year = d.getFullYear();
+      const endOfMonth = new Date(year, month, 0);
 
-      const subs = await this.subRepo
-        .createQueryBuilder('s')
-        .where('s.userId = :userId', { userId })
-        .andWhere('s.status IN (:...statuses)', {
-          statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
-        })
-        .andWhere('(s.startDate IS NULL OR s.startDate <= :endOfMonth)', {
-          endOfMonth: new Date(year, month, 0),
-        })
-        .getMany();
+      // Filter in application code instead of querying DB per month
+      const monthSubs = allSubs.filter(
+        (s) => !s.startDate || new Date(s.startDate) <= endOfMonth,
+      );
 
-      const total = subs.reduce(
+      const total = monthSubs.reduce(
         (sum, s) =>
           sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
         0,

@@ -96,10 +96,20 @@ export class SubscriptionsService implements OnModuleInit {
     try {
       const patterns = [`ai:*${userId}*`, `analytics:*${userId}*`];
       for (const pattern of patterns) {
-        const keys = await this.redis.keys(pattern);
-        if (keys.length > 0) {
-          await this.redis.del(...keys);
-        }
+        let cursor = '0';
+        do {
+          const [nextCursor, keys] = await this.redis.scan(
+            cursor,
+            'MATCH',
+            pattern,
+            'COUNT',
+            100,
+          );
+          cursor = nextCursor;
+          if (keys.length > 0) {
+            await this.redis.del(...keys);
+          }
+        } while (cursor !== '0');
       }
     } catch {
       this.logger.warn('Failed to invalidate analytics cache');
