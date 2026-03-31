@@ -144,12 +144,24 @@ export class BillingService {
         break;
       }
       case 'CANCELLATION': {
-        this.logger.log(`RevenueCat: CANCELLATION — user ${appUserId}`);
+        // Mark as cancelled but keep plan active until period end
+        const expiresAtRaw = event.expiration_at_ms || event.expiration_at;
+        const expiresAt = expiresAtRaw
+          ? new Date(typeof expiresAtRaw === 'number' ? expiresAtRaw : Number(expiresAtRaw))
+          : null;
+        user.cancelAtPeriodEnd = true;
+        if (expiresAt && !isNaN(expiresAt.getTime())) {
+          user.currentPeriodEnd = expiresAt;
+        }
+        await this.usersService.save(user);
+        this.logger.log(`RevenueCat: CANCELLATION — user ${appUserId}, access until ${expiresAt?.toISOString() ?? 'unknown'}`);
         break;
       }
       case 'EXPIRATION': {
         user.plan = 'free';
         user.billingSource = null as any;
+        user.cancelAtPeriodEnd = false;
+        user.currentPeriodEnd = null as any;
         await this.usersService.save(user);
         this.logger.log(`RevenueCat: EXPIRATION — user ${appUserId} → free`);
         break;
@@ -334,9 +346,14 @@ export class BillingService {
     let trialDaysLeft: number | null = null;
     let status: 'active' | 'cancelled' | 'trialing' = 'active';
 
+    // If cancelled via RC webhook — mark as cancelled (but still active until period end)
+    if (user.cancelAtPeriodEnd) {
+      status = 'cancelled';
+    }
+
     // If user has a paid subscription via RevenueCat, they are always 'active'
     // regardless of any backend trial state (trial was superseded by real purchase)
-    if (user.billingSource !== 'revenuecat' && user.trialEndDate) {
+    if (!user.cancelAtPeriodEnd && user.billingSource !== 'revenuecat' && user.trialEndDate) {
       const now = Date.now();
       const end = new Date(user.trialEndDate).getTime();
       if (end > now) {
@@ -345,11 +362,14 @@ export class BillingService {
       }
     }
 
+    // Effective period end: prefer RC currentPeriodEnd, fallback to trialEndDate
+    const periodEnd = user.currentPeriodEnd ?? user.trialEndDate ?? null;
+
     return {
       plan: user.plan,
       status,
-      currentPeriodEnd: user.trialEndDate?.toISOString() ?? null,
-      cancelAtPeriodEnd: false,
+      currentPeriodEnd: periodEnd?.toISOString() ?? null,
+      cancelAtPeriodEnd: user.cancelAtPeriodEnd ?? false,
       trialUsed: user.trialUsed,
       trialDaysLeft,
       subscriptionCount,
@@ -374,11 +394,21 @@ export class BillingService {
       return;
     }
 
-    // Cancel paid subscription: downgrade to free
+    // Cancel RC subscription: mark cancelAtPeriodEnd, RC will send EXPIRATION when period ends
+    if (user.plan !== 'free' && user.billingSource === 'revenuecat') {
+      await this.usersService.update(userId, {
+        cancelAtPeriodEnd: true,
+      });
+      this.logger.log(`cancelSubscription: RC subscription marked cancel-at-period-end for user ${userId}`);
+      return;
+    }
+
+    // Cancel non-RC paid subscription: downgrade to free immediately
     if (user.plan !== 'free') {
       await this.usersService.update(userId, {
         plan: 'free',
         billingSource: undefined as any,
+        cancelAtPeriodEnd: false,
       });
       this.logger.log(`cancelSubscription: plan cancelled for user ${userId}`);
       return;

@@ -113,6 +113,12 @@ export class User {
   @Column({ nullable: true })
   billingSource: string;
 
+  @Column({ default: false })
+  cancelAtPeriodEnd: boolean;
+
+  @Column({ nullable: true, type: 'timestamp' })
+  currentPeriodEnd: Date;
+
   @CreateDateColumn()
   createdAt: Date;
 
