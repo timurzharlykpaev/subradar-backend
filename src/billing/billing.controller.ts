@@ -176,7 +176,10 @@ export class BillingController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Post('cancel')
-  cancelBilling() {
-    return { message: 'Cancellation requested' };
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  async cancelBilling(@Request() req) {
+    await this.billingService.cancelSubscription(req.user.id);
+    return { message: 'Subscription cancelled' };
   }
 }

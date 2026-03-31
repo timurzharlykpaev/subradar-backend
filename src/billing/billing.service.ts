@@ -359,4 +359,32 @@ export class BillingService {
       proInviteeEmail: user.proInviteeEmail ?? null,
     };
   }
+
+  async cancelSubscription(userId: string): Promise<void> {
+    const user = await this.usersService.findById(userId);
+
+    // Cancel trial: clear trial dates, reset plan to free
+    if (user.trialEndDate && new Date(user.trialEndDate) > new Date()) {
+      await this.usersService.update(userId, {
+        plan: 'free',
+        trialEndDate: undefined as any,
+        billingSource: undefined as any,
+      });
+      this.logger.log(`cancelSubscription: trial cancelled for user ${userId}`);
+      return;
+    }
+
+    // Cancel paid subscription: downgrade to free
+    if (user.plan !== 'free') {
+      await this.usersService.update(userId, {
+        plan: 'free',
+        billingSource: undefined as any,
+      });
+      this.logger.log(`cancelSubscription: plan cancelled for user ${userId}`);
+      return;
+    }
+
+    // Already free — nothing to cancel
+    this.logger.warn(`cancelSubscription: user ${userId} already on free plan`);
+  }
 }
