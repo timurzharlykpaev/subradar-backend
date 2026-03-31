@@ -18,6 +18,8 @@ export class TrialCheckerCron {
     private readonly notifications: NotificationsService,
   ) {}
 
+  // ── Subscription trial reminders (1d, 3d before end) ──────────────────────
+
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
   async checkExpiringTrials() {
     this.logger.log('Checking for expiring trials...');
@@ -85,36 +87,179 @@ export class TrialCheckerCron {
     this.logger.log(`Trial check complete. Processed ${trials.length} trials.`);
   }
 
+  // ── Pro trial: warn 1 day before expiry ──────────────────────────────────
+
+  @Cron(CronExpression.EVERY_DAY_AT_9AM)
+  async warnExpiringProTrials() {
+    this.logger.log('Checking for expiring Pro trials (1-day warning)...');
+
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const dayAfter = new Date();
+    dayAfter.setDate(dayAfter.getDate() + 2);
+
+    // Users on our backend trial expiring in ~1 day, not yet RC subscribers
+    const expiringUsers = await this.userRepo
+      .createQueryBuilder('u')
+      .where('u.plan = :plan', { plan: 'pro' })
+      .andWhere('u.trialUsed = true')
+      .andWhere('u.trialEndDate IS NOT NULL')
+      .andWhere('u.trialEndDate >= :tomorrow', { tomorrow })
+      .andWhere('u.trialEndDate < :dayAfter', { dayAfter })
+      .andWhere('u.billingSource IS NULL')  // not yet paid via RC/LS
+      .getMany();
+
+    for (const user of expiringUsers) {
+      try {
+        const title = '⏰ Your SubRadar trial ends tomorrow';
+        const body = 'Subscribe now to keep unlimited access to all features.';
+
+        if (user.fcmToken) {
+          await this.notifications.sendPushNotification(
+            user.fcmToken,
+            title,
+            body,
+            { type: 'pro_trial_expiring', screen: 'paywall' },
+          );
+        }
+
+        await this.notifications.sendUpcomingPaymentEmail(
+          user.email,
+          'SubRadar Pro',
+          2.99,
+          'USD',
+          1,
+          new Date(user.trialEndDate).toLocaleDateString('ru-RU'),
+          'https://app.subradar.ai',
+        );
+
+        this.logger.log(`Sent Pro trial expiry warning to ${user.email}`);
+      } catch (err) {
+        this.logger.error(`Failed to send Pro trial warning to ${user.email}: ${err.message}`);
+      }
+    }
+  }
+
+  // ── Pro trial: downgrade expired users + notify ──────────────────────────
+
   /**
    * Auto-downgrade users whose Pro trial has expired.
-   * Runs daily at midnight: find users with plan='pro', trialEndDate < now,
-   * and downgrade them back to 'free'.
+   * Runs daily at midnight.
+   * - Skip users with active RC/LS billing (they paid already)
+   * - Send push + email notification about downgrade
    */
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async downgradeExpiredTrials() {
     this.logger.log('Checking for expired Pro trials to downgrade...');
 
     const now = new Date();
+
     const expiredUsers = await this.userRepo
       .createQueryBuilder('u')
       .where('u.plan = :plan', { plan: 'pro' })
       .andWhere('u.trialUsed = true')
       .andWhere('u.trialEndDate IS NOT NULL')
       .andWhere('u.trialEndDate < :now', { now })
-      .andWhere('u.lemonSqueezyCustomerId IS NULL') // not a paying customer
+      .andWhere('u.billingSource IS NULL')          // not paying via RC or LS
+      .andWhere('u.lemonSqueezyCustomerId IS NULL') // not a LS customer
       .getMany();
 
     let downgraded = 0;
     for (const user of expiredUsers) {
       try {
-        await this.userRepo.update(user.id, { plan: 'free' });
+        await this.userRepo.update(user.id, {
+          plan: 'free',
+          trialEndDate: undefined as any,
+        });
         downgraded++;
         this.logger.log(`Downgraded user ${user.email} (${user.id}) from pro trial to free`);
+
+        // Notify user about downgrade
+        await this.sendTrialExpiredNotification(user);
       } catch (err) {
         this.logger.error(`Failed to downgrade user ${user.id}: ${err.message}`);
       }
     }
 
     this.logger.log(`Trial downgrade complete. Downgraded ${downgraded}/${expiredUsers.length} users.`);
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  private async sendTrialExpiredNotification(user: User): Promise<void> {
+    try {
+      const title = '🔓 Your free trial has ended';
+      const body = 'Subscribe to SubRadar Pro to restore unlimited access.';
+
+      if (user.fcmToken) {
+        await this.notifications.sendPushNotification(
+          user.fcmToken,
+          title,
+          body,
+          { type: 'pro_trial_expired', screen: 'paywall' },
+        );
+      }
+
+      const html = `
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#0f0f1a;font-family:'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f1a;padding:40px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+        <tr><td align="center" style="padding-bottom:32px;">
+          <span style="font-size:28px;font-weight:800;color:#fff;letter-spacing:-0.5px;">
+            Sub<span style="color:#8B5CF6;">Radar</span>
+          </span>
+        </td></tr>
+        <tr><td style="background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:16px;border:1px solid rgba(139,92,246,0.3);padding:40px;">
+          <p style="margin:0 0 8px;font-size:13px;color:#8B5CF6;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Пробный период завершён</p>
+          <h1 style="margin:0 0 16px;font-size:22px;color:#fff;font-weight:700;">Ваш 7-дневный пробный период истёк</h1>
+          <p style="margin:0 0 24px;color:#a0a0b8;font-size:15px;line-height:1.6;">
+            Ваш план был переведён на <strong style="color:#fff;">Free</strong>.<br/>
+            Оформите подписку <strong style="color:#8B5CF6;">SubRadar Pro</strong> чтобы вернуть неограниченный доступ.
+          </p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+            <tr><td style="background:rgba(139,92,246,0.1);border-radius:12px;border:1px solid rgba(139,92,246,0.2);padding:20px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="color:#a0a0b8;font-size:13px;padding-bottom:8px;">Free план</td>
+                  <td align="right" style="color:#fff;font-size:13px;font-weight:600;padding-bottom:8px;">3 подписки, 5 AI запросов</td>
+                </tr>
+                <tr>
+                  <td style="color:#a0a0b8;font-size:13px;">Pro план</td>
+                  <td align="right" style="color:#8B5CF6;font-size:13px;font-weight:700;">∞ подписок, 200 AI запросов</td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr><td align="center">
+              <a href="https://app.subradar.ai/paywall" style="display:inline-block;background:linear-gradient(135deg,#8B5CF6,#6D28D9);color:#fff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 36px;border-radius:10px;">
+                Оформить подписку →
+              </a>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td align="center" style="padding-top:24px;">
+          <p style="margin:0;font-size:12px;color:#4a4a6a;">SubRadar AI · <a href="https://app.subradar.ai" style="color:#6D28D9;text-decoration:none;">app.subradar.ai</a></p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+      await this.notifications.sendEmail(
+        user.email,
+        '⏰ SubRadar: Пробный период завершён',
+        html,
+      );
+
+      this.logger.log(`Sent trial expired notification to ${user.email}`);
+    } catch (err) {
+      this.logger.warn(`Failed to send trial expired notification to ${user.email}: ${err.message}`);
+    }
   }
 }
