@@ -39,9 +39,10 @@ export class AuthService {
   private generateTokens(user: User) {
     const payload = { sub: user.id, email: user.email };
 
-    const jwtSecret = this.cfg.get('JWT_SECRET');
+    // Support both JWT_ACCESS_SECRET (new) and JWT_SECRET (legacy) env var names
+    const jwtSecret = this.cfg.get('JWT_ACCESS_SECRET') || this.cfg.get('JWT_SECRET');
     if (!jwtSecret && process.env.NODE_ENV === 'production') {
-      throw new Error('JWT_SECRET must be set in production');
+      throw new Error('JWT_ACCESS_SECRET must be set in production');
     }
 
     const jwtRefreshSecret = this.cfg.get('JWT_REFRESH_SECRET');
