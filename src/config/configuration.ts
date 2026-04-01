@@ -20,7 +20,7 @@ export default () => ({
   },
 
   jwt: {
-    secret: process.env.JWT_SECRET || 'jwt-secret-change-me',
+    secret: process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'jwt-secret-change-me',
     refreshSecret:
       process.env.JWT_REFRESH_SECRET || 'jwt-refresh-secret-change-me',
     expiresIn: process.env.JWT_EXPIRES_IN || '15m',

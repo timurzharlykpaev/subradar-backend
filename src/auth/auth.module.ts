@@ -17,7 +17,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (cfg: ConfigService) => ({
-        secret: cfg.get('JWT_SECRET', 'secret'),
+        secret: cfg.get('JWT_ACCESS_SECRET') || cfg.get('JWT_SECRET', 'secret'),
         signOptions: { expiresIn: cfg.get('JWT_EXPIRES_IN', '7d') },
       }),
       inject: [ConfigService],
