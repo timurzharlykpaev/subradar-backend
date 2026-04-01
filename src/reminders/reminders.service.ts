@@ -71,6 +71,7 @@ export class RemindersService {
             daysLeft,
             dateStr,
             'https://app.subradar.ai',
+            (user as any).locale ?? 'ru',
           );
         }
 
