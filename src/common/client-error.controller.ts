@@ -1,6 +1,7 @@
 import { Controller, Post, Body, Logger, HttpCode } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { IsString, IsOptional, MaxLength } from 'class-validator';
+import { TelegramAlertService } from './telegram-alert.service';
 
 class ClientErrorDto {
   @IsString()
@@ -20,7 +21,7 @@ class ClientErrorDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
-  platform?: string; // 'web' | 'mobile-ios' | 'mobile-android' | 'ios vX.X' etc.
+  platform?: string;
 
   @IsOptional()
   @IsString()
@@ -43,9 +44,11 @@ class ClientErrorDto {
 export class ClientErrorController {
   private readonly logger = new Logger('ClientError');
 
+  constructor(private readonly tg: TelegramAlertService) {}
+
   @Post('client-error')
   @HttpCode(204)
-  report(@Body() dto: ClientErrorDto) {
+  async report(@Body() dto: ClientErrorDto) {
     const platform = dto.platform ?? 'unknown';
     const isMobile = platform.toLowerCase().includes('ios')
       || platform.toLowerCase().includes('android')
@@ -57,6 +60,18 @@ export class ClientErrorController {
       `${emoji} Client Error [${tag}] platform=${platform} ${dto.url ?? dto.context ?? ''}: ${dto.message}`,
       dto.stack ?? '',
     );
+
+    // Forward to Telegram
+    const truncatedStack = dto.stack ? '\n\n<code>' + dto.stack.slice(0, 800) + '</code>' : '';
+    const msg =
+      `${emoji} <b>Runtime Error [${tag}]</b>\n` +
+      `Platform: <code>${platform}</code>\n` +
+      (dto.version ? `Version: <code>${dto.version}</code>\n` : '') +
+      (dto.url ? `URL: <code>${dto.url}</code>\n` : '') +
+      `\n<b>${dto.message}</b>` +
+      truncatedStack;
+
+    await this.tg.send(msg, dto.message);
     return;
   }
 }

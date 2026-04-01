@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { ClientErrorController } from './common/client-error.controller';
+import { TelegramAlertService } from './common/telegram-alert.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -89,6 +90,8 @@ import { RemindersModule } from './reminders/reminders.module';
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard }, // global rate limiting
+    TelegramAlertService,
   ],
+  exports: [TelegramAlertService],
 })
 export class AppModule {}
