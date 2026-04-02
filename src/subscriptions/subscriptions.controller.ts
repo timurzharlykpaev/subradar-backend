@@ -53,8 +53,9 @@ export class SubscriptionsController {
         used: activeCount,
         max: limits.maxSubscriptions === Infinity ? null : limits.maxSubscriptions,
         limitReached:
+          limits.maxSubscriptions !== null &&
           limits.maxSubscriptions !== Infinity &&
-          activeCount >= limits.maxSubscriptions,
+          activeCount >= (limits.maxSubscriptions ?? Infinity),
       },
       ai: {
         max: limits.maxAiRequests === Infinity ? null : limits.maxAiRequests,
