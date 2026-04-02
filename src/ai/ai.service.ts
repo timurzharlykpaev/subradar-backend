@@ -480,9 +480,31 @@ LANGUAGE: Always write the "question" field in the user's language. User locale 
         const webResult = await this.wizardWithWebSearch(message, systemMsg.content, locale);
         if (webResult) return webResult;
       }
+      // Ensure iconUrl is always set for completed responses
+      if (result.done === true) {
+        this.ensureIconUrl(result.subscription ?? result);
+        if (result.plans) { this.ensureIconUrl(result); }
+      }
       return result;
     }
     try { return JSON.parse(String(result)); } catch { return { done: false, question: locale.startsWith('ru') ? 'Какой это сервис?' : 'What service is this?', field: 'name', partialContext: {} }; }
+  }
+
+  /** Ensure iconUrl is set on any object that has serviceUrl or name */
+  private ensureIconUrl(obj: any): void {
+    if (!obj || typeof obj !== 'object') return;
+    if (obj.iconUrl) return; // already set
+    if (obj.serviceUrl) {
+      try {
+        const hostname = new URL(obj.serviceUrl).hostname.replace(/^www\./, '');
+        obj.iconUrl = `https://icon.horse/icon/${hostname}`;
+        return;
+      } catch {}
+    }
+    if (obj.serviceName || obj.name) {
+      const name = (obj.serviceName || obj.name || '').toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '');
+      if (name) obj.iconUrl = `https://icon.horse/icon/${name}.com`;
+    }
   }
 
   private async wizardWithWebSearch(
