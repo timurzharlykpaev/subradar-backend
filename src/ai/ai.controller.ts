@@ -40,6 +40,8 @@ class SuggestCancelDto {
 class ParseTextDto {
   @IsString() text: string;
   @IsOptional() @IsString() locale?: string;
+  @IsOptional() @IsString() currency?: string;
+  @IsOptional() @IsString() country?: string;
 }
 
 @ApiTags('ai')
@@ -161,7 +163,7 @@ export class AiController {
   @Post('parse-bulk')
   async parseBulk(@Request() req, @Body() dto: ParseTextDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    const result = await this.aiService.parseBulkSubscriptions(dto.text, dto.locale ?? 'ru');
+    const result = await this.aiService.parseBulkSubscriptions(dto.text, dto.locale ?? 'ru', dto.currency, dto.country);
     const subscriptions = Array.isArray(result) ? result : (result ? [result] : []);
     return { subscriptions, text: dto.text };
   }
