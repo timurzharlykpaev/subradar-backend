@@ -230,34 +230,37 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
     const countryHint = country ? `User's country: ${country}. Use real regional pricing for this country when the user doesn't specify a price.` : '';
     const localeHint = `Locale: ${locale}.`;
 
-    return this.chat([
+    const result = await this.chat([
       {
         role: 'system',
         content: `You are a bulk subscription extractor. The user describes one or more subscriptions in free text or voice transcription. Extract ALL subscriptions mentioned.
 
-Return a strict JSON array (NEVER an object, NEVER wrap in { subscriptions: [...] }):
-[
-  {
-    "name": string,
-    "amount": number,
-    "currency": "${currency || 'USD'}",
-    "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY",
-    "category": "STREAMING"|"AI_SERVICES"|"INFRASTRUCTURE"|"PRODUCTIVITY"|"MUSIC"|"GAMING"|"NEWS"|"HEALTH"|"DEVELOPER"|"EDUCATION"|"FINANCE"|"DESIGN"|"SECURITY"|"SPORT"|"BUSINESS"|"OTHER",
-    "serviceUrl": string|null,
-    "cancelUrl": string|null,
-    "iconUrl": "https://icon.horse/icon/{domain}"
-  }
-]
+Return JSON object with "subscriptions" key containing an array:
+{
+  "subscriptions": [
+    {
+      "name": string,
+      "amount": number,
+      "currency": "${currency || 'USD'}",
+      "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY",
+      "category": "STREAMING"|"AI_SERVICES"|"INFRASTRUCTURE"|"PRODUCTIVITY"|"MUSIC"|"GAMING"|"NEWS"|"HEALTH"|"DEVELOPER"|"EDUCATION"|"FINANCE"|"DESIGN"|"SECURITY"|"SPORT"|"BUSINESS"|"OTHER",
+      "serviceUrl": string|null,
+      "cancelUrl": string|null,
+      "iconUrl": "https://icon.horse/icon/{domain}"
+    }
+  ]
+}
 
 Rules:
-1) ALWAYS return a JSON array, even for 1 item.
-2) Include iconUrl using icon.horse with the real service domain (e.g. netflix.com, spotify.com).
-3) Use REAL current prices for the user's region. If the user says a price — use that price.
-4) If no price mentioned — use the REAL price for the most popular plan in the user's country/currency.
-5) If the user mentions yearly/annual — set billingPeriod to YEARLY. If monthly — MONTHLY. Default: MONTHLY.
-6) Include cancelUrl if you know it (e.g. https://www.netflix.com/cancelplan).
-7) Include serviceUrl (e.g. https://www.netflix.com).
-8) Map category accurately. AI tools = AI_SERVICES, dev tools = DEVELOPER, cloud/hosting = INFRASTRUCTURE.
+1) ALWAYS return {"subscriptions": [...]}, even for 1 item.
+2) Extract EVERY service mentioned. If user says "Netflix, Spotify, iCloud" — return 3 items.
+3) Include iconUrl using icon.horse with the real service domain (e.g. netflix.com, spotify.com).
+4) Use REAL current prices for the user's region. If the user says a price — use that price.
+5) If no price mentioned — use the REAL price for the most popular plan in the user's country/currency.
+6) If the user mentions yearly/annual — set billingPeriod to YEARLY. If monthly — MONTHLY. Default: MONTHLY.
+7) Include cancelUrl if you know it (e.g. https://www.netflix.com/cancelplan).
+8) Include serviceUrl (e.g. https://www.netflix.com).
+9) Map category accurately. AI tools = AI_SERVICES, dev tools = DEVELOPER, cloud/hosting = INFRASTRUCTURE.
 ${currencyHint}
 ${countryHint}
 ${localeHint}`,
@@ -267,6 +270,12 @@ ${localeHint}`,
         content: text.slice(0, 4000),
       },
     ]);
+
+    // Normalize: always return array
+    if (Array.isArray(result)) return result;
+    if (Array.isArray(result?.subscriptions)) return result.subscriptions;
+    if (result?.name) return [result];
+    return [];
   }
 
   /**

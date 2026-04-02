@@ -163,8 +163,7 @@ export class AiController {
   @Post('parse-bulk')
   async parseBulk(@Request() req, @Body() dto: ParseTextDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    const result = await this.aiService.parseBulkSubscriptions(dto.text, dto.locale ?? 'ru', dto.currency, dto.country);
-    const subscriptions = Array.isArray(result) ? result : (result ? [result] : []);
+    const subscriptions = await this.aiService.parseBulkSubscriptions(dto.text, dto.locale ?? 'ru', dto.currency, dto.country);
     return { subscriptions, text: dto.text };
   }
 
