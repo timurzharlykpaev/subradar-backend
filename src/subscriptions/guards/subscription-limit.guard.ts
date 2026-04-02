@@ -12,10 +12,11 @@ import {
 } from '../entities/subscription.entity';
 import { PLANS } from '../../billing/plans.config';
 
+// Use PLANS from billing config as single source of truth
 export const PLAN_LIMITS = {
-  free: { maxSubscriptions: 3, maxAiRequests: 5 },
-  pro: { maxSubscriptions: Infinity, maxAiRequests: 200 },
-  organization: { maxSubscriptions: Infinity, maxAiRequests: Infinity },
+  free: { maxSubscriptions: PLANS.free.subscriptionLimit, maxAiRequests: PLANS.free.aiRequestsLimit },
+  pro: { maxSubscriptions: PLANS.pro.subscriptionLimit ?? Infinity, maxAiRequests: PLANS.pro.aiRequestsLimit ?? 200 },
+  organization: { maxSubscriptions: PLANS.organization?.subscriptionLimit ?? Infinity, maxAiRequests: PLANS.organization?.aiRequestsLimit ?? Infinity },
 };
 
 @Injectable()

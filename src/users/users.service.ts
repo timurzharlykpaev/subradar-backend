@@ -49,6 +49,7 @@ export class UsersService {
       'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'isActive',
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
       'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore',
+      'cancelAtPeriodEnd', 'currentPeriodEnd', 'status',
     ]);
     const safe: Partial<User> = {};
     for (const [k, v] of Object.entries(data)) {

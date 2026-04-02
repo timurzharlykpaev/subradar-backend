@@ -191,8 +191,7 @@ export class SubscriptionsService implements OnModuleInit {
       where: { id },
       relations: ['paymentCard'],
     });
-    if (!sub) throw new NotFoundException('Subscription not found');
-    if (sub.userId !== userId) throw new ForbiddenException();
+    if (!sub || sub.userId !== userId) throw new NotFoundException('Subscription not found');
     return sub;
   }
 
@@ -258,7 +257,7 @@ export class SubscriptionsService implements OnModuleInit {
       ],
     });
 
-    let updated = 0;
+    const toUpdate: typeof subs = [];
     for (const sub of subs) {
       if (!sub.startDate || !sub.billingPeriod) continue;
 
@@ -268,13 +267,16 @@ export class SubscriptionsService implements OnModuleInit {
       );
       if (next && (!sub.nextPaymentDate || next > sub.nextPaymentDate)) {
         sub.nextPaymentDate = next;
-        await this.repo.save(sub);
-        updated++;
+        toUpdate.push(sub);
       }
     }
 
-    this.logger.log(`Recalculated nextPaymentDate for ${updated} subscriptions`);
-    return updated;
+    if (toUpdate.length > 0) {
+      await this.repo.save(toUpdate); // bulk save — single query
+    }
+
+    this.logger.log(`Recalculated nextPaymentDate for ${toUpdate.length} subscriptions`);
+    return toUpdate.length;
   }
 
   @Cron('0 0 * * *')

@@ -287,7 +287,7 @@ export class AuthService {
       return { user, ...tokens };
     } catch (dbError: any) {
       this.logger.error(`googleTokenLogin DB error for ${email}: ${dbError?.message}`, dbError?.stack);
-      throw new InternalServerErrorException(`Auth DB error: ${dbError?.message}`);
+      throw new InternalServerErrorException('Authentication failed. Please try again.');
     }
   }
 

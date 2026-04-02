@@ -9,7 +9,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: cfg.get('JWT_ACCESS_SECRET') || cfg.get('JWT_SECRET', 'secret'),
+      secretOrKey: cfg.get('JWT_ACCESS_SECRET') || cfg.get('JWT_SECRET') || (() => {
+        if (process.env.NODE_ENV === 'production') throw new Error('JWT_ACCESS_SECRET must be set in production');
+        return 'dev-secret-not-for-production';
+      })(),
     });
   }
 

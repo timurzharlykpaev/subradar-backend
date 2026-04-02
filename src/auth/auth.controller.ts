@@ -55,7 +55,7 @@ export class AuthController {
     const result = await this.authService.googleLogin(req.user);
     const frontendUrl = process.env.FRONTEND_URL || 'https://app.subradar.ai';
     return res.redirect(
-      `${frontendUrl}/auth/callback?accessToken=${result.accessToken}&refreshToken=${result.refreshToken}`,
+      `${frontendUrl}/auth/callback#accessToken=${result.accessToken}&refreshToken=${result.refreshToken}`,
     );
   }
 
