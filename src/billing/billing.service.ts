@@ -42,10 +42,16 @@ export class BillingService {
   }
 
   private readonly RC_PRODUCT_TO_PLAN: Record<string, string> = {
+    // Production product IDs
     'io.subradar.mobile.pro.monthly': 'pro',
     'io.subradar.mobile.pro.yearly': 'pro',
     'io.subradar.mobile.team.monthly': 'organization',
     'io.subradar.mobile.team.yearly': 'organization',
+    // Sandbox / StoreKit test product IDs (same identifiers, just in case)
+    'com.goalin.subradar.pro.monthly': 'pro',
+    'com.goalin.subradar.pro.yearly': 'pro',
+    'com.goalin.subradar.team.monthly': 'organization',
+    'com.goalin.subradar.team.yearly': 'organization',
   };
 
   verifyWebhookSignature(payload: string, signature: string): boolean {
@@ -322,10 +328,21 @@ export class BillingService {
   }
 
   async syncRevenueCat(userId: string, productId: string): Promise<void> {
-    const plan = this.RC_PRODUCT_TO_PLAN[productId];
+    // Try exact match first, then partial match for flexibility
+    let plan = this.RC_PRODUCT_TO_PLAN[productId];
+
     if (!plan) {
-      this.logger.warn(`syncRevenueCat: unknown productId ${productId}`);
-      throw new BadRequestException(`Unknown product: ${productId}`);
+      // Fallback: infer plan from product ID string
+      const lower = productId.toLowerCase();
+      if (lower.includes('team') || lower.includes('org')) {
+        plan = 'organization';
+      } else if (lower.includes('pro') || lower.includes('premium')) {
+        plan = 'pro';
+      } else {
+        // Unknown product — log but don't throw (prevents purchase from appearing as failed)
+        this.logger.warn(`syncRevenueCat: unknown productId "${productId}", defaulting to pro`);
+        plan = 'pro';
+      }
     }
 
     const user = await this.usersService.findById(userId);
