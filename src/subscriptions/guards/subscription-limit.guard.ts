@@ -10,6 +10,7 @@ import {
   Subscription,
   SubscriptionStatus,
 } from '../entities/subscription.entity';
+import { User } from '../../users/entities/user.entity';
 import { PLANS } from '../../billing/plans.config';
 
 // Use PLANS from billing config as single source of truth
@@ -24,12 +25,18 @@ export class SubscriptionLimitGuard implements CanActivate {
   constructor(
     @InjectRepository(Subscription)
     private subscriptionsRepo: Repository<Subscription>,
+    @InjectRepository(User)
+    private usersRepo: Repository<User>,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const user = request.user;
+    const jwtUser = request.user;
 
+    if (!jwtUser) return true;
+
+    // JWT only contains {id, email} — load full user from DB to get current plan
+    const user = await this.usersRepo.findOne({ where: { id: jwtUser.id } });
     if (!user) return true;
 
     const plan = user.plan ?? 'free';
