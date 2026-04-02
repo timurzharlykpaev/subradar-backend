@@ -21,20 +21,20 @@ import {
   OtpVerifyDto,
 } from './dto/auth.dto';
 import Redis from 'ioredis';
+import { Inject } from '@nestjs/common';
+import { REDIS_CLIENT } from '../common/redis.module';
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  private readonly redis: Redis;
 
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly cfg: ConfigService,
     private readonly notifications: NotificationsService,
-  ) {
-    this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
-  }
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) {}
 
   private generateTokens(user: User) {
     const payload = { sub: user.id, email: user.email };
@@ -108,13 +108,17 @@ export class AuthService {
   }
 
   async appleLogin(dto: AppleAuthDto) {
-    // Verify Apple token - simplified implementation
-    // In production use apple-signin-auth library
     const { idToken, name } = dto;
     let payload: any;
     try {
-      payload = this.jwtService.decode(idToken) as any;
-    } catch {
+      // Verify Apple token signature cryptographically using Apple's public keys
+      const appleSignin = require('apple-signin-auth');
+      payload = await appleSignin.verifyIdToken(idToken, {
+        audience: process.env.APPLE_CLIENT_ID || 'com.goalin.subradar',
+        ignoreExpiration: false,
+      });
+    } catch (e: any) {
+      this.logger.warn(`Apple token verification failed: ${e?.message}`);
       throw new UnauthorizedException('Invalid Apple token');
     }
 

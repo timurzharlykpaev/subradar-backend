@@ -1,15 +1,16 @@
 import {
   Injectable,
+  Inject,
   Logger,
   NotFoundException,
   ForbiddenException,
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ConfigService } from '@nestjs/config';
 import { In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
 import Redis from 'ioredis';
+import { REDIS_CLIENT } from '../common/redis.module';
 import {
   Subscription,
   BillingPeriod,
@@ -72,20 +73,12 @@ function computeNextPaymentDate(
 @Injectable()
 export class SubscriptionsService implements OnModuleInit {
   private readonly logger = new Logger(SubscriptionsService.name);
-  private readonly redis: Redis | null;
-
   constructor(
     @InjectRepository(Subscription)
     private readonly repo: Repository<Subscription>,
     private readonly usersService: UsersService,
-    private readonly cfg: ConfigService,
-  ) {
-    try {
-      this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
-    } catch {
-      this.redis = null;
-    }
-  }
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) {}
 
   async onModuleInit() {
     await this.recalculateNextPaymentDates();
@@ -182,6 +175,12 @@ export class SubscriptionsService implements OnModuleInit {
     const sortField = filters?.sort || 'createdAt';
     const sortOrder = filters?.order || 'DESC';
     qb.orderBy(`sub.${sortField}`, sortOrder);
+
+    // Optional pagination (backward compatible — no limit = all results)
+    if (filters?.limit) {
+      qb.take(filters.limit);
+      if (filters?.offset) qb.skip(filters.offset);
+    }
 
     return qb.getMany();
   }

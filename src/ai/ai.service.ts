@@ -1,21 +1,23 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI, { toFile } from 'openai';
 import Redis from 'ioredis';
+import { REDIS_CLIENT } from '../common/redis.module';
 
 @Injectable()
 export class AiService {
   private readonly openai: OpenAI;
   private readonly model: string;
-  private readonly redis: Redis;
   private activeRequests = 0;
   private readonly maxConcurrency = 3;
   private readonly waitQueue: (() => void)[] = [];
 
-  constructor(private readonly cfg: ConfigService) {
+  constructor(
+    private readonly cfg: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) {
     this.openai = new OpenAI({ apiKey: cfg.get('OPENAI_API_KEY') });
     this.model = cfg.get('OPENAI_MODEL', 'gpt-4o');
-    this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
   }
 
   private async acquireSlot(): Promise<void> {

@@ -21,11 +21,13 @@ import { WorkspaceModule } from './workspace/workspace.module';
 import { StorageModule } from './storage/storage.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { RemindersModule } from './reminders/reminders.module';
+import { RedisModule } from './common/redis.module';
 
 @Module({
   controllers: [AppController, ClientErrorController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    RedisModule,
     ThrottlerModule.forRoot([
       { name: 'default', ttl: 60000, limit: 300 }, // 300 req/min global
     ]),

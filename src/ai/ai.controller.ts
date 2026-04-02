@@ -74,7 +74,13 @@ export class AiController {
   }
 
   @Post('parse-screenshot')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files allowed'), false);
+      cb(null, true);
+    },
+  }))
   async parseScreenshot(
     @Request() req,
     @Body() dto: ParseScreenshotDto,
@@ -173,7 +179,13 @@ export class AiController {
    * Returns: { text, subscriptions: [...] }
    */
   @Post('voice-bulk')
-  @UseInterceptors(FileInterceptor('audio'))
+  @UseInterceptors(FileInterceptor('audio', {
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      if (!file.mimetype.startsWith('audio/')) return cb(new Error('Only audio files allowed'), false);
+      cb(null, true);
+    },
+  }))
   async voiceBulk(
     @Request() req,
     @Body() dto: VoiceDto,

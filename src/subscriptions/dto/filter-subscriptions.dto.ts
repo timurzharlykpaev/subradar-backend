@@ -1,4 +1,5 @@
-import { IsOptional, IsEnum, IsString, IsIn } from 'class-validator';
+import { IsOptional, IsEnum, IsString, IsIn, IsInt, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   SubscriptionCategory,
@@ -32,4 +33,19 @@ export class FilterSubscriptionsDto {
   @IsOptional()
   @IsIn(['ASC', 'DESC'])
   order?: 'ASC' | 'DESC';
+
+  @ApiPropertyOptional({ description: 'Max results to return' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  limit?: number;
+
+  @ApiPropertyOptional({ description: 'Skip N results (for pagination)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  offset?: number;
 }

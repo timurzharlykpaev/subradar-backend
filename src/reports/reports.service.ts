@@ -1,16 +1,17 @@
 import {
   Injectable,
+  Inject,
   NotFoundException,
   ForbiddenException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { Repository, Between } from 'typeorm';
 import Redis from 'ioredis';
+import { REDIS_CLIENT } from '../common/redis.module';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const PDFDocument = require('pdfkit');
 import { Report, ReportType, ReportStatus } from './entities/report.entity';
@@ -24,7 +25,6 @@ const PDF_TTL_SECONDS = 3600;
 @Injectable()
 export class ReportsService {
   private readonly logger = new Logger(ReportsService.name);
-  private readonly redis: Redis;
 
   constructor(
     @InjectRepository(Report) private readonly reportRepo: Repository<Report>,
@@ -35,12 +35,8 @@ export class ReportsService {
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     @InjectQueue('reports') private readonly reportQueue: Queue,
-    private readonly cfg: ConfigService,
-  ) {
-    this.redis = new Redis(
-      cfg.get<string>('REDIS_URL') || 'redis://localhost:6379',
-    );
-  }
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) {}
 
   // ────────────────────────────────────────────────────────────
   // Public API

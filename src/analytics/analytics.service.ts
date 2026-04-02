@@ -1,8 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ConfigService } from '@nestjs/config';
 import { Between, In, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import { REDIS_CLIENT } from '../common/redis.module';
 import {
   Subscription,
   SubscriptionStatus,
@@ -12,21 +12,13 @@ import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
 
 @Injectable()
 export class AnalyticsService {
-  private readonly redis: Redis | null;
-
   constructor(
     @InjectRepository(Subscription)
     private readonly subRepo: Repository<Subscription>,
     @InjectRepository(PaymentCard)
     private readonly cardRepo: Repository<PaymentCard>,
-    private readonly cfg: ConfigService,
-  ) {
-    try {
-      this.redis = new Redis(cfg.get<string>('REDIS_URL') || 'redis://localhost:6379');
-    } catch {
-      this.redis = null;
-    }
-  }
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) {}
 
   private toMonthlyAmount(amount: number, period: BillingPeriod): number {
     const map: Record<BillingPeriod, number> = {
