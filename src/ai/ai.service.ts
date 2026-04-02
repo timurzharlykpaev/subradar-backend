@@ -229,7 +229,7 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
     return this.chat([
       {
         role: 'system',
-        content: `You are a bulk subscription extractor. The user describes multiple subscriptions in free text or voice. Extract ALL subscriptions mentioned and return a JSON array: [ { name, amount (number), currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY), category (STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER) } ]. If only one subscription is mentioned, still return an array with one item. Never return an object — always an array. Locale: ${locale}.`,
+        content: `You are a bulk subscription extractor. The user describes one or more subscriptions in free text or voice. Extract ALL subscriptions mentioned and return a strict JSON array (never an object): [ { "name": string, "amount": number, "currency": "USD"|"EUR"|..., "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY", "category": "STREAMING"|"AI_SERVICES"|"INFRASTRUCTURE"|"PRODUCTIVITY"|"MUSIC"|"GAMING"|"NEWS"|"HEALTH"|"OTHER", "serviceUrl": string|null, "iconUrl": "https://icon.horse/icon/{domain}" } ]. Rules: 1) ALWAYS return an array, even for 1 item. 2) Include iconUrl using icon.horse with the service domain. 3) Use realistic prices. 4) If the user mentions a service without specifying a plan, use the most popular plan. Locale: ${locale}.`,
       },
       {
         role: 'user',
