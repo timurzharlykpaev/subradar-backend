@@ -104,6 +104,9 @@ export class User {
   @Column({ nullable: true, default: true })
   emailNotifications: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  weeklyDigestEnabled: boolean;
+
   @OneToMany(() => Subscription, (s) => s.user)
   subscriptions: Subscription[];
 
