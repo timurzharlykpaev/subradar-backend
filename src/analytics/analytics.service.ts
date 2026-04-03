@@ -255,27 +255,53 @@ export class AnalyticsService {
       byCategory[cat].push(sub);
     }
 
-    const duplicates: { subscriptionIds: string[]; name: string; potentialSavings: number }[] = [];
-    for (const [, subs] of Object.entries(byCategory)) {
-      if (subs.length > 1) {
-        const sorted = [...subs].sort((a, b) => a.amount - b.amount);
-        const savings = sorted.slice(1).reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+    // Find duplicates: same category with 2+ subs, compare monthly amounts
+    const duplicates: { subscriptionIds: string[]; name: string; category: string; count: number; totalMonthly: number; cheapest: number; potentialSavings: number }[] = [];
+    for (const [cat, catSubs] of Object.entries(byCategory)) {
+      if (catSubs.length > 1) {
+        const withMonthly = catSubs.map((s) => ({
+          ...s,
+          monthlyAmount: this.toMonthlyAmount(Number(s.amount) || 0, s.billingPeriod),
+        }));
+        const sorted = [...withMonthly].sort((a, b) => a.monthlyAmount - b.monthlyAmount);
+        const cheapest = sorted[0].monthlyAmount;
+        const totalMonthly = sorted.reduce((sum, s) => sum + s.monthlyAmount, 0);
+        // Potential savings = everything except the cheapest
+        const savings = sorted.slice(1).reduce((sum, s) => sum + s.monthlyAmount, 0);
         if (savings > 0) {
           duplicates.push({
-            subscriptionIds: sorted.slice(1).map((s) => s.id),
+            subscriptionIds: sorted.map((s) => s.id),
             name: sorted.map((s) => s.name).join(', '),
+            category: cat,
+            count: catSubs.length,
+            totalMonthly: Math.round(totalMonthly * 100) / 100,
+            cheapest: Math.round(cheapest * 100) / 100,
             potentialSavings: Math.round(savings * 100) / 100,
           });
         }
       }
     }
 
+    // Sort by potential savings descending
+    duplicates.sort((a, b) => b.potentialSavings - a.potentialSavings);
+
     const estimatedMonthlySavings = duplicates.reduce((sum, d) => sum + d.potentialSavings, 0);
+
+    // Generate insights
+    const insights: string[] = [];
+    if (duplicates.length > 0) {
+      insights.push(`You have ${duplicates.length} categories with overlapping subscriptions.`);
+      const topDup = duplicates[0];
+      if (topDup) insights.push(`Biggest overlap: ${topDup.name} (${topDup.category}) — $${topDup.potentialSavings.toFixed(2)}/mo savings possible.`);
+    }
+    if (estimatedMonthlySavings > 50) {
+      insights.push(`You could save $${estimatedMonthlySavings.toFixed(0)}/mo ($${(estimatedMonthlySavings * 12).toFixed(0)}/yr) by consolidating overlapping subscriptions.`);
+    }
 
     return {
       estimatedMonthlySavings: Math.round(estimatedMonthlySavings * 100) / 100,
-      duplicates,
-      insights: [],
+      duplicates: duplicates.slice(0, 10), // Limit to top 10
+      insights,
     };
   }
 
