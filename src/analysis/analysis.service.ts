@@ -2,7 +2,7 @@ import { Injectable, Inject, Logger, ForbiddenException, ConflictException } fro
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Repository, In } from 'typeorm';
-import { Queue } from 'bull';
+import type { Queue } from 'bull';
 import Redis from 'ioredis';
 import * as crypto from 'crypto';
 
