@@ -287,15 +287,15 @@ export class AnalyticsService {
 
     const estimatedMonthlySavings = duplicates.reduce((sum, d) => sum + d.potentialSavings, 0);
 
-    // Generate insights
-    const insights: string[] = [];
+    // Generate structured insights (translated on client side)
+    const insights: { type: string; data: Record<string, any> }[] = [];
     if (duplicates.length > 0) {
-      insights.push(`You have ${duplicates.length} categories with overlapping subscriptions.`);
+      insights.push({ type: 'overlap_count', data: { count: duplicates.length } });
       const topDup = duplicates[0];
-      if (topDup) insights.push(`Biggest overlap: ${topDup.name} (${topDup.category}) — $${topDup.potentialSavings.toFixed(2)}/mo savings possible.`);
+      if (topDup) insights.push({ type: 'biggest_overlap', data: { name: topDup.name, category: topDup.category, savings: topDup.potentialSavings } });
     }
     if (estimatedMonthlySavings > 50) {
-      insights.push(`You could save $${estimatedMonthlySavings.toFixed(0)}/mo ($${(estimatedMonthlySavings * 12).toFixed(0)}/yr) by consolidating overlapping subscriptions.`);
+      insights.push({ type: 'total_savings', data: { monthly: estimatedMonthlySavings, yearly: estimatedMonthlySavings * 12 } });
     }
 
     return {
