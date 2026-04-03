@@ -22,6 +22,7 @@ import { StorageModule } from './storage/storage.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { RemindersModule } from './reminders/reminders.module';
 import { RedisModule } from './common/redis.module';
+import { AnalysisModule } from './analysis/analysis.module';
 
 @Module({
   controllers: [AppController, ClientErrorController],
@@ -88,6 +89,7 @@ import { RedisModule } from './common/redis.module';
     WorkspaceModule,
     StorageModule,
     RemindersModule,
+    AnalysisModule,
     ScheduleModule.forRoot(),
   ],
   providers: [
