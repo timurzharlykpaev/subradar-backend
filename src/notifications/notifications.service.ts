@@ -5,7 +5,8 @@ import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
 import { Resend } from 'resend';
 import Expo, { ExpoPushMessage } from 'expo-server-sdk';
-import { buildPaymentReminderHtml } from './email-templates';
+import { buildPaymentReminderHtml, buildWeeklyDigestHtml } from './email-templates';
+import { AnalysisResult } from '../analysis/entities/analysis-result.entity';
 
 @Injectable()
 export class NotificationsService {
@@ -132,6 +133,40 @@ export class NotificationsService {
       date,
       'https://app.subradar.ai',
     );
+  }
+
+  async sendWeeklyDigest(
+    user: { id: string; email: string; name?: string; locale?: string },
+    result: AnalysisResult,
+  ) {
+    const locale = user.locale ?? 'ru';
+    const isRu = (locale).split('-')[0].toLowerCase() === 'ru';
+    const name = user.name ?? user.email;
+
+    const savings = Number(result.totalMonthlySavings);
+    const fmtSavings = new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: result.currency || 'USD',
+      maximumFractionDigits: 2,
+    }).format(isNaN(savings) || !isFinite(savings) ? 0 : savings);
+
+    const subject = isRu
+      ? `📊 SubRadar: ваш дайджест — сэкономьте ${fmtSavings}/мес`
+      : `📊 SubRadar: your digest — save ${fmtSavings}/mo`;
+
+    const html = buildWeeklyDigestHtml(
+      name,
+      result.summary,
+      savings,
+      result.currency,
+      result.subscriptionCount,
+      savings,
+      result.recommendations ?? [],
+      locale,
+      'https://app.subradar.ai',
+    );
+
+    return this.sendEmail(user.email, subject, html);
   }
 
   async sendUpcomingPaymentEmail(

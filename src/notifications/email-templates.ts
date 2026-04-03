@@ -208,6 +208,168 @@ export function buildMonthlyReportHtml(
   return wrap(content);
 }
 
+// ─── Weekly Digest ───────────────────────────────────────────────────────────
+
+export function buildWeeklyDigestHtml(
+  name: string,
+  summary: string,
+  totalMonthlySavings: number,
+  currency: string,
+  activeCount: number,
+  totalMonthly: number,
+  recommendations: Array<{ priority: string; title: string; description: string; estimatedSavingsMonthly: number }>,
+  locale = 'ru',
+  appUrl = 'https://app.subradar.ai',
+): string {
+  const isRu = (locale ?? 'ru').split('-')[0].toLowerCase() === 'ru';
+
+  const fmt = (n: number) => {
+    const safe = isNaN(n) || !isFinite(n) ? 0 : n;
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: currency || 'USD',
+      maximumFractionDigits: 2,
+    }).format(safe);
+  };
+
+  const safeSavings = isNaN(totalMonthlySavings) || !isFinite(totalMonthlySavings) ? 0 : totalMonthlySavings;
+  const safeTotal = isNaN(totalMonthly) || !isFinite(totalMonthly) ? 0 : totalMonthly;
+
+  const priorityIcon = (p: string) => {
+    if (p === 'HIGH') return '🔴';
+    if (p === 'MEDIUM') return '🟡';
+    return '🟢';
+  };
+
+  const recRows = recommendations
+    .slice(0, 5)
+    .map(
+      (rec) => `
+      <tr>
+        <td style="padding:12px 0;border-bottom:1px solid #1e1e3a;vertical-align:top;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="width:28px;font-size:16px;vertical-align:top;padding-top:2px;">${priorityIcon(rec.priority)}</td>
+              <td style="padding-left:8px;">
+                <p style="margin:0 0 4px;color:#e5e7eb;font-size:14px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${rec.title}</p>
+                <p style="margin:0;color:#9ca3af;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${rec.description}</p>
+              </td>
+              <td align="right" style="white-space:nowrap;padding-left:12px;vertical-align:top;">
+                <p style="margin:0;color:#34d399;font-size:13px;font-weight:700;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+                  ${isRu ? '−' : '−'}${fmt(rec.estimatedSavingsMonthly)}${isRu ? '/мес' : '/mo'}
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>`,
+    )
+    .join('');
+
+  const content = `
+  <!-- HEADER CARD -->
+  <tr>
+    <td style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;border:1px solid rgba(139,92,246,0.25);padding:28px;margin-bottom:16px;">
+      <p style="color:#9ca3af;font-size:14px;margin:0 0 6px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${isRu ? `Привет, ${name} 👋` : `Hey, ${name} 👋`}
+      </p>
+      <h1 style="color:#fff;font-size:22px;font-weight:800;margin:0 0 4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${isRu ? '📊 Ваш еженедельный дайджест' : '📊 Your Weekly Digest'}
+      </h1>
+      <p style="color:#6b7280;font-size:14px;margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${isRu ? 'AI-анализ ваших подписок' : 'AI analysis of your subscriptions'}
+      </p>
+    </td>
+  </tr>
+  <tr><td style="height:12px;"></td></tr>
+
+  <!-- STATS GRID -->
+  <tr>
+    <td>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td width="32%" style="background:#111128;border:1px solid #1e1e3a;border-radius:12px;padding:20px;text-align:center;">
+            <p style="color:#9ca3af;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              ${isRu ? 'Активных' : 'Active'}
+            </p>
+            <p style="color:#fff;font-size:28px;font-weight:900;margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${activeCount}</p>
+          </td>
+          <td width="4%"></td>
+          <td width="32%" style="background:#111128;border:1px solid #1e1e3a;border-radius:12px;padding:20px;text-align:center;">
+            <p style="color:#9ca3af;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              ${isRu ? 'В месяц' : 'Monthly'}
+            </p>
+            <p style="color:#fff;font-size:20px;font-weight:900;margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${fmt(safeTotal)}</p>
+          </td>
+          <td width="4%"></td>
+          <td width="32%" style="background:linear-gradient(135deg,rgba(52,211,153,0.15) 0%,rgba(16,185,129,0.1) 100%);border:1px solid rgba(52,211,153,0.3);border-radius:12px;padding:20px;text-align:center;">
+            <p style="color:#6ee7b7;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              ${isRu ? 'Экономия' : 'Savings'}
+            </p>
+            <p style="color:#34d399;font-size:20px;font-weight:900;margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${fmt(safeSavings)}</p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <tr><td style="height:12px;"></td></tr>
+
+  <!-- AI SUMMARY -->
+  <tr>
+    <td style="background:#111128;border:1px solid #1e1e3a;border-radius:16px;padding:24px;">
+      <p style="color:#8B5CF6;font-size:12px;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;margin:0 0 10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ✨ ${isRu ? 'AI-резюме' : 'AI Summary'}
+      </p>
+      <p style="color:#d1d5db;font-size:14px;line-height:1.7;margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${summary}</p>
+    </td>
+  </tr>
+  <tr><td style="height:12px;"></td></tr>
+
+  ${recRows ? `
+  <!-- RECOMMENDATIONS -->
+  <tr>
+    <td style="background:#111128;border:1px solid #1e1e3a;border-radius:16px;padding:24px;">
+      <p style="color:#e5e7eb;font-size:15px;font-weight:700;margin:0 0 4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        💡 ${isRu ? 'Рекомендации' : 'Recommendations'}
+      </p>
+      <p style="color:#6b7280;font-size:13px;margin:0 0 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        🔴 ${isRu ? 'высокий' : 'high'} &nbsp;🟡 ${isRu ? 'средний' : 'medium'} &nbsp;🟢 ${isRu ? 'низкий приоритет' : 'low priority'}
+      </p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        ${recRows}
+      </table>
+    </td>
+  </tr>
+  <tr><td style="height:12px;"></td></tr>
+  ` : ''}
+
+  <!-- CTA -->
+  <tr>
+    <td style="background:linear-gradient(135deg,rgba(139,92,246,0.2) 0%,rgba(109,40,217,0.15) 100%);border:1px solid rgba(139,92,246,0.35);border-radius:16px;padding:28px;text-align:center;">
+      <p style="color:#c4b5fd;font-size:14px;margin:0 0 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${isRu ? 'Полный анализ и детальные рекомендации — в приложении' : 'Full analysis and detailed recommendations — in the app'}
+      </p>
+      <a href="${appUrl}/analytics" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${isRu ? 'Открыть аналитику →' : 'Open analytics →'}
+      </a>
+    </td>
+  </tr>
+  <tr><td style="height:8px;"></td></tr>
+
+  <!-- UNSUBSCRIBE -->
+  <tr>
+    <td align="center" style="padding:8px 0;">
+      <p style="margin:0;font-size:12px;color:#4b5563;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        <a href="${appUrl}/settings?tab=notifications" style="color:#6D28D9;text-decoration:none;">
+          ${isRu ? 'Отписаться от дайджеста' : 'Unsubscribe from digest'}
+        </a>
+      </p>
+    </td>
+  </tr>`;
+
+  return wrap(content);
+}
+
 // ─── Payment Reminder ─────────────────────────────────────────────────────────
 
 export function buildPaymentReminderHtml(
