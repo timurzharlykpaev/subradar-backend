@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Subscription } from './entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
@@ -11,6 +11,7 @@ import { ReceiptsModule } from '../receipts/receipts.module';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AiModule } from '../ai/ai.module';
+import { AnalysisModule } from '../analysis/analysis.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { AiModule } from '../ai/ai.module';
     UsersModule,
     NotificationsModule,
     AiModule,
+    forwardRef(() => AnalysisModule),
   ],
   providers: [SubscriptionsService, TrialCheckerCron, SubscriptionLimitGuard],
   controllers: [SubscriptionsController, EmailImportController],

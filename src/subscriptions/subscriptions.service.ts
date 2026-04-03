@@ -1,6 +1,7 @@
 import {
   Injectable,
   Inject,
+  forwardRef,
   Logger,
   NotFoundException,
   ForbiddenException,
@@ -20,6 +21,7 @@ import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { FilterSubscriptionsDto } from './dto/filter-subscriptions.dto';
 import { UsersService } from '../users/users.service';
 import { PLANS } from '../billing/plans.config';
+import { AnalysisService } from '../analysis/analysis.service';
 
 function computeNextPaymentDate(
   startDate: Date,
@@ -78,6 +80,8 @@ export class SubscriptionsService implements OnModuleInit {
     private readonly repo: Repository<Subscription>,
     private readonly usersService: UsersService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @Inject(forwardRef(() => AnalysisService))
+    private readonly analysisService: AnalysisService,
   ) {}
 
   async onModuleInit() {
@@ -142,6 +146,10 @@ export class SubscriptionsService implements OnModuleInit {
 
     const saved = await this.repo.save(sub);
     await this.invalidateAnalyticsCache(userId);
+    // Trigger analysis re-evaluation (debounced)
+    this.analysisService.onSubscriptionChange(userId).catch(err =>
+      this.logger.warn(`Analysis trigger failed: ${err.message}`),
+    );
     return saved;
   }
 
@@ -212,6 +220,10 @@ export class SubscriptionsService implements OnModuleInit {
 
     const saved = await this.repo.save(sub);
     await this.invalidateAnalyticsCache(userId);
+    // Trigger analysis re-evaluation (debounced)
+    this.analysisService.onSubscriptionChange(userId).catch(err =>
+      this.logger.warn(`Analysis trigger failed: ${err.message}`),
+    );
     return saved;
   }
 
@@ -219,6 +231,10 @@ export class SubscriptionsService implements OnModuleInit {
     const sub = await this.findOne(userId, id);
     await this.repo.remove(sub);
     await this.invalidateAnalyticsCache(userId);
+    // Trigger analysis re-evaluation (debounced)
+    this.analysisService.onSubscriptionChange(userId).catch(err =>
+      this.logger.warn(`Analysis trigger failed: ${err.message}`),
+    );
   }
 
   async updateStatus(
