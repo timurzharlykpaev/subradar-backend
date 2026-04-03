@@ -8,6 +8,8 @@ import {
   UploadedFile,
   Request,
   Inject,
+  Param,
+  NotFoundException,
 } from '@nestjs/common';
 import { forwardRef } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -16,6 +18,7 @@ import { IsString, IsOptional } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AiService } from './ai.service';
 import { BillingService } from '../billing/billing.service';
+import { MarketDataService } from '../analysis/market-data.service';
 import { WizardDto, MatchServiceDto } from './dto/ai.dto';
 
 class LookupServiceDto {
@@ -53,6 +56,7 @@ export class AiController {
     private readonly aiService: AiService,
     @Inject(forwardRef(() => BillingService))
     private readonly billingService: BillingService,
+    private readonly marketDataService: MarketDataService,
   ) {}
 
   @Post('lookup')
@@ -208,5 +212,29 @@ export class AiController {
   async wizard(@Request() req, @Body() dto: WizardDto) {
     await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.wizard(dto.message, dto.context ?? {}, dto.locale ?? 'en', (dto.history ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>);
+  }
+
+  /**
+   * Free DB-only service catalog lookup — no AI call, no billing consumption.
+   * GET /ai/service-catalog/:serviceName
+   * Returns: { name, category, iconUrl, serviceUrl, cancelUrl, plans }
+   */
+  @Get('service-catalog/:serviceName')
+  async serviceCatalogLookup(@Param('serviceName') serviceName: string) {
+    const normalized = this.marketDataService.normalizeServiceName(serviceName);
+    const entry = await this.marketDataService.getMarketData(normalized, false);
+
+    if (!entry) {
+      throw new NotFoundException({ error: 'NOT_FOUND' });
+    }
+
+    return {
+      name: entry.displayName,
+      category: entry.category,
+      iconUrl: entry.logoUrl || `https://icon.horse/icon/${normalized.replace(/_/g, '')}.com`,
+      serviceUrl: null,
+      cancelUrl: null,
+      plans: entry.plans,
+    };
   }
 }

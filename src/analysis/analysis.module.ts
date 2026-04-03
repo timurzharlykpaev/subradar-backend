@@ -24,6 +24,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
   ],
   controllers: [AnalysisController],
   providers: [AnalysisService, AnalysisProcessor, AnalysisCronService, MarketDataService, AnalysisPlanGuard],
-  exports: [AnalysisService],
+  exports: [AnalysisService, MarketDataService],
 })
 export class AnalysisModule {}
