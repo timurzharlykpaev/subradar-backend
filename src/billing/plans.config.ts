@@ -3,6 +3,9 @@ export interface PlanConfig {
   aiRequestsLimit: number | null;
   hasInvite: boolean;
   canCreateOrg: boolean;
+  analysisEnabled: boolean;
+  maxAnalysisSubscriptions: number | null;
+  maxWebSearchesPerAnalysis: number;
 }
 
 export const PLANS: Record<string, PlanConfig> = {
@@ -11,18 +14,27 @@ export const PLANS: Record<string, PlanConfig> = {
     aiRequestsLimit: 5,
     hasInvite: false,
     canCreateOrg: false,
+    analysisEnabled: false,
+    maxAnalysisSubscriptions: null,
+    maxWebSearchesPerAnalysis: 0,
   },
   pro: {
     subscriptionLimit: null,
     aiRequestsLimit: 200,
     hasInvite: true,
     canCreateOrg: false,
+    analysisEnabled: true,
+    maxAnalysisSubscriptions: 50,
+    maxWebSearchesPerAnalysis: 5,
   },
   organization: {
     subscriptionLimit: null,
     aiRequestsLimit: null,
     hasInvite: true,
     canCreateOrg: true,
+    analysisEnabled: true,
+    maxAnalysisSubscriptions: 100,
+    maxWebSearchesPerAnalysis: 10,
   },
 };
 
