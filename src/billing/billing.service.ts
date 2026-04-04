@@ -145,6 +145,9 @@ export class BillingService {
         const plan = this.RC_PRODUCT_TO_PLAN[productId] || 'pro';
         user.plan = plan;
         user.billingSource = 'revenuecat';
+        // Reset cancellation flags — purchase/renewal supersedes cancellation
+        user.cancelAtPeriodEnd = false;
+        user.currentPeriodEnd = null;
         await this.usersService.save(user);
         this.logger.log(`RevenueCat: ${type} — user ${appUserId} → plan ${plan}`);
         break;
@@ -348,6 +351,9 @@ export class BillingService {
     const user = await this.usersService.findById(userId);
     user.plan = plan;
     user.billingSource = 'revenuecat';
+    // Reset cancellation flags — new purchase supersedes any previous cancellation
+    user.cancelAtPeriodEnd = false;
+    user.currentPeriodEnd = null;
     await this.usersService.save(user);
     this.logger.log(`syncRevenueCat: user ${userId} → plan ${plan} (product: ${productId})`);
   }
