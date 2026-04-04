@@ -10,6 +10,7 @@ import {
   Request,
   BadRequestException,
 } from '@nestjs/common';
+import { timingSafeEqual } from 'crypto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -50,7 +51,17 @@ export class BillingController {
     @Body() body: any,
   ) {
     const secret = process.env.REVENUECAT_WEBHOOK_SECRET;
-    if (!secret || (authorization !== secret && authorization !== `Bearer ${secret}`)) {
+    if (!secret || !authorization) {
+      throw new BadRequestException('Invalid webhook authorization');
+    }
+
+    // Normalize: try both with and without Bearer prefix
+    const expected = authorization.startsWith('Bearer ')
+      ? `Bearer ${secret}`
+      : secret;
+    const authBuf = Buffer.from(authorization);
+    const expectedBuf = Buffer.from(expected);
+    if (authBuf.length !== expectedBuf.length || !timingSafeEqual(authBuf, expectedBuf)) {
       throw new BadRequestException('Invalid webhook authorization');
     }
     await this.billingService.handleRevenueCatWebhook(body);

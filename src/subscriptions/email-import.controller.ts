@@ -1,5 +1,6 @@
-import { Controller, Post, Body, Headers, Logger, HttpCode } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Controller, Post, Body, Headers, Logger, HttpCode, UseGuards, Request } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SubscriptionsService } from './subscriptions.service';
 import { AiService } from '../ai/ai.service';
 import { SubscriptionStatus } from './entities/subscription.entity';
@@ -113,11 +114,13 @@ export class EmailImportController {
    * Returns the unique import email address for the current user.
    * Frontend calls this to show the user their personal import address.
    */
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
   @Post('address')
   @HttpCode(200)
-  getImportAddress(@Body() body: { userId: string }) {
+  getImportAddress(@Request() req) {
     return {
-      email: `import+${body.userId}@subradar.ai`,
+      email: `import+${req.user.id}@subradar.ai`,
       instructions: 'Forward any subscription receipt to this address and we\'ll import it automatically.',
     };
   }

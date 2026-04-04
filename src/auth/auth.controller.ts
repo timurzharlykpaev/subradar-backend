@@ -35,11 +35,13 @@ export class AuthController {
     private readonly usersService: UsersService,
   ) {}
 
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('register')
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
@@ -71,18 +73,19 @@ export class AuthController {
     return this.authService.appleLogin(dto);
   }
 
-  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('otp/send')
   sendOtp(@Body() dto: OtpSendDto) {
     return this.authService.sendOtp(dto);
   }
 
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('otp/verify')
   verifyOtp(@Body() dto: OtpVerifyDto) {
     return this.authService.verifyOtp(dto);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('magic-link')
   sendMagicLink(@Body() dto: MagicLinkDto) {
     return this.authService.sendMagicLink(dto);

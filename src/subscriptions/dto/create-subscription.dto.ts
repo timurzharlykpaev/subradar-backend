@@ -6,6 +6,9 @@ import {
   IsBoolean,
   IsArray,
   IsDateString,
+  MaxLength,
+  Min,
+  Max,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
@@ -16,12 +19,12 @@ import {
 } from '../entities/subscription.entity';
 
 export class CreateSubscriptionDto {
-  @ApiProperty() @IsString() name: string;
+  @ApiProperty() @IsString() @MaxLength(255) name: string;
   @ApiPropertyOptional({ enum: SubscriptionCategory })
   @IsOptional()
   @IsEnum(SubscriptionCategory)
   category?: SubscriptionCategory;
-  @ApiProperty() @IsNumber() amount: number;
+  @ApiProperty() @IsNumber() @Min(0) @Max(999999) amount: number;
   @ApiPropertyOptional() @IsOptional() @IsString() currency?: string;
   @ApiPropertyOptional({ enum: BillingPeriod })
   @IsOptional()
