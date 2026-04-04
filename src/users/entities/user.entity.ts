@@ -120,7 +120,7 @@ export class User {
   cancelAtPeriodEnd: boolean;
 
   @Column({ nullable: true, type: 'timestamp' })
-  currentPeriodEnd: Date;
+  currentPeriodEnd: Date | null;
 
   @CreateDateColumn()
   createdAt: Date;
