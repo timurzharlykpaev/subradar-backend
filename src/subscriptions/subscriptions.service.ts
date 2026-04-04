@@ -180,9 +180,11 @@ export class SubscriptionsService implements OnModuleInit {
       qb.andWhere('sub.name ILIKE :search', { search: `%${filters.search}%` });
     }
 
-    const sortField = filters?.sort || 'createdAt';
+    const ALLOWED_SORT_FIELDS = ['name', 'amount', 'createdAt', 'nextPaymentDate', 'status'];
+    const rawSortField = filters?.sort || 'createdAt';
+    const safeSortField = ALLOWED_SORT_FIELDS.includes(rawSortField) ? rawSortField : 'createdAt';
     const sortOrder = filters?.order || 'DESC';
-    qb.orderBy(`sub.${sortField}`, sortOrder);
+    qb.orderBy(`sub.${safeSortField}`, sortOrder);
 
     // Optional pagination (backward compatible — no limit = all results)
     if (filters?.limit) {

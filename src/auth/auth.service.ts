@@ -73,6 +73,7 @@ export class AuthService {
       provider: AuthProvider.LOCAL,
     });
 
+    this.logger.log(`Account created: ${dto.email}`);
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
@@ -80,12 +81,18 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const user = await this.usersService.findByEmailWithPassword(dto.email);
-    if (!user || !user.password)
+    if (!user || !user.password) {
+      this.logger.warn(`Login failed (user not found): ${dto.email}`);
       throw new UnauthorizedException('Invalid credentials');
+    }
 
     const valid = await bcrypt.compare(dto.password, user.password);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    if (!valid) {
+      this.logger.warn(`Login failed (wrong password): ${dto.email}`);
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
+    this.logger.log(`Login success: ${dto.email}`);
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
@@ -320,8 +327,14 @@ export class AuthService {
 
   async verifyOtp(dto: OtpVerifyDto) {
     const stored = await this.redis.get(`otp:${dto.email}`);
-    if (!stored) throw new UnauthorizedException('OTP expired or not found');
-    if (stored !== dto.code) throw new UnauthorizedException('Invalid OTP code');
+    if (!stored) {
+      this.logger.warn(`OTP verification failed (expired/not found): ${dto.email}`);
+      throw new UnauthorizedException('OTP expired or not found');
+    }
+    if (stored !== dto.code) {
+      this.logger.warn(`OTP verification failed (wrong code): ${dto.email}`);
+      throw new UnauthorizedException('Invalid OTP code');
+    }
 
     await this.redis.del(`otp:${dto.email}`);
 
@@ -331,8 +344,10 @@ export class AuthService {
         email: dto.email,
         provider: AuthProvider.LOCAL,
       });
+      this.logger.log(`Account created via OTP: ${dto.email}`);
     }
 
+    this.logger.log(`Login success via OTP: ${dto.email}`);
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };

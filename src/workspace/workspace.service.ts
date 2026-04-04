@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, MoreThan, Repository } from 'typeorm';
@@ -23,6 +24,7 @@ import {
 
 @Injectable()
 export class WorkspaceService {
+  private readonly logger = new Logger(WorkspaceService.name);
   private readonly INVITE_CHARSET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
   constructor(
@@ -217,6 +219,7 @@ export class WorkspaceService {
     });
     await this.memberRepo.save(member);
 
+    this.logger.log(`Member joined workspace: userId=${userId} workspaceId=${workspace.id} via invite code`);
     return this.findById(workspace.id);
   }
 
@@ -236,6 +239,7 @@ export class WorkspaceService {
     }
 
     await this.memberRepo.remove(member);
+    this.logger.log(`Member left workspace: userId=${userId} workspaceId=${workspaceId}`);
   }
 
   async deleteWorkspace(workspaceId: string, requesterId: string) {
@@ -253,6 +257,7 @@ export class WorkspaceService {
     await this.inviteCodeRepo.delete({ workspaceId });
     await this.memberRepo.delete({ workspaceId });
     await this.workspaceRepo.remove(workspace);
+    this.logger.log(`Workspace deleted: ${workspaceId} by owner ${requesterId}`);
   }
 
   async renameWorkspace(

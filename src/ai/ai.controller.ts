@@ -105,7 +105,13 @@ export class AiController {
   }
 
   @Post('voice-to-subscription')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      if (!file.mimetype.startsWith('audio/')) return cb(new Error('Only audio files allowed'), false);
+      cb(null, true);
+    },
+  }))
   async voiceToSubscriptionAlias(
     @Request() req,
     @Body() dto: VoiceDto,
@@ -120,7 +126,13 @@ export class AiController {
   }
 
   @Post('parse-audio')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      if (!file.mimetype.startsWith('audio/')) return cb(new Error('Only audio files allowed'), false);
+      cb(null, true);
+    },
+  }))
   async parseAudio(
     @Request() req,
     @Body() dto: VoiceDto,
