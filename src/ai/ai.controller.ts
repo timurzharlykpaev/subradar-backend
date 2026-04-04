@@ -10,6 +10,7 @@ import {
   Inject,
   Param,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { forwardRef } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -20,6 +21,32 @@ import { AiService } from './ai.service';
 import { BillingService } from '../billing/billing.service';
 import { MarketDataService } from '../analysis/market-data.service';
 import { WizardDto, MatchServiceDto } from './dto/ai.dto';
+
+function isValidImage(buffer: Buffer): boolean {
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return true;
+  // PNG: 89 50 4E 47
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return true;
+  // WebP: 52 49 46 46 ... 57 45 42 50
+  if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) return true;
+  // GIF: 47 49 46
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return true;
+  return false;
+}
+
+function isValidAudio(buffer: Buffer): boolean {
+  // ID3 (MP3): 49 44 33
+  if (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) return true;
+  // OGG: 4F 67 67 53
+  if (buffer[0] === 0x4F && buffer[1] === 0x67 && buffer[2] === 0x67 && buffer[3] === 0x53) return true;
+  // RIFF/WAV/WebM: 52 49 46 46
+  if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) return true;
+  // ftyp (M4A/MP4): offset 4-7 = 66 74 79 70
+  if (buffer.length > 7 && buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) return true;
+  // FLAC: 66 4C 61 43
+  if (buffer[0] === 0x66 && buffer[1] === 0x4C && buffer[2] === 0x61 && buffer[3] === 0x43) return true;
+  return false;
+}
 
 class LookupServiceDto {
   @IsString() query: string;
@@ -91,6 +118,9 @@ export class AiController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     await this.billingService.consumeAiRequest(req.user.id);
+    if (file?.buffer && !isValidImage(file.buffer)) {
+      throw new BadRequestException('Invalid image file');
+    }
     let imageBase64 = dto.imageBase64;
     if (!imageBase64 && file) {
       imageBase64 = file.buffer.toString('base64');
@@ -118,6 +148,9 @@ export class AiController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     await this.billingService.consumeAiRequest(req.user.id);
+    if (file?.buffer && !isValidAudio(file.buffer)) {
+      throw new BadRequestException('Invalid audio file');
+    }
     let audioBase64 = dto.audioBase64;
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
@@ -139,6 +172,9 @@ export class AiController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     await this.billingService.consumeAiRequest(req.user.id);
+    if (file?.buffer && !isValidAudio(file.buffer)) {
+      throw new BadRequestException('Invalid audio file');
+    }
     let audioBase64 = dto.audioBase64;
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
@@ -208,6 +244,9 @@ export class AiController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     await this.billingService.consumeAiRequest(req.user.id);
+    if (file?.buffer && !isValidAudio(file.buffer)) {
+      throw new BadRequestException('Invalid audio file');
+    }
     let audioBase64 = dto.audioBase64;
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');

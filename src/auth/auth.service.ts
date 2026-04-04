@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
@@ -80,17 +81,31 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
+    // Check lockout
+    const lockKey = `auth:lockout:${dto.email}`;
+    const failCount = parseInt(await this.redis.get(lockKey) || '0');
+    if (failCount >= 10) {
+      throw new ForbiddenException('Account temporarily locked. Try again in 1 hour.');
+    }
+
     const user = await this.usersService.findByEmailWithPassword(dto.email);
     if (!user || !user.password) {
       this.logger.warn(`Login failed (user not found): ${dto.email}`);
+      await this.redis.incr(lockKey);
+      await this.redis.expire(lockKey, 3600);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const valid = await bcrypt.compare(dto.password, user.password);
     if (!valid) {
       this.logger.warn(`Login failed (wrong password): ${dto.email}`);
+      await this.redis.incr(lockKey);
+      await this.redis.expire(lockKey, 3600);
       throw new UnauthorizedException('Invalid credentials');
     }
+
+    // Clear lockout on success
+    await this.redis.del(lockKey);
 
     this.logger.log(`Login success: ${dto.email}`);
     const tokens = this.generateTokens(user);
@@ -326,17 +341,30 @@ export class AuthService {
   }
 
   async verifyOtp(dto: OtpVerifyDto) {
+    // Check OTP lockout
+    const otpLockKey = `auth:lockout:otp:${dto.email}`;
+    const otpFailCount = parseInt(await this.redis.get(otpLockKey) || '0');
+    if (otpFailCount >= 10) {
+      throw new ForbiddenException('Too many failed OTP attempts. Try again in 1 hour.');
+    }
+
     const stored = await this.redis.get(`otp:${dto.email}`);
     if (!stored) {
       this.logger.warn(`OTP verification failed (expired/not found): ${dto.email}`);
+      await this.redis.incr(otpLockKey);
+      await this.redis.expire(otpLockKey, 3600);
       throw new UnauthorizedException('OTP expired or not found');
     }
     if (stored !== dto.code) {
       this.logger.warn(`OTP verification failed (wrong code): ${dto.email}`);
+      await this.redis.incr(otpLockKey);
+      await this.redis.expire(otpLockKey, 3600);
       throw new UnauthorizedException('Invalid OTP code');
     }
 
     await this.redis.del(`otp:${dto.email}`);
+    // Clear OTP lockout on success
+    await this.redis.del(otpLockKey);
 
     let user = await this.usersService.findByEmail(dto.email);
     if (!user) {
