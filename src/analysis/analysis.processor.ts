@@ -13,6 +13,7 @@ import { Subscription, BillingPeriod } from '../subscriptions/entities/subscript
 import { User } from '../users/entities/user.entity';
 import { MarketDataService } from './market-data.service';
 import { AnalysisService } from './analysis.service';
+import { WorkspaceService } from '../workspace/workspace.service';
 import { ServiceCatalog } from './entities/service-catalog.entity';
 
 interface AnalysisJobData {
@@ -71,6 +72,7 @@ export class AnalysisProcessor {
     private readonly userRepo: Repository<User>,
     private readonly marketData: MarketDataService,
     private readonly analysisService: AnalysisService,
+    private readonly workspaceService: WorkspaceService,
     private readonly config: ConfigService,
   ) {
     this.openai = new OpenAI({ apiKey: this.config.get('OPENAI_API_KEY') });
@@ -95,10 +97,29 @@ export class AnalysisProcessor {
 
       const user = await this.userRepo.findOneOrFail({ where: { id: userId } });
 
-      let subscriptions = await this.subscriptionRepo.find({
-        where: { userId, status: In(['ACTIVE', 'TRIAL'] as any) },
-        order: { amount: 'DESC' },
-      });
+      let subscriptions: Subscription[];
+
+      if (workspaceId) {
+        // Team analysis: collect all members' subscriptions
+        const workspace = await this.workspaceService.getMyWorkspace(userId);
+        if (workspace) {
+          const memberIds = workspace.members
+            .filter((m: any) => m.status === 'ACTIVE' && m.userId)
+            .map((m: any) => m.userId);
+
+          subscriptions = await this.subscriptionRepo.find({
+            where: { userId: In(memberIds), status: In(['ACTIVE', 'TRIAL'] as any) },
+            order: { amount: 'DESC' },
+          });
+        } else {
+          subscriptions = [];
+        }
+      } else {
+        subscriptions = await this.subscriptionRepo.find({
+          where: { userId, status: In(['ACTIVE', 'TRIAL'] as any) },
+          order: { amount: 'DESC' },
+        });
+      }
 
       // Truncate to plan limit
       subscriptions = subscriptions.slice(0, limits.maxSubscriptionsPerAnalysis);

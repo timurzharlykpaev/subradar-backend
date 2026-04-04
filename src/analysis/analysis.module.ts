@@ -15,12 +15,14 @@ import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { ANALYSIS_QUEUE } from './analysis.constants';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { WorkspaceModule } from '../workspace/workspace.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([AnalysisJob, AnalysisResult, AnalysisUsage, ServiceCatalog, Subscription, User]),
     BullModule.registerQueue({ name: ANALYSIS_QUEUE }),
     NotificationsModule,
+    forwardRef(() => WorkspaceModule),
   ],
   controllers: [AnalysisController],
   providers: [AnalysisService, AnalysisProcessor, AnalysisCronService, MarketDataService, AnalysisPlanGuard],
