@@ -82,7 +82,7 @@ export class AnalysisService {
   /**
    * Main orchestration: validate limits, dedup, enqueue.
    */
-  async run(userId: string, triggerType: AnalysisTriggerType, workspaceId?: string) {
+  async run(userId: string, triggerType: AnalysisTriggerType, workspaceId?: string, locale?: string) {
     const user = await this.userRepo.findOneOrFail({ where: { id: userId } });
     const plan = this.getUserPlan(user);
 
@@ -176,6 +176,7 @@ export class AnalysisService {
         userId,
         workspaceId: workspaceId ?? null,
         plan,
+        locale: locale || user.locale || 'en',
       },
       {
         attempts: 2,

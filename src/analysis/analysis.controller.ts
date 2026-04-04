@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, UseGuards, Request, ForbiddenException, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, UseGuards, Request, ForbiddenException, HttpCode, HttpStatus } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AnalysisPlanGuard } from './guards/plan.guard';
@@ -49,8 +49,8 @@ export class AnalysisController {
   @Post('run')
   @UseGuards(AnalysisPlanGuard)
   @HttpCode(HttpStatus.OK)
-  async run(@Request() req: any) {
-    const result = await this.analysisService.run(req.user.id, AnalysisTriggerType.MANUAL) as any;
+  async run(@Request() req: any, @Body() body?: { locale?: string }) {
+    const result = await this.analysisService.run(req.user.id, AnalysisTriggerType.MANUAL, undefined, body?.locale) as any;
     if (result.retryAfter !== undefined && result.retryAfter > 0) {
       return { error: 'COOLDOWN', retryAfter: result.retryAfter };
     }

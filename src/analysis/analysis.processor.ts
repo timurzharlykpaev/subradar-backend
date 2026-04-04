@@ -21,6 +21,7 @@ interface AnalysisJobData {
   userId: string;
   workspaceId?: string;
   plan: AnalysisPlan;
+  locale?: string;
 }
 
 interface CategoryBreakdown {
@@ -213,7 +214,7 @@ export class AnalysisProcessor {
         2,
       );
 
-      const systemPrompt = this.buildSystemPrompt(user.locale || 'en');
+      const systemPrompt = this.buildSystemPrompt(job.data.locale || user.locale || 'en');
 
       const responseSchema = `{
   "summary": "string (2-3 sentences)",
