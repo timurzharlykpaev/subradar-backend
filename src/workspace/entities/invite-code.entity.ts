@@ -10,7 +10,7 @@ export class InviteCode {
   @Column('uuid')
   workspaceId: string;
 
-  @Column({ type: 'varchar', length: 6 })
+  @Column({ type: 'varchar', length: 10 })
   code: string;
 
   @Column('uuid')

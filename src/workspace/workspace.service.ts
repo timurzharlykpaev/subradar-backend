@@ -142,12 +142,12 @@ export class WorkspaceService {
       );
     }
 
-    // Generate unique 6-char code
+    // Generate unique 10-char code
     let code: string;
     let attempts = 0;
     do {
       code = Array.from(
-        { length: 6 },
+        { length: 10 },
         () =>
           this.INVITE_CHARSET[
             Math.floor(Math.random() * this.INVITE_CHARSET.length)
