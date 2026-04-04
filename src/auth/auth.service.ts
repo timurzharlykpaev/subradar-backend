@@ -41,21 +41,21 @@ export class AuthService {
 
     // Support both JWT_ACCESS_SECRET (new) and JWT_SECRET (legacy) env var names
     const jwtSecret = this.cfg.get('JWT_ACCESS_SECRET') || this.cfg.get('JWT_SECRET');
-    if (!jwtSecret && process.env.NODE_ENV === 'production') {
-      throw new Error('JWT_ACCESS_SECRET must be set in production');
+    if (!jwtSecret) {
+      throw new Error('JWT_ACCESS_SECRET env var is required');
     }
 
     const jwtRefreshSecret = this.cfg.get('JWT_REFRESH_SECRET');
-    if (!jwtRefreshSecret && process.env.NODE_ENV === 'production') {
-      throw new Error('JWT_REFRESH_SECRET must be set in production');
+    if (!jwtRefreshSecret) {
+      throw new Error('JWT_REFRESH_SECRET env var is required');
     }
 
     const accessToken = this.jwtService.sign(payload, {
-      secret: jwtSecret || 'secret',
+      secret: jwtSecret,
       expiresIn: this.cfg.get('JWT_EXPIRES_IN', '7d'),
     });
     const refreshToken = this.jwtService.sign(payload, {
-      secret: jwtRefreshSecret || 'refresh-secret',
+      secret: jwtRefreshSecret,
       expiresIn: this.cfg.get('JWT_REFRESH_EXPIRES_IN', '30d'),
     });
     return { accessToken, refreshToken };
@@ -150,14 +150,14 @@ export class AuthService {
     }
 
     const magicLinkSecret = this.cfg.get('MAGIC_LINK_SECRET');
-    if (!magicLinkSecret && process.env.NODE_ENV === 'production') {
-      throw new Error('MAGIC_LINK_SECRET must be set in production');
+    if (!magicLinkSecret) {
+      throw new Error('MAGIC_LINK_SECRET env var is required');
     }
 
     const token = this.jwtService.sign(
       { sub: user.id, email: user.email, type: 'magic-link' },
       {
-        secret: magicLinkSecret || 'magic-secret',
+        secret: magicLinkSecret,
         expiresIn: '15m',
       },
     );
@@ -198,8 +198,10 @@ export class AuthService {
   async verifyMagicLink(token: string) {
     let payload: any;
     try {
+      const magicSecret = this.cfg.get('MAGIC_LINK_SECRET');
+      if (!magicSecret) throw new Error('MAGIC_LINK_SECRET env var is required');
       payload = this.jwtService.verify(token, {
-        secret: this.cfg.get('MAGIC_LINK_SECRET') || 'magic-secret',
+        secret: magicSecret,
       });
     } catch {
       throw new UnauthorizedException('Invalid or expired magic link');
@@ -224,8 +226,10 @@ export class AuthService {
   async refresh(token: string) {
     let payload: any;
     try {
+      const refreshSecret = this.cfg.get('JWT_REFRESH_SECRET');
+      if (!refreshSecret) throw new Error('JWT_REFRESH_SECRET env var is required');
       payload = this.jwtService.verify(token, {
-        secret: this.cfg.get('JWT_REFRESH_SECRET') || 'refresh-secret',
+        secret: refreshSecret,
       });
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
@@ -258,14 +262,7 @@ export class AuthService {
         avatarUrl = profile.picture;
         providerId = profile.sub;
       } else {
-        // Try as id_token
-        const payload = this.jwtService.decode(token) as any;
-        if (!payload?.email)
-          throw new UnauthorizedException('Invalid Google token');
-        email = payload.email;
-        name = payload.name || payload.email.split('@')[0];
-        avatarUrl = payload.picture;
-        providerId = payload.sub;
+        throw new UnauthorizedException('Invalid Google token — userinfo request failed');
       }
     } catch {
       throw new UnauthorizedException('Failed to verify Google token');
@@ -296,14 +293,6 @@ export class AuthService {
   }
 
   async sendOtp(dto: OtpSendDto) {
-    // Demo/reviewer account — fixed OTP, no email sent (non-production only)
-    const DEMO_EMAILS = ['reviewer@subradar.ai', 'demo@subradar.ai'];
-    const allowDemo = process.env.NODE_ENV !== 'production' || process.env.ALLOW_DEMO_ACCOUNTS === 'true';
-    if (allowDemo && DEMO_EMAILS.includes(dto.email.toLowerCase())) {
-      await this.redis.set(`otp:${dto.email}`, '123456', 'EX', 86400); // 24h TTL
-      return { message: 'OTP sent' };
-    }
-
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     await this.redis.set(`otp:${dto.email}`, code, 'EX', 900);
 
@@ -336,23 +325,12 @@ export class AuthService {
 
     await this.redis.del(`otp:${dto.email}`);
 
-    const DEMO_EMAILS = ['reviewer@subradar.ai', 'demo@subradar.ai'];
-    const isDemo = DEMO_EMAILS.includes(dto.email.toLowerCase());
-
     let user = await this.usersService.findByEmail(dto.email);
     if (!user) {
       user = await this.usersService.create({
         email: dto.email,
         provider: AuthProvider.LOCAL,
       });
-    }
-
-    // Ensure demo accounts always have Pro plan
-    if (isDemo && user.plan !== 'pro' && user.plan !== 'organization') {
-      await this.usersService.update(user.id, { plan: 'pro' } as any);
-      user = { ...user, plan: 'pro' as any };
-      // Re-set OTP for next login (never expires for demo)
-      await this.redis.set(`otp:${dto.email}`, '123456', 'EX', 86400);
     }
 
     const tokens = this.generateTokens(user);
