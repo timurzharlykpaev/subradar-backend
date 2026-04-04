@@ -13,6 +13,8 @@ class PushTokenDto {
 class NotificationSettingsDto {
   @IsOptional() @IsBoolean() enabled?: boolean;
   @IsOptional() @IsNumber() daysBefore?: number;
+  @IsOptional() @IsBoolean() emailNotifications?: boolean;
+  @IsOptional() @IsBoolean() weeklyDigestEnabled?: boolean;
 }
 
 @ApiTags('notifications')
@@ -42,6 +44,8 @@ export class NotificationsController {
     return {
       enabled: user.notificationsEnabled ?? true,
       daysBefore: (user as any).reminderDaysBefore ?? 3,
+      emailNotifications: user.emailNotifications ?? true,
+      weeklyDigestEnabled: user.weeklyDigestEnabled ?? true,
     };
   }
 
@@ -54,10 +58,16 @@ export class NotificationsController {
     const data: any = {};
     if (dto.enabled !== undefined) data.notificationsEnabled = dto.enabled;
     if (dto.daysBefore !== undefined) data.reminderDaysBefore = dto.daysBefore;
+    if (dto.emailNotifications !== undefined) data.emailNotifications = dto.emailNotifications;
+    if (dto.weeklyDigestEnabled !== undefined) data.weeklyDigestEnabled = dto.weeklyDigestEnabled;
     await this.usersService.update(req.user.id, data);
+
+    const user = await this.usersService.findById(req.user.id);
     return {
-      enabled: dto.enabled ?? true,
-      daysBefore: dto.daysBefore ?? 3,
+      enabled: user.notificationsEnabled ?? true,
+      daysBefore: user.reminderDaysBefore ?? 3,
+      emailNotifications: user.emailNotifications ?? true,
+      weeklyDigestEnabled: user.weeklyDigestEnabled ?? true,
     };
   }
 
