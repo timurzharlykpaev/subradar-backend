@@ -53,8 +53,15 @@ export class AuthController {
 
   @Get('google/callback')
   @UseGuards(GoogleAuthGuard)
-  async googleCallback(@Request() req, @Res() res: import('express').Response) {
+  async googleCallback(@Request() req, @Res() res: import('express').Response, @Query('state') state?: string) {
     const result = await this.authService.googleLogin(req.user);
+    if (state === 'mobile') {
+      // Mobile app: redirect to deep link so WebBrowser.openAuthSessionAsync catches it
+      return res.redirect(
+        `subradar://auth/callback?token=${result.accessToken}&refreshToken=${result.refreshToken}`,
+      );
+    }
+    // Web app: redirect to frontend
     const frontendUrl = process.env.FRONTEND_URL || 'https://app.subradar.ai';
     return res.redirect(
       `${frontendUrl}/auth/callback#accessToken=${result.accessToken}&refreshToken=${result.refreshToken}`,
