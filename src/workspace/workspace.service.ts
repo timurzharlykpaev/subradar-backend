@@ -5,13 +5,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, MoreThan, Repository } from 'typeorm';
 import { Workspace } from './entities/workspace.entity';
 import {
   WorkspaceMember,
   WorkspaceMemberRole,
   WorkspaceMemberStatus,
 } from './entities/workspace-member.entity';
+import { InviteCode } from './entities/invite-code.entity';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import {
@@ -22,6 +23,8 @@ import {
 
 @Injectable()
 export class WorkspaceService {
+  private readonly INVITE_CHARSET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
   constructor(
     @InjectRepository(Workspace)
     private readonly workspaceRepo: Repository<Workspace>,
@@ -29,6 +32,8 @@ export class WorkspaceService {
     private readonly memberRepo: Repository<WorkspaceMember>,
     @InjectRepository(Subscription)
     private readonly subRepo: Repository<Subscription>,
+    @InjectRepository(InviteCode)
+    private readonly inviteCodeRepo: Repository<InviteCode>,
   ) {}
 
   async create(ownerId: string, dto: CreateWorkspaceDto): Promise<Workspace> {
@@ -101,6 +106,206 @@ export class WorkspaceService {
     if (workspace.ownerId !== requesterId)
       throw new ForbiddenException('Only owner can remove members');
     await this.memberRepo.delete({ id: memberId, workspaceId });
+  }
+
+  async generateInviteCode(workspaceId: string, requesterId: string) {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    const requester = workspace.members.find((m) => m.userId === requesterId);
+    if (
+      !requester ||
+      (requester.role !== WorkspaceMemberRole.OWNER &&
+        requester.role !== WorkspaceMemberRole.ADMIN)
+    ) {
+      throw new ForbiddenException(
+        'Only owner or admin can generate invite codes',
+      );
+    }
+
+    // Check max 5 active codes
+    const activeCodes = await this.inviteCodeRepo.count({
+      where: {
+        workspaceId,
+        usedBy: IsNull(),
+        expiresAt: MoreThan(new Date()),
+      },
+    });
+    if (activeCodes >= 5) {
+      throw new BadRequestException(
+        'Maximum 5 active invite codes. Wait for existing codes to expire or be used.',
+      );
+    }
+
+    // Generate unique 6-char code
+    let code: string;
+    let attempts = 0;
+    do {
+      code = Array.from(
+        { length: 6 },
+        () =>
+          this.INVITE_CHARSET[
+            Math.floor(Math.random() * this.INVITE_CHARSET.length)
+          ],
+      ).join('');
+      attempts++;
+    } while (
+      attempts < 10 &&
+      (await this.inviteCodeRepo.findOne({ where: { code } }))
+    );
+
+    const inviteCode = this.inviteCodeRepo.create({
+      workspaceId,
+      code,
+      createdBy: requesterId,
+      expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+    });
+    await this.inviteCodeRepo.save(inviteCode);
+
+    return { code: inviteCode.code, expiresAt: inviteCode.expiresAt };
+  }
+
+  async joinByCode(code: string, userId: string) {
+    const inviteCode = await this.inviteCodeRepo.findOne({
+      where: { code, usedBy: IsNull(), expiresAt: MoreThan(new Date()) },
+    });
+    if (!inviteCode) {
+      throw new BadRequestException('Invalid or expired invite code');
+    }
+
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: inviteCode.workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    // Check not already member
+    if (
+      workspace.members.some(
+        (m) =>
+          m.userId === userId &&
+          m.status === WorkspaceMemberStatus.ACTIVE,
+      )
+    ) {
+      throw new BadRequestException(
+        'You are already a member of this workspace',
+      );
+    }
+
+    // Check not full
+    const activeCount = workspace.members.filter(
+      (m) => m.status === WorkspaceMemberStatus.ACTIVE,
+    ).length;
+    if (activeCount >= workspace.maxMembers) {
+      throw new BadRequestException('Workspace is full');
+    }
+
+    // Mark code as used
+    inviteCode.usedBy = userId;
+    inviteCode.usedAt = new Date();
+    await this.inviteCodeRepo.save(inviteCode);
+
+    // Create member
+    const member = this.memberRepo.create({
+      workspaceId: workspace.id,
+      userId,
+      role: WorkspaceMemberRole.MEMBER,
+      status: WorkspaceMemberStatus.ACTIVE,
+    });
+    await this.memberRepo.save(member);
+
+    return this.findById(workspace.id);
+  }
+
+  async leave(workspaceId: string, userId: string) {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    const member = workspace.members.find((m) => m.userId === userId);
+    if (!member) throw new NotFoundException('Not a member of this workspace');
+    if (member.role === WorkspaceMemberRole.OWNER) {
+      throw new ForbiddenException(
+        'Owner cannot leave. Delete the workspace instead.',
+      );
+    }
+
+    await this.memberRepo.remove(member);
+  }
+
+  async deleteWorkspace(workspaceId: string, requesterId: string) {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    const requester = workspace.members.find((m) => m.userId === requesterId);
+    if (!requester || requester.role !== WorkspaceMemberRole.OWNER) {
+      throw new ForbiddenException('Only owner can delete workspace');
+    }
+
+    await this.inviteCodeRepo.delete({ workspaceId });
+    await this.memberRepo.delete({ workspaceId });
+    await this.workspaceRepo.remove(workspace);
+  }
+
+  async renameWorkspace(
+    workspaceId: string,
+    requesterId: string,
+    name: string,
+  ) {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    const requester = workspace.members.find((m) => m.userId === requesterId);
+    if (
+      !requester ||
+      (requester.role !== WorkspaceMemberRole.OWNER &&
+        requester.role !== WorkspaceMemberRole.ADMIN)
+    ) {
+      throw new ForbiddenException(
+        'Only owner or admin can rename workspace',
+      );
+    }
+
+    workspace.name = name;
+    return this.workspaceRepo.save(workspace);
+  }
+
+  async changeMemberRole(
+    workspaceId: string,
+    requesterId: string,
+    memberId: string,
+    role: WorkspaceMemberRole,
+  ) {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    const requester = workspace.members.find((m) => m.userId === requesterId);
+    if (!requester || requester.role !== WorkspaceMemberRole.OWNER) {
+      throw new ForbiddenException('Only owner can change roles');
+    }
+
+    const member = workspace.members.find((m) => m.id === memberId);
+    if (!member) throw new NotFoundException('Member not found');
+    if (member.role === WorkspaceMemberRole.OWNER) {
+      throw new ForbiddenException('Cannot change owner role');
+    }
+
+    member.role = role;
+    return this.memberRepo.save(member);
   }
 
   private toMonthlyAmount(amount: number, period: BillingPeriod): number {
