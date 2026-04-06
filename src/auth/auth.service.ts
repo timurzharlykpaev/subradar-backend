@@ -315,7 +315,11 @@ export class AuthService {
   }
 
   async sendOtp(dto: OtpSendDto) {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    // Fixed OTP for App Store review account
+    const isReviewAccount = dto.email === 'review@subradar.ai';
+    const code = isReviewAccount
+      ? '000000'
+      : Math.floor(100000 + Math.random() * 900000).toString();
     await this.redis.set(`otp:${dto.email}`, code, 'EX', 900);
 
     await this.notifications.sendEmail(
