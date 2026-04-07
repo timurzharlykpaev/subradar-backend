@@ -121,8 +121,9 @@ export class AnalysisService {
       }
     }
 
-    // Compute input hash for dedup
-    const inputHash = await this.computeInputHash(userId, workspaceId);
+    // Compute input hash for dedup (includes locale so language change triggers new analysis)
+    const effectiveLocale = locale || user.locale || 'en';
+    const inputHash = await this.computeInputHash(userId, workspaceId, effectiveLocale);
 
     // Check for fresh cached result with same hash
     const ttlDays = limits.resultTtlDays;
@@ -285,7 +286,7 @@ export class AnalysisService {
   /**
    * Compute SHA-256 hash of user's subscription data for dedup.
    */
-  async computeInputHash(userId: string, workspaceId?: string): Promise<string> {
+  async computeInputHash(userId: string, workspaceId?: string, locale?: string): Promise<string> {
     const subscriptions = await this.subscriptionRepo.find({
       where: { userId, status: In(['ACTIVE', 'TRIAL'] as any) },
       order: { id: 'ASC' },
@@ -295,6 +296,7 @@ export class AnalysisService {
     const payload = JSON.stringify({
       userId,
       workspaceId: workspaceId ?? null,
+      locale: locale ?? 'en',
       subscriptions: subscriptions.map((s) => ({
         id: s.id,
         name: s.name,
