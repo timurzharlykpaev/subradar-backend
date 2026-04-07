@@ -65,13 +65,16 @@ import { AnalysisModule } from './analysis/analysis.module';
       imports: [ConfigModule],
       useFactory: (cfg: ConfigService) => {
         const redisUrl = cfg.get<string>('REDIS_URL');
-        if (redisUrl) return { url: redisUrl } as any;
+        const nodeEnv = cfg.get('NODE_ENV', 'development');
+        const prefix = `bull:${nodeEnv}`;
+        if (redisUrl) return { url: redisUrl, prefix } as any;
         return {
           redis: {
             host: cfg.get('REDIS_HOST', 'localhost'),
             port: cfg.get<number>('REDIS_PORT', 6379),
             password: cfg.get('REDIS_PASSWORD') || undefined,
           },
+          prefix,
         };
       },
       inject: [ConfigService],
