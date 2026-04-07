@@ -10,7 +10,7 @@ import { TelegramAlertService } from './common/telegram-alert.service';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Increase body size limit for audio/image uploads (base64)
+  // Increase body size limit for audio/image uploads
   app.use(bodyParser.json({ limit: '10mb' }));
   app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
 
