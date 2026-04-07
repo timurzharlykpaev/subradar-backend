@@ -360,12 +360,15 @@ export class AnalysisProcessor {
 2. Rank recommendations by estimated monthly savings (highest first)
 3. Generate a concise human-readable summary (2-3 sentences)
 4. Be specific — reference actual prices and plans from market data
+5. If user has overlapping services in same category, suggest keeping the best value
 
 Rules:
 - Do NOT calculate totals or build charts — that's already done
 - Do NOT hallucinate prices — only use provided market data
 - If no market data for a service, skip price comparison for it
 - Confidence: 0.9+ if based on market data, 0.5-0.8 if reasoning only
+- Consider yearly vs monthly savings: if user pays monthly but yearly is cheaper, recommend switching
+- Group related services (e.g. multiple streaming services) and suggest bundles if applicable
 - Response language: ${locale}
 - Return valid JSON matching the schema`;
   }

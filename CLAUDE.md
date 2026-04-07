@@ -85,12 +85,37 @@ PRODUCTIVITY | HEALTH | NEWS | OTHER
 - Email провайдер: **Resend** (не Mailgun, не SendGrid)
 - `RESEND_API_KEY` обязателен в env
 
-### TypeORM
-- `synchronize: false` в prod
-- `migrationsRun: true` в prod
+### TypeORM & Миграции
+- Dev: `synchronize: true` (авто-синк схемы)
+- Prod: `synchronize: false`, `migrationsRun: true`
 - `ssl: { rejectUnauthorized: false }` для DO PostgreSQL
 - `NODE_TLS_REJECT_UNAUTHORIZED=0` в env
-- Новая сущность = новая миграция
+
+#### Процесс миграций (КРИТИЧНО)
+1. **Новая сущность/поле** → создай миграцию:
+   ```bash
+   npm run migration:generate -- src/migrations/DescriptiveName
+   ```
+2. **Проверь миграцию** — открой файл, убедись что SQL корректен
+3. **Тест на dev** — dev использует `synchronize: true`, но миграция должна работать и через `migration:run`
+4. **Пуш в dev** → GitHub Actions деплоит → миграция запускается автоматически (`migrationsRun: true`)
+5. **Проверь dev** — убедись что таблицы/колонки создались
+6. **Пуш в main** → prod деплоится с той же миграцией
+7. **Enum значения**: PostgreSQL не поддерживает удаление значений из enum — only ADD VALUE IF NOT EXISTS
+
+#### Базы данных (раздельные!)
+- **Prod**: `subradar` (DO Managed PostgreSQL)
+- **Dev**: `subradar_dev` (DO Managed PostgreSQL)
+- **Redis**: один `subradar-redis`, но Bull queues изолированы prefix `bull:{NODE_ENV}`
+- Миграции должны работать на обеих базах
+
+#### Команды
+```bash
+npm run migration:generate -- src/migrations/Name  # Сгенерировать
+npm run migration:run                               # Применить
+npm run migration:revert                            # Откатить последнюю
+npm run migration:show                              # Статус миграций
+```
 
 ### Аутентификация
 - `JwtAuthGuard` на все защищённые роуты
@@ -146,7 +171,7 @@ NODE_TLS_REJECT_UNAUTHORIZED=0
 JWT_ACCESS_SECRET=sr_acc_...
 JWT_REFRESH_SECRET=sr_ref_...
 OPENAI_API_KEY=sk-proj-...
-GOOGLE_CLIENT_ID=140914936328-...
+GOOGLE_CLIENT_ID=1026598677430-...
 GOOGLE_CLIENT_SECRET=GOCSPX-...
 RESEND_API_KEY=re_YHjEcK5A_...
 APP_URL=https://app.subradar.ai
@@ -158,6 +183,15 @@ REDIS_URL=redis://subradar-redis:6379
 - Jest + @nestjs/testing
 - Каждый новый сервис = unit тест
 - `npx tsc --noEmit` перед коммитом
+
+## AI Промпты (src/ai/ai.service.ts, src/analysis/)
+- **16 категорий подписок** — использовать ЕДИНЫЙ список во всех промптах:
+  `STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER`
+- Category guidance обязателен в каждом промпте (примеры: PlayStation → GAMING, Netflix → STREAMING)
+- Wizard содержит хардкоженные цены — обновлять при изменении цен сервисов
+- Все промпты используют `response_format: { type: 'json_object' }`
+- temperature: 0.1-0.2 (детерминированные ответы)
+- Bull queues изолированы по NODE_ENV (`bull:production`, `bull:development`)
 
 ## ⛔ НЕ ТРОГАТЬ без явного запроса
 - Enum значения (UPPERCASE) — ломает фронт и мобилку

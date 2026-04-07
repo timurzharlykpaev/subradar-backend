@@ -89,10 +89,21 @@ Return JSON with fields:
 - name: official service name
 - serviceUrl: official website URL
 - cancelUrl: direct cancellation URL (not generic help page)
-- category: one of STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER
+- category: one of STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
 - plans: array of { name, price (number), currency (3-letter ISO), period (MONTHLY/YEARLY) }
   Include ALL known plans (free tier excluded). Use the most current pricing you know.
 - priceNote: string — if you are confident the price is current (within last 6 months), say "Current as of [date]". If uncertain, say "Price may have changed — verify at [serviceUrl]".
+
+Category guidance:
+- PlayStation Plus, Xbox Game Pass, Nintendo Switch Online, EA Play → GAMING
+- Netflix, Disney+, YouTube Premium, Hulu, HBO Max → STREAMING
+- Spotify, Apple Music, Tidal, Deezer → MUSIC
+- GitHub, JetBrains, Linear → DEVELOPER
+- AWS, GCP, DigitalOcean, Vercel, iCloud, Google One → INFRASTRUCTURE
+- Strava, Peloton, MyFitnessPal → SPORT
+- ChatGPT, Claude, Midjourney → AI_SERVICES
+- 1Password, NordVPN, ExpressVPN → SECURITY
+- If unsure, use OTHER
 
 Locale: ${locale}, Country: ${country}.
 IMPORTANT: Always return at least one plan with a non-zero price for paid services.`,
@@ -126,8 +137,19 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
         messages: [
           {
             role: 'system',
-            content:
-              'You are a receipt/subscription screenshot parser. Extract subscription details and return JSON with: name, amount, currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY/LIFETIME/ONE_TIME), date (ISO string), planName.',
+            content: `You are a receipt/subscription screenshot parser. Extract subscription details from the image.
+
+Return JSON with:
+- name: service name
+- amount: number (price)
+- currency: 3-letter ISO code (USD, EUR, etc.)
+- billingPeriod: MONTHLY|YEARLY|WEEKLY|QUARTERLY|LIFETIME|ONE_TIME
+- date: ISO string (payment/invoice date)
+- planName: plan tier if visible
+- category: STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
+
+Category guidance: PlayStation/Xbox/Nintendo → GAMING, Netflix/Disney+ → STREAMING, Spotify → MUSIC, GitHub/JetBrains → DEVELOPER, ChatGPT/Claude → AI_SERVICES, NordVPN/1Password → SECURITY, Strava/Peloton → SPORT.
+If unsure about category, use OTHER. If cannot extract data, return {}.`,
           },
           {
             role: 'user',
@@ -180,8 +202,19 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
     return this.chat([
       {
         role: 'system',
-        content:
-          'You are a subscription data extractor. From the voice transcript, extract subscription fields and return JSON with: name, amount, currency, billingPeriod, category, notes, startDate.',
+        content: `You are a subscription data extractor. From the voice transcript, extract subscription fields.
+
+Return JSON with:
+- name: service name
+- amount: number (price). Use REAL current price if user didn't specify.
+- currency: 3-letter ISO code (default USD)
+- billingPeriod: MONTHLY|YEARLY|WEEKLY|QUARTERLY|LIFETIME|ONE_TIME (default MONTHLY)
+- category: STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
+- notes: any extra details from transcript
+- startDate: ISO string or null
+
+Category guidance: PlayStation/Xbox → GAMING, Netflix/Disney+ → STREAMING, Spotify → MUSIC, GitHub/JetBrains → DEVELOPER, ChatGPT/Claude → AI_SERVICES, NordVPN → SECURITY, Strava → SPORT.
+If unsure about category, use OTHER.`,
       },
       { role: 'user', content: `Voice transcript: "${text}"` },
     ]);
@@ -313,7 +346,14 @@ ${localeHint}`,
     return this.chat([
       {
         role: 'system',
-        content: 'You are a subscription parser. Extract subscription info from the given email/receipt text. Return JSON: { name, amount (number), currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY), category (STREAMING/AI_SERVICES/INFRASTRUCTURE/PRODUCTIVITY/MUSIC/GAMING/NEWS/HEALTH/OTHER), nextPaymentDate (ISO string or null) }. If not a subscription email, return {}.',
+        content: `You are a subscription parser. Extract subscription info from the given email/receipt text.
+
+Return JSON: { name, amount (number), currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY/LIFETIME/ONE_TIME), category, nextPaymentDate (ISO string or null) }.
+
+Valid categories: STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
+
+Category guidance: PlayStation/Xbox → GAMING, Netflix/Disney+ → STREAMING, Spotify → MUSIC, GitHub/JetBrains → DEVELOPER, ChatGPT/Claude → AI_SERVICES, NordVPN → SECURITY, Strava → SPORT. If unsure → OTHER.
+If not a subscription email, return {}.`,
       },
       {
         role: 'user',
@@ -358,6 +398,15 @@ PRICING DATABASE (use EXACT prices, do not invent):
 - Amazon Prime: $14.99/mo or $139/yr (includes Video+Music+Shipping) | amazon.com | STREAMING
 - Twitch Turbo: $8.99/mo | twitch.tv | STREAMING
 - Crunchyroll: Fan $7.99/mo, Mega Fan $9.99/mo, Ultimate $14.99/mo | crunchyroll.com | STREAMING
+
+🎮 GAMING:
+- PlayStation Plus: Essential $9.99/mo or $79.99/yr, Extra $14.99/mo or $134.99/yr, Premium $17.99/mo or $159.99/yr | playstation.com | GAMING
+- Xbox Game Pass: Core $9.99/mo, Standard $14.99/mo, Ultimate $19.99/mo | xbox.com | GAMING
+- Nintendo Switch Online: Individual $3.99/mo or $19.99/yr, Family $34.99/yr, Expansion Pack $49.99/yr | nintendo.com | GAMING
+- EA Play: $5.99/mo or $39.99/yr, EA Play Pro $16.99/mo or $119.99/yr | ea.com | GAMING
+- GeForce NOW: Priority $9.99/mo, Ultimate $19.99/mo | nvidia.com/geforce-now | GAMING
+- Apple Arcade: $6.99/mo | apple.com/apple-arcade | GAMING
+- Google Play Pass: $4.99/mo | play.google.com | GAMING
 
 🎵 MUSIC:
 - Spotify: Premium $11.99/mo, Duo $16.99/mo, Family $19.99/mo | spotify.com | MUSIC
@@ -585,7 +634,10 @@ LANGUAGE: Always write the "question" field in the user's language. User locale 
     const result = await this.chat([
       {
         role: 'system',
-        content: 'You are a subscription service matcher. Given a fuzzy name, return JSON with: matches (array of { id (uuid), name (official name), confidence (0-1), iconUrl (clearbit logo URL), website (official URL) }). Return top 3 matches. If no match, return empty array.',
+        content: `You are a subscription service matcher. Given a fuzzy name, return JSON with: matches (array of { name (official name), confidence (0-1), iconUrl ("https://icon.horse/icon/{domain}"), website (official URL), category }).
+
+Valid categories: STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
+Return top 3 matches. If no match, return { "matches": [] }.`,
       },
       { role: 'user', content: `Match subscription service: "${name}"` },
     ]);
