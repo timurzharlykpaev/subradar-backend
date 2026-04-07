@@ -55,7 +55,8 @@ export class RemindersService {
         if (!user) continue;
         if (!user.notificationsEnabled) continue;
 
-        const paymentDate = sub.nextPaymentDate as Date;
+        const paymentDate = new Date(sub.nextPaymentDate);
+        if (isNaN(paymentDate.getTime())) continue;
         const diffMs = paymentDate.getTime() - today.getTime();
         const daysLeft = Math.round(diffMs / (1000 * 60 * 60 * 24));
         const dateStr = paymentDate.toISOString().split('T')[0];
