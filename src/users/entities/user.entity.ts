@@ -122,6 +122,9 @@ export class User {
   @Column({ nullable: true, type: 'timestamp' })
   currentPeriodEnd: Date | null;
 
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  downgradedAt: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

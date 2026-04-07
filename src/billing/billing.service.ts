@@ -168,6 +168,7 @@ export class BillingService {
       }
       case 'EXPIRATION': {
         user.plan = 'free';
+        user.downgradedAt = new Date();
         user.billingSource = null as any;
         user.cancelAtPeriodEnd = false;
         user.currentPeriodEnd = null as any;
@@ -400,6 +401,7 @@ export class BillingService {
       aiRequestsUsed,
       aiRequestsLimit: planConfig.aiRequestsLimit,
       proInviteeEmail: user.proInviteeEmail ?? null,
+      downgradedAt: user.downgradedAt?.toISOString() ?? null,
     };
   }
 
