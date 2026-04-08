@@ -59,7 +59,7 @@ export class User {
   @Column({ default: 'free' })
   plan: string;
 
-  @Column({ nullable: true, default: null })
+  @Column({ type: 'varchar', nullable: true, default: null })
   billingPeriod: string | null;
 
   @Column({ default: false })
