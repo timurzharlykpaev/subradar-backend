@@ -41,6 +41,10 @@ export class BillingService {
       cfg.get('LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID', '') || this.teamVariantId;
   }
 
+  private extractBillingPeriod(productId: string): 'monthly' | 'yearly' {
+    return productId?.toLowerCase().includes('yearly') ? 'yearly' : 'monthly';
+  }
+
   private readonly RC_PRODUCT_TO_PLAN: Record<string, string> = {
     // Production product IDs
     'io.subradar.mobile.pro.monthly': 'pro',
@@ -84,12 +88,19 @@ export class BillingService {
           const user = await this.usersService.findByEmail(email);
           if (user) {
             const isActive = status === 'active' || status === 'on_trial';
+            const yearlyVariants = [
+              process.env.LEMON_SQUEEZY_PRO_YEARLY_VARIANT_ID,
+              process.env.LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID,
+              '1377285',
+            ].filter(Boolean);
+            const isYearly = yearlyVariants.includes(variantId);
             const updates: any = {
               plan: isActive ? (isTeam ? 'organization' : 'pro') : 'free',
+              billingPeriod: isActive ? (isYearly ? 'yearly' : 'monthly') : null,
               lemonSqueezyCustomerId: String(customerId),
               billingSource: 'lemon_squeezy',
             };
-            this.logger.log(`Webhook upgrade: email=${email} variantId=${variantId} isTeam=${isTeam} plan=${updates.plan} status=${status}`);
+            this.logger.log(`Webhook upgrade: email=${email} variantId=${variantId} isTeam=${isTeam} plan=${updates.plan} period=${updates.billingPeriod} status=${status}`);
             await this.usersService.update(user.id, updates);
           }
         }
@@ -143,13 +154,15 @@ export class BillingService {
       case 'RENEWAL':
       case 'PRODUCT_CHANGE': {
         const plan = this.RC_PRODUCT_TO_PLAN[productId] || 'pro';
+        const billingPeriod = this.extractBillingPeriod(productId);
         user.plan = plan;
+        user.billingPeriod = billingPeriod;
         user.billingSource = 'revenuecat';
         // Reset cancellation flags — purchase/renewal supersedes cancellation
         user.cancelAtPeriodEnd = false;
         user.currentPeriodEnd = null;
         await this.usersService.save(user);
-        this.logger.log(`RevenueCat: ${type} — user ${appUserId} → plan ${plan}`);
+        this.logger.log(`RevenueCat: ${type} — user ${appUserId} → plan ${plan} (${billingPeriod})`);
         break;
       }
       case 'CANCELLATION': {
@@ -168,6 +181,7 @@ export class BillingService {
       }
       case 'EXPIRATION': {
         user.plan = 'free';
+        user.billingPeriod = null;
         user.downgradedAt = new Date();
         user.billingSource = null as any;
         user.cancelAtPeriodEnd = false;
@@ -349,14 +363,16 @@ export class BillingService {
       }
     }
 
+    const billingPeriod = this.extractBillingPeriod(productId);
     const user = await this.usersService.findById(userId);
     user.plan = plan;
+    user.billingPeriod = billingPeriod;
     user.billingSource = 'revenuecat';
     // Reset cancellation flags — new purchase supersedes any previous cancellation
     user.cancelAtPeriodEnd = false;
     user.currentPeriodEnd = null;
     await this.usersService.save(user);
-    this.logger.log(`syncRevenueCat: user ${userId} → plan ${plan} (product: ${productId})`);
+    this.logger.log(`syncRevenueCat: user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId})`);
   }
 
   async getBillingInfo(userId: string, subscriptionCount: number) {
@@ -391,6 +407,7 @@ export class BillingService {
 
     return {
       plan: user.plan,
+      billingPeriod: user.billingPeriod ?? 'monthly',
       status,
       currentPeriodEnd: periodEnd?.toISOString() ?? null,
       cancelAtPeriodEnd: user.cancelAtPeriodEnd ?? false,
