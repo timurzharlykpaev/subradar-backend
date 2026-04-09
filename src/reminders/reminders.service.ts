@@ -25,26 +25,23 @@ export class RemindersService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const in1Day = new Date(today);
-    in1Day.setDate(today.getDate() + 1);
-
-    const in3Days = new Date(today);
-    in3Days.setDate(today.getDate() + 3);
+    // Find all active subscriptions with nextPaymentDate in next 7 days
+    const in7Days = new Date(today);
+    in7Days.setDate(today.getDate() + 7);
 
     const subscriptions = await this.subscriptionRepo
       .createQueryBuilder('sub')
       .where('sub.status IN (:...statuses)', {
         statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
       })
-      .andWhere('sub.nextPaymentDate IN (:...dates)', {
-        dates: [
-          in1Day.toISOString().split('T')[0],
-          in3Days.toISOString().split('T')[0],
-        ],
+      .andWhere('sub.nextPaymentDate BETWEEN :from AND :to', {
+        from: new Date(today.getTime() + 86400000).toISOString().split('T')[0], // tomorrow
+        to: in7Days.toISOString().split('T')[0],
       })
+      .andWhere('sub.reminderEnabled = true')
       .getMany();
 
-    this.logger.log(`Found ${subscriptions.length} subscriptions due for reminders`);
+    this.logger.log(`Found ${subscriptions.length} subscriptions with reminders in next 7 days`);
 
     let sent = 0;
     let errors = 0;
@@ -60,6 +57,10 @@ export class RemindersService {
         const diffMs = paymentDate.getTime() - today.getTime();
         const daysLeft = Math.round(diffMs / (1000 * 60 * 60 * 24));
         const dateStr = paymentDate.toISOString().split('T')[0];
+
+        // Check if today matches one of the subscription's reminder days
+        const reminderDays: number[] = (sub as any).reminderDaysBefore ?? [1, 3];
+        if (!reminderDays.includes(daysLeft)) continue;
 
         // Send email (check emailNotifications preference)
         const emailEnabled = (user as any).emailNotifications !== false;
