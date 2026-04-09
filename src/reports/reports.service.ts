@@ -252,13 +252,13 @@ export class ReportsService {
     const cur = subs[0]?.currency || 'USD';
 
     // ── Overview box ────────────────────
-    doc.rect(ML, doc.y, CW, 60).lineWidth(1).strokeColor(C.border).fillAndStroke(C.rowEven, C.border);
-    const boxY = doc.y - 56;
-    doc.fontSize(11).font('Helvetica-Bold').fillColor(C.text).text(t(l, 'overview'), ML + 14, boxY + 8);
-    doc.fontSize(22).fillColor(C.primary).text(`${cur} ${totalMonthly.toFixed(2)}`, ML + 14, boxY + 24);
-    doc.fontSize(10).fillColor(C.textLight).text(t(l, 'per_month'), ML + 14 + doc.widthOfString(`${cur} ${totalMonthly.toFixed(2)}`) + 4, boxY + 30);
-    doc.fontSize(10).fillColor(C.textMuted).text(`${active.length} ${t(l, 'active_subs')}  ·  ${cur} ${(totalMonthly * 12).toFixed(0)} ${t(l, 'per_year')}`, ML + 14, boxY + 46);
-    doc.y = boxY + 70;
+    const boxTop = doc.y;
+    doc.rect(ML, boxTop, CW, 65).lineWidth(1).strokeColor(C.border).fillAndStroke(C.rowEven, C.border);
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(C.text).text(t(l, 'overview'), ML + 14, boxTop + 8);
+    doc.fontSize(22).fillColor(C.primary).text(`${cur} ${totalMonthly.toFixed(2)}`, ML + 14, boxTop + 24);
+    doc.fontSize(10).font('Helvetica').fillColor(C.textLight).text(t(l, 'per_month'), ML + 160, boxTop + 30);
+    doc.fontSize(10).fillColor(C.textMuted).text(`${active.length} ${t(l, 'active_subs')}  |  ${cur} ${(totalMonthly * 12).toFixed(0)} ${t(l, 'per_year')}`, ML + 14, boxTop + 48);
+    doc.y = boxTop + 75;
 
     // ── Category chart (horizontal bars) ────────────────────
     const byCat: Record<string, { count: number; amount: number }> = {};
@@ -316,10 +316,16 @@ export class ReportsService {
     this.sectionTitle(doc, t(l, 'by_status'), ML);
     const byStatus: Record<string, number> = {};
     subs.forEach((s) => { byStatus[s.status] = (byStatus[s.status] || 0) + 1; });
+    const statusLabels: Record<string, string> = {
+      ACTIVE: t(l, 'active'), TRIAL: t(l, 'trial'),
+      CANCELLED: t(l, 'cancelled_status'), PAUSED: t(l, 'paused'),
+    };
     doc.fontSize(10).font('Helvetica');
     Object.entries(byStatus).forEach(([status, count]) => {
       const color = status === 'ACTIVE' ? C.green : status === 'TRIAL' ? C.orange : status === 'CANCELLED' ? C.red : C.textMuted;
-      doc.fillColor(color).text(`● ${status}: ${count}`, ML);
+      const y = doc.y;
+      doc.circle(ML + 4, y + 5, 3).fill(color);
+      doc.fillColor(C.text).text(`  ${statusLabels[status] || status}: ${count}`, ML + 10, y);
     });
   }
 
