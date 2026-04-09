@@ -30,6 +30,8 @@ class GenerateReportDto {
   @ApiProperty({ enum: ReportType }) @IsEnum(ReportType) type: ReportType;
   /** Optional format hint (pdf | csv) — ignored server-side for now */
   @ApiPropertyOptional() @IsOptional() @IsString() format?: string;
+  /** Locale for PDF (e.g. 'ru', 'en') — defaults to user locale */
+  @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
 }
 
 @ApiTags('reports')
@@ -48,7 +50,7 @@ export class ReportsController {
   generate(@Request() req, @Body() dto: GenerateReportDto) {
     const from = dto.from || dto.startDate || '';
     const to = dto.to || dto.endDate || '';
-    return this.service.generate(req.user.id, from, to, dto.type);
+    return this.service.generate(req.user.id, from, to, dto.type, dto.locale);
   }
 
   @Get()

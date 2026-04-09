@@ -10,12 +10,12 @@ export class ReportsProcessor {
   constructor(private readonly service: ReportsService) {}
 
   @Process('generate-pdf')
-  async handleGeneratePdf(job: Job<{ reportId: string; userId: string }>) {
-    const { reportId, userId } = job.data;
-    this.logger.log(`Processing PDF generation for report ${reportId}`);
+  async handleGeneratePdf(job: Job<{ reportId: string; userId: string; locale?: string }>) {
+    const { reportId, userId, locale } = job.data;
+    this.logger.log(`Processing PDF generation for report ${reportId} (locale: ${locale || 'en'})`);
 
     try {
-      await this.service.buildAndStorePdf(userId, reportId);
+      await this.service.buildAndStorePdf(userId, reportId, locale || 'en');
       this.logger.log(`PDF generation complete for report ${reportId}`);
     } catch (error) {
       this.logger.error(
