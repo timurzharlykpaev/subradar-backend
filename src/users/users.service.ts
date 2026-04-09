@@ -106,13 +106,21 @@ export class UsersService {
     const em = this.repo.manager;
 
     // Delete related data that doesn't have onDelete: CASCADE
-    await em.query(`DELETE FROM analysis_jobs WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM analysis_results WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM analysis_usage WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM workspace_members WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM invite_codes WHERE "createdBy" = $1`, [id]);
-    await em.query(`DELETE FROM invite_codes WHERE "usedBy" = $1`, [id]);
-    await em.query(`DELETE FROM push_tokens WHERE "userId" = $1`, [id]);
+    // Use try/catch per table in case some don't exist yet
+    const tables = [
+      `DELETE FROM analysis_jobs WHERE "userId" = $1`,
+      `DELETE FROM analysis_results WHERE "userId" = $1`,
+      `DELETE FROM analysis_usage WHERE "userId" = $1`,
+      `DELETE FROM workspace_members WHERE "userId" = $1`,
+      `DELETE FROM workspaces WHERE "ownerId" = $1`,
+      `DELETE FROM invite_codes WHERE "createdBy" = $1`,
+      `DELETE FROM invite_codes WHERE "usedBy" = $1`,
+    ];
+    for (const sql of tables) {
+      try { await em.query(sql, [id]); } catch (e) {
+        this.logger.warn(`deleteAccount cleanup skipped: ${e.message?.split('\n')[0]}`);
+      }
+    }
 
     // subscriptions, payment_cards, receipts, reports, refresh_tokens → CASCADE
     await this.repo.delete(id);
