@@ -83,7 +83,7 @@ jobs:
             OPENAI_MODEL=gpt-4o
             DO_SPACES_KEY=${{ secrets.DO_SPACES_KEY }}
             DO_SPACES_SECRET=${{ secrets.DO_SPACES_SECRET }}
-            DO_SPACES_BUCKET=subradar
+            DO_SPACES_BUCKET=steptogoal
             DO_SPACES_REGION=fra1
             DO_SPACES_ENDPOINT=https://fra1.digitaloceanspaces.com
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
@@ -136,7 +136,7 @@ jobs:
             OPENAI_MODEL=gpt-4o
             DO_SPACES_KEY=${{ secrets.DO_SPACES_KEY }}
             DO_SPACES_SECRET=${{ secrets.DO_SPACES_SECRET }}
-            DO_SPACES_BUCKET=subradar
+            DO_SPACES_BUCKET=steptogoal
             DO_SPACES_REGION=fra1
             DO_SPACES_ENDPOINT=https://fra1.digitaloceanspaces.com
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}

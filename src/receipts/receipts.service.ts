@@ -26,8 +26,8 @@ export class ReceiptsService {
         secretAccessKey: cfg.get('DO_SPACES_SECRET', ''),
       },
     });
-    this.bucket = cfg.get('DO_SPACES_BUCKET', 'subradar');
-    this.cdnUrl = cfg.get('DO_SPACES_CDN_URL', '');
+    this.bucket = cfg.get('DO_SPACES_BUCKET', 'steptogoal');
+    this.cdnUrl = cfg.get('DO_SPACES_CDN_URL', `https://${this.bucket}.fra1.digitaloceanspaces.com`);
   }
 
   async upload(
