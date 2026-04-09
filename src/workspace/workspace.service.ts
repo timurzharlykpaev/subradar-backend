@@ -242,6 +242,27 @@ export class WorkspaceService {
     this.logger.log(`Member left workspace: userId=${userId} workspaceId=${workspaceId}`);
   }
 
+  /** Owner/Admin can view any member's subscriptions within the workspace */
+  async getMemberSubscriptions(workspaceId: string, requesterId: string, memberId: string): Promise<Subscription[]> {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+    const requester = workspace.members.find((m) => m.userId === requesterId);
+    if (!requester) throw new ForbiddenException('Not a member');
+    if (requester.role !== WorkspaceMemberRole.OWNER && requester.role !== WorkspaceMemberRole.ADMIN) {
+      throw new ForbiddenException('Only owner or admin can view member subscriptions');
+    }
+    const target = workspace.members.find((m) => m.id === memberId || m.userId === memberId);
+    if (!target) throw new NotFoundException('Member not found in workspace');
+
+    return this.subRepo.find({
+      where: { userId: target.userId, status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]) },
+      order: { amount: 'DESC' },
+    });
+  }
+
   async deleteWorkspace(workspaceId: string, requesterId: string) {
     const workspace = await this.workspaceRepo.findOne({
       where: { id: workspaceId },

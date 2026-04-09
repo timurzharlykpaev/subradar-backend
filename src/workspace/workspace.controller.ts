@@ -121,6 +121,16 @@ export class WorkspaceController {
     );
   }
 
+  /** Owner/Admin can view a member's subscriptions */
+  @Get(':id/members/:memberId/subscriptions')
+  async getMemberSubscriptions(
+    @Param('id') id: string,
+    @Param('memberId') memberId: string,
+    @Request() req: any,
+  ) {
+    return this.service.getMemberSubscriptions(id, req.user.id, memberId);
+  }
+
   @Get('me/analysis/latest')
   async getAnalysisLatest(@Request() req: any) {
     const workspace = await this.service.getMyWorkspace(req.user.id);
