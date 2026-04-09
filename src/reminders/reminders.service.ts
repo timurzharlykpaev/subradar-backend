@@ -259,11 +259,12 @@ export class RemindersService {
     const now = new Date();
     const weekFromNow = new Date(now.getTime() + 7 * 86400000);
 
-    // Find active users with push token who were active in last 30 days
+    // Find active users with push token who opted in to weekly digest
     const users = await this.userRepo
       .createQueryBuilder('u')
       .where('u.fcmToken IS NOT NULL')
       .andWhere('u.notificationsEnabled = true')
+      .andWhere('u.weeklyDigestEnabled = true')
       .getMany();
 
     let sent = 0;

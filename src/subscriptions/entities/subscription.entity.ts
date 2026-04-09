@@ -130,10 +130,10 @@ export class Subscription {
   @Column({ nullable: true })
   iconUrl: string;
 
-  @Column({ type: 'int', array: true, nullable: true })
+  @Column({ type: 'int', array: true, default: '{3}' })
   reminderDaysBefore: number[];
 
-  @Column({ default: false })
+  @Column({ default: true })
   reminderEnabled: boolean;
 
   @Column({ default: false })

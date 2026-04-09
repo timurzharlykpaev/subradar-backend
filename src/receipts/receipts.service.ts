@@ -15,12 +15,12 @@ export class ReceiptsService {
     @InjectRepository(Receipt) private readonly repo: Repository<Receipt>,
     private readonly cfg: ConfigService,
   ) {
+    const endpoint = cfg.get('DO_SPACES_ENDPOINT', 'https://fra1.digitaloceanspaces.com');
+    const region = cfg.get('DO_SPACES_REGION', 'fra1');
     this.s3 = new S3Client({
-      endpoint: cfg.get(
-        'DO_SPACES_ENDPOINT',
-        'https://nyc3.digitaloceanspaces.com',
-      ),
-      region: 'us-east-1',
+      endpoint,
+      region,
+      forcePathStyle: false,
       credentials: {
         accessKeyId: cfg.get('DO_SPACES_KEY', ''),
         secretAccessKey: cfg.get('DO_SPACES_SECRET', ''),
