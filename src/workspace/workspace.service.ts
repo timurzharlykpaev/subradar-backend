@@ -244,13 +244,22 @@ export class WorkspaceService {
 
   /** Owner/Admin can view any member's subscriptions within the workspace */
   async getMemberSubscriptions(workspaceId: string, requesterId: string, memberId: string): Promise<Subscription[]> {
-    const workspace = await this.workspaceRepo.findOne({
+    // Try finding workspace by ID first, fallback to user's workspace
+    let workspace = await this.workspaceRepo.findOne({
       where: { id: workspaceId },
-      relations: ['members'],
+      relations: ['members', 'members.user'],
     });
+    // If workspace not found by UUID, user might have passed wrong ID — try their workspace
+    if (!workspace) {
+      workspace = await this.getMyWorkspace(requesterId);
+    }
     if (!workspace) throw new NotFoundException('Workspace not found');
+
     const requester = workspace.members.find((m) => m.userId === requesterId);
-    if (!requester) throw new ForbiddenException('Not a member');
+    if (!requester) {
+      this.logger.warn(`getMemberSubscriptions: requester ${requesterId} not in workspace ${workspace.id}, members: ${workspace.members.map(m => m.userId).join(',')}`);
+      throw new ForbiddenException('Not a member of this workspace');
+    }
     if (requester.role !== WorkspaceMemberRole.OWNER && requester.role !== WorkspaceMemberRole.ADMIN) {
       throw new ForbiddenException('Only owner or admin can view member subscriptions');
     }

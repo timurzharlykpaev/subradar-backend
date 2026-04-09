@@ -121,7 +121,7 @@ export class WorkspaceController {
     );
   }
 
-  /** Owner/Admin can view a member's subscriptions */
+  /** Owner/Admin can view a member's subscriptions (by workspace ID) */
   @Get(':id/members/:memberId/subscriptions')
   async getMemberSubscriptions(
     @Param('id') id: string,
@@ -129,6 +129,17 @@ export class WorkspaceController {
     @Request() req: any,
   ) {
     return this.service.getMemberSubscriptions(id, req.user.id, memberId);
+  }
+
+  /** Owner/Admin can view a member's subscriptions (auto-detect workspace) */
+  @Get('me/members/:memberId/subscriptions')
+  async getMyMemberSubscriptions(
+    @Param('memberId') memberId: string,
+    @Request() req: any,
+  ) {
+    const workspace = await this.service.getMyWorkspace(req.user.id);
+    if (!workspace) throw new NotFoundException('No workspace found');
+    return this.service.getMemberSubscriptions(workspace.id, req.user.id, memberId);
   }
 
   @Get('me/analysis/latest')
