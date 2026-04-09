@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, LessThan } from 'typeorm';
 import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -250,6 +250,75 @@ export class RemindersService {
     );
   }
 
+  /** Weekly push digest — every Sunday at 11:00 UTC */
+  @Cron('0 11 * * 0')
+  async sendWeeklyPushDigest() {
+    this.logger.log('Running weekly push digest...');
+
+    const now = new Date();
+    const weekFromNow = new Date(now.getTime() + 7 * 86400000);
+
+    // Find active users with push token who were active in last 30 days
+    const users = await this.userRepo
+      .createQueryBuilder('u')
+      .where('u.fcmToken IS NOT NULL')
+      .andWhere('u.notificationsEnabled = true')
+      .getMany();
+
+    let sent = 0;
+
+    for (const user of users) {
+      try {
+        const subs = await this.subscriptionRepo.find({
+          where: { userId: user.id },
+        });
+
+        const active = subs.filter(
+          (s) =>
+            s.status === SubscriptionStatus.ACTIVE ||
+            s.status === SubscriptionStatus.TRIAL,
+        );
+        if (active.length === 0) continue;
+
+        // Calc total monthly spend
+        const totalMonthly = active.reduce((sum, s) => {
+          const amt = Number(s.amount) || 0;
+          const period = (s.billingPeriod as string)?.toUpperCase();
+          if (period === 'YEARLY') return sum + amt / 12;
+          if (period === 'WEEKLY') return sum + amt * 4.33;
+          if (period === 'QUARTERLY') return sum + amt / 3;
+          return sum + amt;
+        }, 0);
+
+        // Count renewals this week
+        const renewingThisWeek = active.filter((s) => {
+          if (!s.nextPaymentDate) return false;
+          const d = new Date(s.nextPaymentDate);
+          return d >= now && d <= weekFromNow;
+        });
+
+        const currency = active[0]?.currency ?? 'USD';
+        const title = `📊 ${currency} ${totalMonthly.toFixed(0)}/mo on ${active.length} subscriptions`;
+        const body =
+          renewingThisWeek.length > 0
+            ? `${renewingThisWeek.length} renewing this week`
+            : 'Your weekly subscription summary';
+
+        await this.notificationsService.sendPushNotification(
+          user.fcmToken,
+          title,
+          body,
+          { screen: '/(tabs)' },
+        );
+        sent++;
+      } catch (err) {
+        this.logger.error(`Weekly digest push failed for ${user.id}:`, err);
+      }
+    }
+
+    this.logger.log(`Weekly push digests sent: ${sent}`);
+  }
+
   /** Downgrade users whose trial has expired — runs every hour */
   @Cron('0 * * * *')
   async expireTrials() {
@@ -268,5 +337,60 @@ export class RemindersService {
     if (expired.length > 0) {
       this.logger.log(`Expired ${expired.length} trials`);
     }
+  }
+
+  /** Win-back push for users inactive 7+ days — daily at 14:00 UTC */
+  @Cron('0 14 * * *')
+  async sendWinBackPush() {
+    this.logger.log('Running win-back push cron...');
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000);
+
+    // Users with push token who haven't been updated in 7+ days (proxy for inactivity)
+    const inactiveUsers = await this.userRepo
+      .createQueryBuilder('u')
+      .where('u.fcmToken IS NOT NULL')
+      .andWhere('u.notificationsEnabled = true')
+      .andWhere('u.updatedAt < :date', { date: sevenDaysAgo })
+      .getMany();
+
+    let sent = 0;
+
+    for (const user of inactiveUsers) {
+      try {
+        // Check if they have active subs with upcoming renewals
+        const weekFromNow = new Date(Date.now() + 7 * 86400000);
+        const upcomingSubs = await this.subscriptionRepo
+          .createQueryBuilder('sub')
+          .where('sub.userId = :userId', { userId: user.id })
+          .andWhere('sub.status IN (:...statuses)', {
+            statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
+          })
+          .andWhere('sub.nextPaymentDate <= :date', {
+            date: weekFromNow.toISOString().split('T')[0],
+          })
+          .andWhere('sub.nextPaymentDate >= :today', {
+            today: new Date().toISOString().split('T')[0],
+          })
+          .getCount();
+
+        if (upcomingSubs === 0) continue;
+
+        const title = '👀 Don\'t miss upcoming charges';
+        const body = `${upcomingSubs} subscription${upcomingSubs > 1 ? 's' : ''} renewing this week`;
+
+        await this.notificationsService.sendPushNotification(
+          user.fcmToken,
+          title,
+          body,
+          { screen: '/(tabs)' },
+        );
+        sent++;
+      } catch (err) {
+        this.logger.error(`Win-back push failed for ${user.id}:`, err);
+      }
+    }
+
+    this.logger.log(`Win-back pushes sent: ${sent}`);
   }
 }
