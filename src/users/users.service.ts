@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -6,6 +6,8 @@ import { User } from './entities/user.entity';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectRepository(User) private readonly repo: Repository<User>,
   ) {}
@@ -101,6 +103,17 @@ export class UsersService {
   }
 
   async deleteAccount(id: string): Promise<void> {
+    const em = this.repo.manager;
+
+    // Delete related data that doesn't have CASCADE on user FK
+    await em.query(`DELETE FROM analysis_jobs WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM analysis_results WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM analysis_usages WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM workspace_members WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM invite_codes WHERE "createdById" = $1`, [id]);
+
+    // subscriptions + payment_cards have onDelete: CASCADE — handled by DB
     await this.repo.delete(id);
+    this.logger.log(`Account deleted: ${id}`);
   }
 }
