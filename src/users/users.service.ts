@@ -105,14 +105,16 @@ export class UsersService {
   async deleteAccount(id: string): Promise<void> {
     const em = this.repo.manager;
 
-    // Delete related data that doesn't have CASCADE on user FK
+    // Delete related data that doesn't have onDelete: CASCADE
     await em.query(`DELETE FROM analysis_jobs WHERE "userId" = $1`, [id]);
     await em.query(`DELETE FROM analysis_results WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM analysis_usages WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM analysis_usage WHERE "userId" = $1`, [id]);
     await em.query(`DELETE FROM workspace_members WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM invite_codes WHERE "createdById" = $1`, [id]);
+    await em.query(`DELETE FROM invite_codes WHERE "createdBy" = $1`, [id]);
+    await em.query(`DELETE FROM invite_codes WHERE "usedBy" = $1`, [id]);
+    await em.query(`DELETE FROM push_tokens WHERE "userId" = $1`, [id]);
 
-    // subscriptions + payment_cards have onDelete: CASCADE — handled by DB
+    // subscriptions, payment_cards, receipts, reports, refresh_tokens → CASCADE
     await this.repo.delete(id);
     this.logger.log(`Account deleted: ${id}`);
   }
