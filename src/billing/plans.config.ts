@@ -29,7 +29,7 @@ export const PLANS: Record<string, PlanConfig> = {
   },
   organization: {
     subscriptionLimit: null,
-    aiRequestsLimit: null,
+    aiRequestsLimit: 1000,
     hasInvite: true,
     canCreateOrg: true,
     analysisEnabled: true,
