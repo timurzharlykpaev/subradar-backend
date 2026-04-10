@@ -47,11 +47,11 @@ export class UsersService {
     // Whitelist only known User columns to avoid TypeORM "Property not found" errors
     const ALLOWED_KEYS = new Set([
       'name', 'avatarUrl', 'fcmToken', 'refreshToken', 'magicLinkToken', 'magicLinkExpiry',
-      'lemonSqueezyCustomerId', 'plan', 'billingSource', 'trialUsed', 'trialStartDate', 'trialEndDate',
+      'lemonSqueezyCustomerId', 'plan', 'billingSource', 'billingPeriod', 'trialUsed', 'trialStartDate', 'trialEndDate',
       'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'isActive',
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
-      'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore',
-      'cancelAtPeriodEnd', 'currentPeriodEnd', 'status',
+      'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore', 'weeklyDigestEnabled',
+      'cancelAtPeriodEnd', 'currentPeriodEnd', 'status', 'downgradedAt',
     ]);
     const safe: Partial<User> = {};
     for (const [k, v] of Object.entries(data)) {

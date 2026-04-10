@@ -17,6 +17,9 @@ describe('BillingController', () => {
     startTrial: jest.fn().mockResolvedValue(undefined),
     activateProInvite: jest.fn().mockResolvedValue(undefined),
     removeProInvite: jest.fn().mockResolvedValue(undefined),
+    cancelSubscription: jest.fn().mockResolvedValue(undefined),
+    handleRevenueCatWebhook: jest.fn().mockResolvedValue(undefined),
+    syncRevenueCat: jest.fn().mockResolvedValue(undefined),
   };
 
   const mockUsersService = {
@@ -126,8 +129,8 @@ describe('BillingController', () => {
     expect(result).toHaveProperty('success', true);
   });
 
-  it('cancelBilling → returns message', () => {
-    const result = controller.cancelBilling();
+  it('cancelBilling → returns message', async () => {
+    const result = await controller.cancelBilling({ user: { id: 'user-1' } });
     expect(result).toHaveProperty('message');
   });
 });

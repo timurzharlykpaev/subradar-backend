@@ -45,6 +45,21 @@ export class BillingService {
     return productId?.toLowerCase().includes('yearly') ? 'yearly' : 'monthly';
   }
 
+  /**
+   * Returns the effective plan considering trial expiry.
+   * Database may have plan='pro' for expired trials — this returns 'free' in that case.
+   */
+  getEffectivePlan(user: any): string {
+    if (user.plan === 'free') return 'free';
+    // If user has RC or LS billing source, trust the plan field
+    if (user.billingSource) return user.plan;
+    // If trialing and trial still active, trust the plan
+    if (user.trialEndDate && new Date(user.trialEndDate) > new Date()) return user.plan;
+    // If trial expired and no billing source — effective plan is free
+    if (user.trialUsed && !user.billingSource) return 'free';
+    return user.plan;
+  }
+
   private readonly RC_PRODUCT_TO_PLAN: Record<string, string> = {
     // Production product IDs
     'io.subradar.mobile.pro.monthly': 'pro',
@@ -114,7 +129,8 @@ export class BillingService {
             await this.usersService.update(user.id, { plan: 'free' });
             if (user.proInviteeEmail) {
               const invitee = await this.usersService.findByEmail(user.proInviteeEmail);
-              if (invitee) {
+              // Only downgrade invitee if they don't have their own paid subscription
+              if (invitee && !invitee.billingSource) {
                 await this.usersService.update(invitee.id, { plan: 'free' });
               }
               await this.usersService.update(user.id, { proInviteeEmail: undefined as any });
@@ -188,6 +204,13 @@ export class BillingService {
         user.currentPeriodEnd = null as any;
         await this.usersService.save(user);
         this.logger.log(`RevenueCat: EXPIRATION — user ${appUserId} → free`);
+        break;
+      }
+      case 'UNCANCELLATION': {
+        user.cancelAtPeriodEnd = false;
+        user.currentPeriodEnd = null;
+        await this.usersService.save(user);
+        this.logger.log(`RevenueCat: UNCANCELLATION — user ${appUserId}, subscription restored`);
         break;
       }
       case 'BILLING_ISSUE': {
@@ -314,7 +337,8 @@ export class BillingService {
       throw new BadRequestException('No active invite to remove');
     }
     const invitee = await this.usersService.findByEmail(owner.proInviteeEmail);
-    if (invitee) {
+    // Only downgrade invitee if they don't have their own paid subscription
+    if (invitee && !invitee.billingSource) {
       await this.usersService.update(invitee.id, { plan: 'free' });
     }
     await this.usersService.update(ownerId, { proInviteeEmail: undefined as any });
@@ -328,7 +352,8 @@ export class BillingService {
   async consumeAiRequest(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
     const currentMonth = this.getCurrentMonth();
-    const planConfig = PLANS[user.plan] ?? PLANS.free;
+    const effectivePlan = this.getEffectivePlan(user);
+    const planConfig = PLANS[effectivePlan] ?? PLANS.free;
 
     const needsReset = user.aiRequestsMonth !== currentMonth;
     const currentUsed = needsReset ? 0 : user.aiRequestsUsed;
@@ -346,18 +371,44 @@ export class BillingService {
   }
 
   async syncRevenueCat(userId: string, productId: string): Promise<void> {
+    // Verify the user actually has an active entitlement via RevenueCat REST API
+    const rcApiKey = this.cfg.get('REVENUECAT_API_KEY', '');
+    if (!rcApiKey) {
+      this.logger.warn('syncRevenueCat: REVENUECAT_API_KEY not set — skipping server-side verification');
+    }
+    if (rcApiKey) {
+      try {
+        const res = await fetch(
+          `https://api.revenuecat.com/v1/subscribers/${userId}`,
+          { headers: { Authorization: `Bearer ${rcApiKey}` } },
+        );
+        if (res.ok) {
+          const data = (await res.json()) as any;
+          const entitlements = data?.subscriber?.entitlements ?? {};
+          const hasActive = Object.values(entitlements).some(
+            (e: any) => e.expires_date === null || new Date(e.expires_date) > new Date(),
+          );
+          if (!hasActive) {
+            this.logger.warn(`syncRevenueCat: user ${userId} has no active RC entitlement — rejecting sync`);
+            return;
+          }
+        }
+      } catch (e) {
+        // If RC API is down, fall through to trust the client (better UX than blocking purchase)
+        this.logger.warn(`syncRevenueCat: RC API check failed, proceeding with client data: ${e}`);
+      }
+    }
+
     // Try exact match first, then partial match for flexibility
     let plan = this.RC_PRODUCT_TO_PLAN[productId];
 
     if (!plan) {
-      // Fallback: infer plan from product ID string
       const lower = productId.toLowerCase();
       if (lower.includes('team') || lower.includes('org')) {
         plan = 'organization';
       } else if (lower.includes('pro') || lower.includes('premium')) {
         plan = 'pro';
       } else {
-        // Unknown product — log but don't throw (prevents purchase from appearing as failed)
         this.logger.warn(`syncRevenueCat: unknown productId "${productId}", defaulting to pro`);
         plan = 'pro';
       }
@@ -377,7 +428,8 @@ export class BillingService {
 
   async getBillingInfo(userId: string, subscriptionCount: number) {
     const user = await this.usersService.findById(userId);
-    const planConfig = PLANS[user.plan] ?? PLANS.free;
+    const effectivePlan = this.getEffectivePlan(user);
+    const planConfig = PLANS[effectivePlan] ?? PLANS.free;
     const currentMonth = this.getCurrentMonth();
 
     const aiRequestsUsed =
@@ -406,7 +458,7 @@ export class BillingService {
     const periodEnd = user.currentPeriodEnd ?? user.trialEndDate ?? null;
 
     return {
-      plan: user.plan,
+      plan: effectivePlan,
       billingPeriod: user.billingPeriod ?? 'monthly',
       status,
       currentPeriodEnd: periodEnd?.toISOString() ?? null,
@@ -426,7 +478,8 @@ export class BillingService {
     const user = await this.usersService.findById(userId);
 
     // Cancel trial: clear trial dates, reset plan to free
-    if (user.trialEndDate && new Date(user.trialEndDate) > new Date()) {
+    // Only if not already paying via RevenueCat (trial superseded by real purchase)
+    if (user.trialEndDate && new Date(user.trialEndDate) > new Date() && user.billingSource !== 'revenuecat') {
       await this.usersService.update(userId, {
         plan: 'free',
         trialEndDate: undefined as any,

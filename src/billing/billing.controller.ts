@@ -55,13 +55,13 @@ export class BillingController {
       throw new BadRequestException('Invalid webhook authorization');
     }
 
-    // Normalize: try both with and without Bearer prefix
-    const expected = authorization.startsWith('Bearer ')
-      ? `Bearer ${secret}`
-      : secret;
-    const authBuf = Buffer.from(authorization);
-    const expectedBuf = Buffer.from(expected);
-    if (authBuf.length !== expectedBuf.length || !timingSafeEqual(authBuf, expectedBuf)) {
+    // Always compare the bare token value (strip Bearer prefix if present)
+    const incoming = authorization.startsWith('Bearer ')
+      ? authorization.slice(7)
+      : authorization;
+    const incomingBuf = Buffer.from(incoming);
+    const secretBuf = Buffer.from(secret);
+    if (incomingBuf.length !== secretBuf.length || !timingSafeEqual(incomingBuf, secretBuf)) {
       throw new BadRequestException('Invalid webhook authorization');
     }
     await this.billingService.handleRevenueCatWebhook(body);
@@ -187,8 +187,6 @@ export class BillingController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Post('cancel')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
   async cancelBilling(@Request() req) {
     await this.billingService.cancelSubscription(req.user.id);
     return { message: 'Subscription cancelled' };

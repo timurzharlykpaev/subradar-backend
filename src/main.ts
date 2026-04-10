@@ -10,6 +10,15 @@ import { TelegramAlertService } from './common/telegram-alert.service';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Capture raw body for Lemon Squeezy webhook HMAC verification
+  // Must be registered BEFORE the general JSON bodyParser
+  app.use('/api/v1/billing/webhook', bodyParser.json({
+    limit: '1mb',
+    verify: (req: any, _res: any, buf: Buffer) => {
+      req.rawBody = buf;
+    },
+  }));
+
   // Increase body size limit for audio/image uploads
   app.use(bodyParser.json({ limit: '10mb' }));
   app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));

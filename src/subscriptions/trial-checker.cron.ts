@@ -170,6 +170,7 @@ export class TrialCheckerCron {
         await this.userRepo.update(user.id, {
           plan: 'free',
           trialEndDate: undefined as any,
+          billingPeriod: null as any,
         });
         downgraded++;
         this.logger.log(`Downgraded user ${user.email} (${user.id}) from pro trial to free`);
