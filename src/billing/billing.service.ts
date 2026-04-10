@@ -297,6 +297,11 @@ export class BillingService {
     return { url };
   }
 
+  /**
+   * @deprecated Trial is now managed by Apple/RevenueCat via Introductory Offers.
+   * Kept for backward compatibility with older app versions.
+   * New clients should use purchasePackage with trial-eligible RC product instead.
+   */
   async startTrial(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
     if (user.trialUsed) {
