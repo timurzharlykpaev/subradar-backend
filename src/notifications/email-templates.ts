@@ -220,6 +220,7 @@ export function buildWeeklyDigestHtml(
   recommendations: Array<{ priority: string; title: string; description: string; estimatedSavingsMonthly: number }>,
   locale = 'ru',
   appUrl = 'https://app.subradar.ai',
+  unsubscribeUrl: string | null = null,
 ): string {
   const isRu = (locale ?? 'ru').split('-')[0].toLowerCase() === 'ru';
 
@@ -356,11 +357,11 @@ export function buildWeeklyDigestHtml(
   </tr>
   <tr><td style="height:8px;"></td></tr>
 
-  <!-- UNSUBSCRIBE -->
+  <!-- UNSUBSCRIBE (one-click, token-based) -->
   <tr>
     <td align="center" style="padding:8px 0;">
       <p style="margin:0;font-size:12px;color:#4b5563;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-        <a href="${appUrl}/settings?tab=notifications" style="color:#6D28D9;text-decoration:none;">
+        <a href="${unsubscribeUrl ?? `${appUrl}/settings?tab=notifications`}" style="color:#6D28D9;text-decoration:none;">
           ${isRu ? 'Отписаться от дайджеста' : 'Unsubscribe from digest'}
         </a>
       </p>

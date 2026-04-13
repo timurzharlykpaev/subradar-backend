@@ -7,6 +7,7 @@ import { Resend } from 'resend';
 import Expo, { ExpoPushMessage } from 'expo-server-sdk';
 import { buildPaymentReminderHtml, buildWeeklyDigestHtml } from './email-templates';
 import { AnalysisResult } from '../analysis/entities/analysis-result.entity';
+import { UnsubscribeController } from './unsubscribe.controller';
 
 @Injectable()
 export class NotificationsService {
@@ -104,7 +105,7 @@ export class NotificationsService {
     });
   }
 
-  async sendEmail(to: string, subject: string, html: string) {
+  async sendEmail(to: string, subject: string, html: string, headers?: Record<string, string>) {
     if (!this.resend) {
       this.logger.warn(`Email not sent to ${to} — RESEND_API_KEY not configured`);
       return;
@@ -114,7 +115,8 @@ export class NotificationsService {
       to,
       subject,
       html,
-    });
+      headers,
+    } as any);
   }
 
   async sendBillingReminderEmail(
@@ -154,6 +156,12 @@ export class NotificationsService {
       ? `📊 SubRadar: ваш дайджест — сэкономьте ${fmtSavings}/мес`
       : `📊 SubRadar: your digest — save ${fmtSavings}/mo`;
 
+    // Build signed one-click unsubscribe URL
+    const apiUrl = this.cfg.get('PUBLIC_API_URL', 'https://api.subradar.ai/api/v1');
+    const signingSecret = this.cfg.get('JWT_ACCESS_SECRET', '') || 'fallback-unsubscribe-secret';
+    const sig = UnsubscribeController.sign(user.id, 'weekly_digest', signingSecret);
+    const unsubscribeUrl = `${apiUrl}/unsubscribe?uid=${user.id}&type=weekly_digest&sig=${sig}`;
+
     const html = buildWeeklyDigestHtml(
       name,
       result.summary,
@@ -164,9 +172,15 @@ export class NotificationsService {
       result.recommendations ?? [],
       locale,
       'https://app.subradar.ai',
+      unsubscribeUrl,
     );
 
-    return this.sendEmail(user.email, subject, html);
+    // Add List-Unsubscribe headers for Gmail/Apple Mail one-click unsubscribe
+    const headers = {
+      'List-Unsubscribe': `<${unsubscribeUrl}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    };
+    return this.sendEmail(user.email, subject, html, headers);
   }
 
   async sendUpcomingPaymentEmail(
