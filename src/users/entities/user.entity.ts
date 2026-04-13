@@ -134,6 +134,9 @@ export class User {
   @Column({ type: 'varchar', length: 20, nullable: true })
   gracePeriodReason: 'team_expired' | 'pro_expired' | null;
 
+  @Column({ type: 'timestamp', nullable: true })
+  billingIssueAt: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

@@ -336,6 +336,7 @@ export class BillingService {
         user.currentPeriodEnd = null;
         user.gracePeriodEnd = null;
         user.gracePeriodReason = null;
+        user.billingIssueAt = null;
         await this.usersService.save(user);
         const ownedWs = await this.workspaceRepo.findOne({ where: { ownerId: user.id } });
         if (ownedWs && ownedWs.expiredAt) {
@@ -366,6 +367,7 @@ export class BillingService {
         user.billingSource = null as any;
         user.cancelAtPeriodEnd = false;
         user.currentPeriodEnd = null as any;
+        user.billingIssueAt = null;
         user.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         user.gracePeriodReason = 'pro_expired';
         await this.usersService.save(user);
@@ -378,6 +380,7 @@ export class BillingService {
         user.currentPeriodEnd = null;
         user.gracePeriodEnd = null;
         user.gracePeriodReason = null;
+        user.billingIssueAt = null;
         await this.usersService.save(user);
         const ownedWs = await this.workspaceRepo.findOne({ where: { ownerId: user.id } });
         if (ownedWs && ownedWs.expiredAt) {
@@ -388,7 +391,11 @@ export class BillingService {
         break;
       }
       case 'BILLING_ISSUE': {
-        this.logger.warn(`RevenueCat: BILLING_ISSUE — user ${appUserId}`);
+        // Apple grace period — payment failed but subscription still active
+        // for X days while Apple retries. User needs to update payment method.
+        user.billingIssueAt = new Date();
+        await this.usersService.save(user);
+        this.logger.warn(`RevenueCat: BILLING_ISSUE — user ${appUserId}, billing grace started`);
         break;
       }
       default:
@@ -643,6 +650,8 @@ export class BillingService {
       graceUntil: effective.graceUntil?.toISOString() ?? null,
       graceDaysLeft: effective.graceDaysLeft ?? null,
       workspaceExpiringAt: effective.workspaceExpiringAt?.toISOString() ?? null,
+      hasBillingIssue: !!user.billingIssueAt,
+      billingIssueAt: user.billingIssueAt?.toISOString() ?? null,
       billingPeriod: user.billingPeriod ?? 'monthly',
       status,
       currentPeriodEnd: periodEnd?.toISOString() ?? null,

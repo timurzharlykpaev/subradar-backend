@@ -49,7 +49,7 @@ export class UsersService {
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
       'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore', 'weeklyDigestEnabled',
       'cancelAtPeriodEnd', 'currentPeriodEnd', 'status', 'downgradedAt',
-      'gracePeriodEnd', 'gracePeriodReason',
+      'gracePeriodEnd', 'gracePeriodReason', 'billingIssueAt',
     ]);
     const safe: Partial<User> = {};
     for (const [k, v] of Object.entries(data)) {
