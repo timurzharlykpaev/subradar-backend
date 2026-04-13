@@ -1,15 +1,28 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
+import { Workspace } from '../workspace/entities/workspace.entity';
+import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
 
 const mockUsersService = {
-  findById: jest.fn(), findByEmail: jest.fn(), update: jest.fn(),
+  findById: jest.fn(), findByEmail: jest.fn(), update: jest.fn(), save: jest.fn(),
 };
 
 const mockConfigService = {
   get: jest.fn((key: string, defaultVal?: string) => defaultVal ?? ''),
+};
+
+const mockWorkspaceRepo = {
+  findOne: jest.fn().mockResolvedValue(null),
+  save: jest.fn(),
+};
+
+const mockWorkspaceMemberRepo = {
+  findOne: jest.fn().mockResolvedValue(null),
+  find: jest.fn().mockResolvedValue([]),
 };
 
 const mockUser = {
@@ -26,6 +39,8 @@ describe('BillingService', () => {
         BillingService,
         { provide: UsersService, useValue: mockUsersService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: getRepositoryToken(Workspace), useValue: mockWorkspaceRepo },
+        { provide: getRepositoryToken(WorkspaceMember), useValue: mockWorkspaceMemberRepo },
       ],
     }).compile();
     service = module.get<BillingService>(BillingService);
@@ -86,7 +101,7 @@ describe('BillingService', () => {
   describe('consumeAiRequest', () => {
     it('increments ai requests', async () => {
       const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
-      mockUsersService.findById.mockResolvedValue({ ...mockUser, plan: 'pro', aiRequestsUsed: 5, aiRequestsMonth: currentMonth });
+      mockUsersService.findById.mockResolvedValue({ ...mockUser, plan: 'pro', billingSource: 'revenuecat', cancelAtPeriodEnd: false, aiRequestsUsed: 5, aiRequestsMonth: currentMonth });
       mockUsersService.update.mockResolvedValue(undefined);
       await service.consumeAiRequest('user-1');
       expect(mockUsersService.update).toHaveBeenCalledWith('user-1', expect.objectContaining({ aiRequestsUsed: 6 }));
@@ -102,7 +117,7 @@ describe('BillingService', () => {
     it('verifies correct HMAC signature', () => {
       const { createHmac } = require('crypto');
       const secret = 'test-secret';
-      const svc = new BillingService({ get: () => secret } as any, mockUsersService as any);
+      const svc = new BillingService({ get: () => secret } as any, mockUsersService as any, mockWorkspaceRepo as any, mockWorkspaceMemberRepo as any);
       const payload = 'test-payload';
       const sig = createHmac('sha256', secret).update(payload).digest('hex');
       expect(svc.verifyWebhookSignature(payload, sig)).toBe(true);

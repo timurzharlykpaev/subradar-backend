@@ -21,6 +21,7 @@ import {
   SubscriptionStatus,
   BillingPeriod,
 } from '../subscriptions/entities/subscription.entity';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class WorkspaceService {
@@ -36,6 +37,7 @@ export class WorkspaceService {
     private readonly subRepo: Repository<Subscription>,
     @InjectRepository(InviteCode)
     private readonly inviteCodeRepo: Repository<InviteCode>,
+    private readonly usersService: UsersService,
   ) {}
 
   async create(ownerId: string, dto: CreateWorkspaceDto): Promise<Workspace> {
@@ -107,7 +109,19 @@ export class WorkspaceService {
     const workspace = await this.findById(workspaceId);
     if (workspace.ownerId !== requesterId)
       throw new ForbiddenException('Only owner can remove members');
+
+    // Find member before deleting to get userId for grace period
+    const member = await this.memberRepo.findOne({ where: { id: memberId, workspaceId } });
     await this.memberRepo.delete({ id: memberId, workspaceId });
+
+    if (member?.userId) {
+      const leavingUser = await this.usersService.findById(member.userId).catch(() => null);
+      if (leavingUser && (leavingUser.billingSource !== 'revenuecat' || leavingUser.cancelAtPeriodEnd)) {
+        leavingUser.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        leavingUser.gracePeriodReason = 'team_expired';
+        await this.usersService.save(leavingUser);
+      }
+    }
   }
 
   async generateInviteCode(workspaceId: string, requesterId: string) {
@@ -240,6 +254,13 @@ export class WorkspaceService {
 
     await this.memberRepo.remove(member);
     this.logger.log(`Member left workspace: userId=${userId} workspaceId=${workspaceId}`);
+
+    const leavingUser = await this.usersService.findById(userId).catch(() => null);
+    if (leavingUser && (leavingUser.billingSource !== 'revenuecat' || leavingUser.cancelAtPeriodEnd)) {
+      leavingUser.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      leavingUser.gracePeriodReason = 'team_expired';
+      await this.usersService.save(leavingUser);
+    }
   }
 
   /** Owner/Admin can view any member's subscriptions within the workspace */
@@ -406,15 +427,20 @@ export class WorkspaceService {
           billingPeriod: s.billingPeriod,
         }));
 
+      const u = member.user;
+      const hasOwnPro = !!(u && u.billingSource === 'revenuecat' && !u.cancelAtPeriodEnd);
+      const gracePeriodEnd = u?.gracePeriodEnd ?? null;
       return {
         userId: member.userId,
-        name: member.user?.name ?? null,
-        email: member.user?.email ?? member.inviteEmail ?? null,
+        name: u?.name ?? null,
+        email: u?.email ?? member.inviteEmail ?? null,
         role: member.role,
         monthlySpend: Math.round(monthlySpend * 100) / 100,
         yearlySpend: Math.round(yearlySpend * 100) / 100,
         subscriptionCount: subs.length,
         topSubscriptions,
+        hasOwnPro,
+        gracePeriodEnd: gracePeriodEnd ? new Date(gracePeriodEnd).toISOString() : null,
       };
     });
 

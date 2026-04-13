@@ -1,13 +1,16 @@
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
+import { BillingService } from '../../billing/billing.service';
 
 @Injectable()
 export class AnalysisPlanGuard implements CanActivate {
   constructor(
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
+    @Inject(forwardRef(() => BillingService))
+    private readonly billingService: BillingService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -17,23 +20,9 @@ export class AnalysisPlanGuard implements CanActivate {
     const user = await this.usersRepo.findOne({ where: { id: jwtUser.id } });
     if (!user) throw new ForbiddenException('User not found');
 
-    const plan = user.plan ?? 'free';
-
-    if (plan === 'pro' || plan === 'organization') {
-      if (user.cancelAtPeriodEnd && user.currentPeriodEnd) {
-        const now = new Date();
-        if (new Date(user.currentPeriodEnd) < now) {
-          throw new ForbiddenException({ error: 'PLAN_REQUIRED', requiredPlan: 'pro' });
-        }
-      }
+    const effective = await this.billingService.getEffectiveAccess(user);
+    if (effective.plan === 'pro' || effective.plan === 'organization') {
       return true;
-    }
-
-    if (user.trialEndDate) {
-      const now = new Date();
-      if (new Date(user.trialEndDate) > now) {
-        return true;
-      }
     }
 
     throw new ForbiddenException({ error: 'PLAN_REQUIRED', requiredPlan: 'pro' });

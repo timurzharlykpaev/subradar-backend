@@ -128,6 +128,12 @@ export class User {
   @Column({ type: 'timestamp', nullable: true, default: null })
   downgradedAt: Date | null;
 
+  @Column({ type: 'timestamp', nullable: true })
+  gracePeriodEnd: Date | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  gracePeriodReason: 'team_expired' | 'pro_expired' | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

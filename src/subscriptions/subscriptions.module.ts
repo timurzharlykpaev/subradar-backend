@@ -12,6 +12,7 @@ import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AiModule } from '../ai/ai.module';
 import { AnalysisModule } from '../analysis/analysis.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { AnalysisModule } from '../analysis/analysis.module';
     NotificationsModule,
     AiModule,
     forwardRef(() => AnalysisModule),
+    forwardRef(() => BillingModule),
   ],
   providers: [SubscriptionsService, TrialCheckerCron, SubscriptionLimitGuard],
   controllers: [SubscriptionsController, EmailImportController],

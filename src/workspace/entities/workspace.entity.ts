@@ -27,6 +27,9 @@ export class Workspace {
   @Column({ nullable: true })
   lemonSqueezySubscriptionId: string;
 
+  @Column({ type: 'timestamp', nullable: true })
+  expiredAt: Date | null;
+
   @OneToMany(() => WorkspaceMember, (m) => m.workspace)
   members: WorkspaceMember[];
 

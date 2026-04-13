@@ -3,6 +3,8 @@ import {
   CanActivate,
   ExecutionContext,
   ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -12,6 +14,7 @@ import {
 } from '../entities/subscription.entity';
 import { User } from '../../users/entities/user.entity';
 import { PLANS } from '../../billing/plans.config';
+import { BillingService } from '../../billing/billing.service';
 
 // Use PLANS from billing config as single source of truth
 export const PLAN_LIMITS = {
@@ -27,6 +30,8 @@ export class SubscriptionLimitGuard implements CanActivate {
     private subscriptionsRepo: Repository<Subscription>,
     @InjectRepository(User)
     private usersRepo: Repository<User>,
+    @Inject(forwardRef(() => BillingService))
+    private readonly billingService: BillingService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -39,7 +44,8 @@ export class SubscriptionLimitGuard implements CanActivate {
     const user = await this.usersRepo.findOne({ where: { id: jwtUser.id } });
     if (!user) return true;
 
-    const plan = user.plan ?? 'free';
+    const effective = await this.billingService.getEffectiveAccess(user);
+    const plan = effective.plan;
     const planConfig = PLANS[plan as keyof typeof PLANS] ?? PLANS.free;
 
     // Use PLANS config as source of truth (subscriptionLimit null = unlimited)

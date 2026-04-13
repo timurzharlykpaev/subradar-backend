@@ -16,6 +16,7 @@ import { User } from '../users/entities/user.entity';
 import { ANALYSIS_QUEUE } from './analysis.constants';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { WorkspaceModule } from '../workspace/workspace.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { WorkspaceModule } from '../workspace/workspace.module';
     BullModule.registerQueue({ name: ANALYSIS_QUEUE }),
     NotificationsModule,
     forwardRef(() => WorkspaceModule),
+    forwardRef(() => BillingModule),
   ],
   controllers: [AnalysisController],
   providers: [AnalysisService, AnalysisProcessor, AnalysisCronService, MarketDataService, AnalysisPlanGuard],

@@ -6,9 +6,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { UsersService } from '../users/users.service';
 import { PLANS, PLAN_DETAILS } from './plans.config';
+import { Workspace } from '../workspace/entities/workspace.entity';
+import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
+import { User } from '../users/entities/user.entity';
+
+export interface EffectiveAccess {
+  plan: 'free' | 'pro' | 'organization';
+  source: 'own' | 'team' | 'grace_team' | 'grace_pro' | 'free';
+  graceUntil?: Date;
+  graceDaysLeft?: number;
+  isTeamOwner: boolean;
+  isTeamMember: boolean;
+  hasOwnPro: boolean;
+  workspaceId?: string;
+  workspaceExpiringAt?: Date;
+}
 
 @Injectable()
 export class BillingService {
@@ -24,6 +41,8 @@ export class BillingService {
   constructor(
     private readonly cfg: ConfigService,
     private readonly usersService: UsersService,
+    @InjectRepository(Workspace) private readonly workspaceRepo: Repository<Workspace>,
+    @InjectRepository(WorkspaceMember) private readonly workspaceMemberRepo: Repository<WorkspaceMember>,
   ) {
     this.webhookSecret = cfg.get('LEMON_SQUEEZY_WEBHOOK_SECRET', '');
     this.apiKey = cfg.get('LEMON_SQUEEZY_API_KEY', '');
@@ -43,6 +62,144 @@ export class BillingService {
 
   private extractBillingPeriod(productId: string): 'monthly' | 'yearly' {
     return productId?.toLowerCase().includes('yearly') ? 'yearly' : 'monthly';
+  }
+
+  /**
+   * Single source of truth for what a user can access RIGHT NOW.
+   * Considers: own subscription, team membership, grace period.
+   */
+  async getEffectiveAccess(user: User): Promise<EffectiveAccess> {
+    const now = new Date();
+
+    // Find team membership (status ACTIVE)
+    const member = await this.workspaceMemberRepo.findOne({
+      where: { userId: user.id, status: 'ACTIVE' as any },
+    });
+
+    let workspace: Workspace | null = null;
+    let teamOwnerHasActiveSubscription = false;
+
+    if (member) {
+      workspace = await this.workspaceRepo.findOne({ where: { id: member.workspaceId } });
+      if (workspace && !workspace.expiredAt) {
+        const owner = await this.usersService.findById(workspace.ownerId).catch(() => null);
+        teamOwnerHasActiveSubscription =
+          !!owner && owner.plan === 'organization' && !owner.cancelAtPeriodEnd;
+      }
+    }
+
+    const isTeamOwner = !!(workspace && workspace.ownerId === user.id);
+    const isTeamMember = !!member;
+    const hasOwnPro =
+      user.billingSource === 'revenuecat' &&
+      (user.plan === 'pro' || user.plan === 'organization') &&
+      !user.cancelAtPeriodEnd;
+
+    const computeDaysLeft = (date: Date | null): number | undefined => {
+      if (!date) return undefined;
+      const ms = date.getTime() - now.getTime();
+      if (ms <= 0) return undefined;
+      return Math.ceil(ms / (1000 * 60 * 60 * 24));
+    };
+
+    // Owner with active organization plan
+    if (isTeamOwner && (user.plan === 'organization' || user.plan === 'pro')) {
+      return {
+        plan: 'organization',
+        source: 'own',
+        isTeamOwner: true,
+        isTeamMember: true,
+        hasOwnPro,
+        workspaceId: workspace!.id,
+      };
+    }
+
+    // Active team member (owner pays)
+    if (isTeamMember && teamOwnerHasActiveSubscription) {
+      return {
+        plan: 'organization',
+        source: 'team',
+        isTeamOwner: false,
+        isTeamMember: true,
+        hasOwnPro,
+        workspaceId: workspace!.id,
+      };
+    }
+
+    // Own RC subscription active
+    if (hasOwnPro) {
+      return {
+        plan: user.plan as 'pro' | 'organization',
+        source: 'own',
+        isTeamOwner,
+        isTeamMember,
+        hasOwnPro: true,
+        workspaceId: workspace?.id,
+        workspaceExpiringAt: workspace?.expiredAt ?? undefined,
+      };
+    }
+
+    // Trial active
+    if (user.trialEndDate && new Date(user.trialEndDate) > now) {
+      return {
+        plan: 'pro',
+        source: 'own',
+        isTeamOwner,
+        isTeamMember,
+        hasOwnPro: false,
+        workspaceId: workspace?.id,
+      };
+    }
+
+    // Grace period
+    if (user.gracePeriodEnd && new Date(user.gracePeriodEnd) > now) {
+      const graceDate = new Date(user.gracePeriodEnd);
+      return {
+        plan: 'pro',
+        source: user.gracePeriodReason === 'team_expired' ? 'grace_team' : 'grace_pro',
+        graceUntil: graceDate,
+        graceDaysLeft: computeDaysLeft(graceDate),
+        isTeamOwner,
+        isTeamMember,
+        hasOwnPro: false,
+        workspaceId: workspace?.id,
+        workspaceExpiringAt: workspace?.expiredAt ?? undefined,
+      };
+    }
+
+    // Default: free
+    return {
+      plan: 'free',
+      source: 'free',
+      isTeamOwner,
+      isTeamMember,
+      hasOwnPro: false,
+      workspaceId: workspace?.id,
+      workspaceExpiringAt: workspace?.expiredAt ?? undefined,
+    };
+  }
+
+  private async handleTeamOwnerExpiration(ownerId: string): Promise<void> {
+    const workspace = await this.workspaceRepo.findOne({ where: { ownerId } });
+    if (!workspace) return;
+
+    workspace.expiredAt = new Date();
+    await this.workspaceRepo.save(workspace);
+
+    const members = await this.workspaceMemberRepo.find({
+      where: { workspaceId: workspace.id, status: 'ACTIVE' as any },
+    });
+
+    for (const m of members) {
+      if (m.userId === ownerId) continue;
+      const u = await this.usersService.findById(m.userId).catch(() => null);
+      if (!u) continue;
+      if (u.billingSource === 'revenuecat' && !u.cancelAtPeriodEnd) continue;
+      u.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      u.gracePeriodReason = 'team_expired';
+      await this.usersService.save(u);
+    }
+    this.logger.log(`Team owner ${ownerId} expired — cascaded grace to ${members.length} members`);
   }
 
   /**
@@ -177,7 +334,14 @@ export class BillingService {
         // Reset cancellation flags — purchase/renewal supersedes cancellation
         user.cancelAtPeriodEnd = false;
         user.currentPeriodEnd = null;
+        user.gracePeriodEnd = null;
+        user.gracePeriodReason = null;
         await this.usersService.save(user);
+        const ownedWs = await this.workspaceRepo.findOne({ where: { ownerId: user.id } });
+        if (ownedWs && ownedWs.expiredAt) {
+          ownedWs.expiredAt = null;
+          await this.workspaceRepo.save(ownedWs);
+        }
         this.logger.log(`RevenueCat: ${type} — user ${appUserId} → plan ${plan} (${billingPeriod})`);
         break;
       }
@@ -202,14 +366,24 @@ export class BillingService {
         user.billingSource = null as any;
         user.cancelAtPeriodEnd = false;
         user.currentPeriodEnd = null as any;
+        user.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        user.gracePeriodReason = 'pro_expired';
         await this.usersService.save(user);
-        this.logger.log(`RevenueCat: EXPIRATION — user ${appUserId} → free`);
+        this.logger.log(`RevenueCat: EXPIRATION — user ${appUserId} → free, grace 7d`);
+        await this.handleTeamOwnerExpiration(user.id);
         break;
       }
       case 'UNCANCELLATION': {
         user.cancelAtPeriodEnd = false;
         user.currentPeriodEnd = null;
+        user.gracePeriodEnd = null;
+        user.gracePeriodReason = null;
         await this.usersService.save(user);
+        const ownedWs = await this.workspaceRepo.findOne({ where: { ownerId: user.id } });
+        if (ownedWs && ownedWs.expiredAt) {
+          ownedWs.expiredAt = null;
+          await this.workspaceRepo.save(ownedWs);
+        }
         this.logger.log(`RevenueCat: UNCANCELLATION — user ${appUserId}, subscription restored`);
         break;
       }
@@ -357,7 +531,8 @@ export class BillingService {
   async consumeAiRequest(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
     const currentMonth = this.getCurrentMonth();
-    const effectivePlan = this.getEffectivePlan(user);
+    const effective = await this.getEffectiveAccess(user);
+    const effectivePlan = effective.plan;
     const planConfig = PLANS[effectivePlan] ?? PLANS.free;
 
     const needsReset = user.aiRequestsMonth !== currentMonth;
@@ -433,7 +608,8 @@ export class BillingService {
 
   async getBillingInfo(userId: string, subscriptionCount: number) {
     const user = await this.usersService.findById(userId);
-    const effectivePlan = this.getEffectivePlan(user);
+    const effective = await this.getEffectiveAccess(user);
+    const effectivePlan = effective.plan;
     const planConfig = PLANS[effectivePlan] ?? PLANS.free;
     const currentMonth = this.getCurrentMonth();
 
@@ -443,13 +619,10 @@ export class BillingService {
     let trialDaysLeft: number | null = null;
     let status: 'active' | 'cancelled' | 'trialing' = 'active';
 
-    // If cancelled via RC webhook — mark as cancelled (but still active until period end)
     if (user.cancelAtPeriodEnd) {
       status = 'cancelled';
     }
 
-    // If user has a paid subscription via RevenueCat, they are always 'active'
-    // regardless of any backend trial state (trial was superseded by real purchase)
     if (!user.cancelAtPeriodEnd && user.billingSource !== 'revenuecat' && user.trialEndDate) {
       const now = Date.now();
       const end = new Date(user.trialEndDate).getTime();
@@ -459,11 +632,17 @@ export class BillingService {
       }
     }
 
-    // Effective period end: prefer RC currentPeriodEnd, fallback to trialEndDate
     const periodEnd = user.currentPeriodEnd ?? user.trialEndDate ?? null;
 
     return {
       plan: effectivePlan,
+      source: effective.source,
+      isTeamOwner: effective.isTeamOwner,
+      isTeamMember: effective.isTeamMember,
+      hasOwnPro: effective.hasOwnPro,
+      graceUntil: effective.graceUntil?.toISOString() ?? null,
+      graceDaysLeft: effective.graceDaysLeft ?? null,
+      workspaceExpiringAt: effective.workspaceExpiringAt?.toISOString() ?? null,
       billingPeriod: user.billingPeriod ?? 'monthly',
       status,
       currentPeriodEnd: periodEnd?.toISOString() ?? null,
