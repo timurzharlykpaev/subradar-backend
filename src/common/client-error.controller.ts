@@ -61,17 +61,28 @@ export class ClientErrorController {
       dto.stack ?? '',
     );
 
-    // Forward to Telegram
-    const truncatedStack = dto.stack ? '\n\n<code>' + dto.stack.slice(0, 800) + '</code>' : '';
-    const msg =
-      `${emoji} <b>Runtime Error [${tag}]</b>\n` +
-      `Platform: <code>${platform}</code>\n` +
-      (dto.version ? `Version: <code>${dto.version}</code>\n` : '') +
-      (dto.url ? `URL: <code>${dto.url}</code>\n` : '') +
-      `\n<b>${dto.message}</b>` +
-      truncatedStack;
+    // Skip expected client errors from Telegram alerts
+    const SKIP_TELEGRAM = [
+      /401.*Unauthorized/i,
+      /429.*Too Many/i,
+      /ThrottlerException/i,
+      /billing\/me.*401/i,
+      /auth\/.*429/i,
+    ];
+    const shouldAlert = !SKIP_TELEGRAM.some((p) => p.test(dto.message));
 
-    await this.tg.send(msg, dto.message);
+    if (shouldAlert) {
+      const truncatedStack = dto.stack ? '\n\n<code>' + dto.stack.slice(0, 800) + '</code>' : '';
+      const msg =
+        `${emoji} <b>Runtime Error [${tag}]</b>\n` +
+        `Platform: <code>${platform}</code>\n` +
+        (dto.version ? `Version: <code>${dto.version}</code>\n` : '') +
+        (dto.url ? `URL: <code>${dto.url}</code>\n` : '') +
+        `\n<b>${dto.message}</b>` +
+        truncatedStack;
+
+      await this.tg.send(msg, dto.message);
+    }
     return;
   }
 }
