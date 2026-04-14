@@ -145,7 +145,7 @@ export class WorkspaceController {
   @Get('me/analysis/latest')
   async getAnalysisLatest(@Request() req: any) {
     const workspace = await this.service.getMyWorkspace(req.user.id);
-    if (!workspace) throw new NotFoundException('No workspace found');
+    if (!workspace) return null;
     return this.analysisService.getLatest(req.user.id, workspace.id);
   }
 
