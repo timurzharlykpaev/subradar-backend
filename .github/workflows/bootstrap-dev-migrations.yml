@@ -1,0 +1,86 @@
+name: Bootstrap Dev Migrations
+
+# One-shot: marks all pre-currency-region migrations as applied on the dev DB
+# so TypeORM only runs the new (1776240000000+) migrations. Dev was using
+# synchronize:true historically and never accumulated migration history.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type YES to confirm'
+        required: true
+        default: 'NO'
+        type: string
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "YES" ]; then
+            echo "Confirmation missing (got '$CONFIRM'). Re-run with input YES."
+            exit 1
+          fi
+
+      - name: Insert migration history into dev DB
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: 46.101.197.19
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/subradar
+            DB_URL=$(grep -E '^DATABASE_URL=' .env.dev | cut -d= -f2-)
+            if [ -z "$DB_URL" ]; then
+              echo "DATABASE_URL not found in .env.dev"; exit 1
+            fi
+
+            docker run --rm postgres:16-alpine psql "$DB_URL" <<'SQL'
+            CREATE TABLE IF NOT EXISTS "migrations" (
+              "id" SERIAL PRIMARY KEY,
+              "timestamp" BIGINT NOT NULL,
+              "name" VARCHAR NOT NULL
+            );
+
+            INSERT INTO "migrations" ("timestamp", "name")
+            SELECT v.timestamp, v.name FROM (VALUES
+              (1740873600000, 'InitialSchema1740873600000'),
+              (1742500200000, 'AddUserReminderAndMissingCols1742500200000'),
+              (1772909030797, 'AddUserFields1772909030797'),
+              (1772909100000, 'AddNextPaymentDate1772909100000'),
+              (1772910000000, 'AddEmailNotifications1772910000000'),
+              (1772970000000, 'FixWorkspaceUuidColumns1772970000000'),
+              (1773360000000, 'AddCancelAtPeriodEnd1773360000000'),
+              (1774500000000, 'AddSubscriptionIndexes1774500000000'),
+              (1774600000000, 'AddNewSubscriptionCategories1774600000000'),
+              (1774700000000, 'AddReportErrorColumn1774700000000'),
+              (1775200000000, 'CreateAnalysisTables1775200000000'),
+              (1775200100000, 'AddWeeklyDigestToUser1775200100000'),
+              (1775200200000, 'SeedServiceCatalog1775200200000'),
+              (1775300000000, 'CreateInviteCodes1775300000000'),
+              (1775400000000, 'ExtendInviteCodeLength1775400000000'),
+              (1775600000000, 'AddDowngradedAtToUser1775600000000'),
+              (1775700000000, 'AddBillingPeriodToUser1775700000000'),
+              (1775800000000, 'FixReminderDefaults1775800000000'),
+              (1776067408000, 'AddGracePeriodAndExpired1776067408000'),
+              (1776153808000, 'AddBillingIssueAt1776153808000')
+            ) AS v(timestamp, name)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM "migrations" m WHERE m.name = v.name
+            );
+
+            SELECT name, timestamp FROM "migrations" ORDER BY timestamp;
+            SQL
+
+            echo
+            echo "=== Restarting subradar-api-dev ==="
+            docker restart subradar-api-dev || true
+            sleep 8
+            echo
+            echo "=== Post-restart logs ==="
+            docker logs subradar-api-dev --tail 40
