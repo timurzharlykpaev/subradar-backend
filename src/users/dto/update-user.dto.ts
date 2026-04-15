@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEmail } from 'class-validator';
+import { IsString, IsOptional, IsEmail, Length, Matches } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateUserDto {
@@ -46,4 +46,23 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   fcmToken?: string;
+
+  @ApiPropertyOptional({ description: 'ISO-3166 alpha-2 country code' })
+  @IsOptional()
+  @IsString()
+  @Length(2, 2)
+  @Matches(/^[A-Za-z]{2}$/, { message: 'region must be ISO-3166 alpha-2' })
+  region?: string;
+
+  @ApiPropertyOptional({ description: 'ISO-4217 currency code for display' })
+  @IsOptional()
+  @IsString()
+  @Length(3, 3)
+  @Matches(/^[A-Za-z]{3}$/, { message: 'displayCurrency must be ISO-4217' })
+  displayCurrency?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  timezoneDetected?: string;
 }

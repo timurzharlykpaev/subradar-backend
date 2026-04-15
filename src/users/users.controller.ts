@@ -28,9 +28,21 @@ export class UsersController {
   updateMe(
     @Request() req,
     @Body()
-    body: Partial<{ name: string; avatarUrl: string; fcmToken: string }>,
+    body: Partial<{
+      name: string;
+      avatarUrl: string;
+      fcmToken: string;
+      region: string;
+      displayCurrency: string;
+      timezoneDetected: string;
+    }>,
   ) {
-    return this.usersService.update(req.user.id, body);
+    const payload: Record<string, any> = { ...body };
+    if (typeof payload.region === 'string') payload.region = payload.region.toUpperCase();
+    if (typeof payload.displayCurrency === 'string') {
+      payload.displayCurrency = payload.displayCurrency.toUpperCase();
+    }
+    return this.usersService.update(req.user.id, payload);
   }
 
   @Delete('me')
