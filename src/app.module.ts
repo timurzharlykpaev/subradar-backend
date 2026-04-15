@@ -54,9 +54,13 @@ import { CatalogModule } from './catalog/catalog.module';
             ? undefined
             : cfg.get<string>('DB_DATABASE', 'subradar'),
           autoLoadEntities: true,
-          synchronize: !isProd, // dev: auto-sync; prod: use migrations
+          // Always use migrations for schema changes. `synchronize: true` in dev
+          // can't safely add NOT NULL columns to populated tables (e.g.
+          // subscriptions.originalCurrency) — our migrations handle the
+          // nullable-then-backfill-then-NOT-NULL dance explicitly.
+          synchronize: false,
           migrations: [__dirname + '/migrations/*.{ts,js}'],
-          migrationsRun: isProd, // в проде — автозапуск миграций при старте
+          migrationsRun: true,
           logging: false,
           ssl: isProd ? { rejectUnauthorized: false } : undefined,
         } as any;
