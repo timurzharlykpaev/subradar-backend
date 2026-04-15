@@ -1,0 +1,46 @@
+name: Diagnose
+
+on:
+  workflow_dispatch:
+    inputs:
+      container:
+        description: 'Container to inspect'
+        required: true
+        default: 'subradar-api-dev'
+        type: choice
+        options: [subradar-api-dev, subradar-api-prod]
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect container status and logs
+        uses: appleboy/ssh-action@v1.2.2
+        env:
+          TARGET_CONTAINER: ${{ github.event.inputs.container }}
+        with:
+          host: 46.101.197.19
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: TARGET_CONTAINER
+          script: |
+            C="$TARGET_CONTAINER"
+            # sanity: whitelist
+            case "$C" in
+              subradar-api-dev|subradar-api-prod) ;;
+              *) echo "Refusing unknown container: $C"; exit 1 ;;
+            esac
+            echo "=== docker ps -a --filter name=$C ==="
+            docker ps -a --filter "name=$C"
+            echo
+            echo "=== docker inspect $C ==="
+            docker inspect --format '{{.Name}} State={{.State.Status}} Restarts={{.RestartCount}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}' "$C" 2>&1 || true
+            echo
+            echo "=== docker logs $C --tail 200 ==="
+            docker logs "$C" --tail 200 2>&1 | tail -n 200
+            echo
+            echo "=== /opt/subradar/docker-compose.yml (relevant section) ==="
+            grep -A 30 "  ${C}:" /opt/subradar/docker-compose.yml 2>&1 || true
+            echo
+            echo "=== .env files in /opt/subradar ==="
+            ls -la /opt/subradar/.env* 2>&1 || true
