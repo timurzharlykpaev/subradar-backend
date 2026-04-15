@@ -40,7 +40,12 @@ jobs:
               echo "DATABASE_URL not found in .env.dev"; exit 1
             fi
 
-            docker run --rm postgres:16-alpine psql "$DB_URL" <<'SQL'
+            echo "=== Connecting to dev DB ==="
+            docker run --rm postgres:16-alpine psql "$DB_URL" -c "SELECT current_database(), version();"
+            echo
+            echo "=== Applying migration bootstrap ==="
+            docker run --rm -i postgres:16-alpine psql "$DB_URL" <<'SQL'
+            \echo 'Starting bootstrap'
             CREATE TABLE IF NOT EXISTS "migrations" (
               "id" SERIAL PRIMARY KEY,
               "timestamp" BIGINT NOT NULL,
