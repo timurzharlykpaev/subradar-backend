@@ -56,4 +56,5 @@ export class CreateSubscriptionDto {
   @ApiPropertyOptional() @IsOptional() @IsString() paymentCardId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() color?: string;
   @ApiPropertyOptional() @IsOptional() @IsArray() @IsString({ each: true }) tags?: string[];
+  @ApiPropertyOptional() @IsOptional() @IsString() catalogPlanId?: string;
 }

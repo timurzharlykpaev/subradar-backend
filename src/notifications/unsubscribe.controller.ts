@@ -1,7 +1,7 @@
 import { Controller, Get, Query, Res, BadRequestException, Post, Param } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { Response } from 'express';
+import type { Response } from 'express';
 import { UsersService } from '../users/users.service';
 
 const SUPPORTED_TYPES = ['weekly_digest', 'email_notifications', 'all'] as const;

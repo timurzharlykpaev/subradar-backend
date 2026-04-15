@@ -13,14 +13,17 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { AiModule } from '../ai/ai.module';
 import { AnalysisModule } from '../analysis/analysis.module';
 import { BillingModule } from '../billing/billing.module';
+import { FxModule } from '../fx/fx.module';
+import { CatalogPlan } from '../catalog/entities/catalog-plan.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Subscription, User]),
+    TypeOrmModule.forFeature([Subscription, User, CatalogPlan]),
     ReceiptsModule,
     UsersModule,
     NotificationsModule,
     AiModule,
+    FxModule,
     forwardRef(() => AnalysisModule),
     forwardRef(() => BillingModule),
   ],

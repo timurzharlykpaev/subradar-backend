@@ -70,8 +70,16 @@ export class SubscriptionsController {
   }
 
   @Get()
-  findAll(@Request() req, @Query() filters: FilterSubscriptionsDto) {
-    return this.service.findAll(req.user.id, filters);
+  async findAll(
+    @Request() req,
+    @Query() filters: FilterSubscriptionsDto,
+    @Query('displayCurrency') displayCurrencyQuery?: string,
+  ) {
+    return this.service.findAllWithDisplay(
+      req.user.id,
+      displayCurrencyQuery,
+      filters,
+    );
   }
 
   @Get(':id')

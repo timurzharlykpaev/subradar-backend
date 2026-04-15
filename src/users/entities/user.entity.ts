@@ -92,6 +92,15 @@ export class User {
   @Column({ nullable: true, default: 'USD' })
   defaultCurrency: string;
 
+  @Column({ type: 'varchar', length: 2, default: 'US' })
+  region: string;
+
+  @Column({ type: 'varchar', length: 3, default: 'USD' })
+  displayCurrency: string;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  timezoneDetected: string | null;
+
   @Column({ nullable: true })
   dateFormat: string;
 

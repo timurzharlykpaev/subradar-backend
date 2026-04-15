@@ -22,6 +22,9 @@ import { FilterSubscriptionsDto } from './dto/filter-subscriptions.dto';
 import { UsersService } from '../users/users.service';
 import { PLANS } from '../billing/plans.config';
 import { AnalysisService } from '../analysis/analysis.service';
+import Decimal from 'decimal.js';
+import { FxService } from '../fx/fx.service';
+import { CatalogPlan } from '../catalog/entities/catalog-plan.entity';
 
 function computeNextPaymentDate(
   startDate: Date,
@@ -78,10 +81,13 @@ export class SubscriptionsService implements OnModuleInit {
   constructor(
     @InjectRepository(Subscription)
     private readonly repo: Repository<Subscription>,
+    @InjectRepository(CatalogPlan)
+    private readonly catalogPlanRepo: Repository<CatalogPlan>,
     private readonly usersService: UsersService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(forwardRef(() => AnalysisService))
     private readonly analysisService: AnalysisService,
+    private readonly fx: FxService,
   ) {}
 
   async onModuleInit() {
@@ -134,7 +140,29 @@ export class SubscriptionsService implements OnModuleInit {
       }
     }
 
-    const sub = this.repo.create({ ...dto, userId });
+    let catalogServiceId: string | null = null;
+    let catalogPlanId: string | null = null;
+    let resolvedCurrency = dto.currency ?? user.displayCurrency ?? 'USD';
+
+    if (dto.catalogPlanId) {
+      const plan = await this.catalogPlanRepo.findOne({
+        where: { id: dto.catalogPlanId },
+      });
+      if (plan) {
+        catalogPlanId = plan.id;
+        catalogServiceId = plan.serviceId;
+        if (!dto.currency) resolvedCurrency = plan.currency;
+      }
+    }
+
+    const sub = this.repo.create({
+      ...dto,
+      currency: resolvedCurrency,
+      originalCurrency: resolvedCurrency,
+      catalogServiceId,
+      catalogPlanId,
+      userId,
+    });
 
     if (sub.startDate && sub.billingPeriod) {
       const next = computeNextPaymentDate(
@@ -193,6 +221,56 @@ export class SubscriptionsService implements OnModuleInit {
     }
 
     return qb.getMany();
+  }
+
+  async findAllWithDisplay(
+    userId: string,
+    displayCurrencyOverride: string | null | undefined,
+    filters?: FilterSubscriptionsDto,
+  ): Promise<Array<Subscription & {
+    displayAmount: string;
+    displayCurrency: string;
+    fxRate: number;
+    fxFetchedAt: Date;
+  }>> {
+    let displayCurrency = (displayCurrencyOverride ?? '').trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(displayCurrency)) {
+      const user = await this.usersService.findById(userId);
+      displayCurrency = (user?.displayCurrency || 'USD').toUpperCase();
+    }
+    const [subs, fx] = await Promise.all([
+      this.findAll(userId, filters),
+      this.fx.getRates(),
+    ]);
+    return subs.map((sub) => {
+      const origCurrency = sub.originalCurrency || sub.currency;
+      let displayAmountStr: string;
+      let fxRate: number;
+      try {
+        const amount = new Decimal(sub.amount as unknown as string);
+        const converted = this.fx.convert(
+          amount,
+          origCurrency,
+          displayCurrency,
+          fx.rates,
+        );
+        displayAmountStr = converted.toFixed(2);
+        fxRate =
+          origCurrency === displayCurrency
+            ? 1
+            : (fx.rates[displayCurrency] ?? 1) /
+              (fx.rates[origCurrency] ?? 1);
+      } catch {
+        displayAmountStr = String(sub.amount);
+        fxRate = 1;
+      }
+      return Object.assign(sub, {
+        displayAmount: displayAmountStr,
+        displayCurrency,
+        fxRate,
+        fxFetchedAt: fx.fetchedAt,
+      });
+    });
   }
 
   async findOne(userId: string, id: string): Promise<Subscription> {

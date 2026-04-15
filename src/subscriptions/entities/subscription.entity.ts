@@ -85,6 +85,15 @@ export class Subscription {
   @Column({ default: 'USD' })
   currency: string;
 
+  @Column({ type: 'varchar', length: 3 })
+  originalCurrency: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  catalogServiceId: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  catalogPlanId: string | null;
+
   @Column({ type: 'enum', enum: BillingPeriod, default: BillingPeriod.MONTHLY })
   billingPeriod: BillingPeriod;
 
