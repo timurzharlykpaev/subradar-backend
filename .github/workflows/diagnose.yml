@@ -25,22 +25,62 @@ jobs:
           envs: TARGET_CONTAINER
           script: |
             C="$TARGET_CONTAINER"
-            # sanity: whitelist
             case "$C" in
               subradar-api-dev|subradar-api-prod) ;;
               *) echo "Refusing unknown container: $C"; exit 1 ;;
             esac
+            # Determine env file based on container
+            if [ "$C" = "subradar-api-dev" ]; then ENVFILE=/opt/subradar/.env.dev; else ENVFILE=/opt/subradar/.env.prod; fi
             echo "=== docker ps -a --filter name=$C ==="
             docker ps -a --filter "name=$C"
             echo
             echo "=== docker inspect $C ==="
             docker inspect --format '{{.Name}} State={{.State.Status}} Restarts={{.RestartCount}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}' "$C" 2>&1 || true
             echo
-            echo "=== docker logs $C --tail 200 ==="
-            docker logs "$C" --tail 200 2>&1 | tail -n 200
+            echo "=== docker logs $C --tail 80 ==="
+            docker logs "$C" --tail 80 2>&1 | tail -n 80
             echo
-            echo "=== /opt/subradar/docker-compose.yml (relevant section) ==="
-            grep -A 30 "  ${C}:" /opt/subradar/docker-compose.yml 2>&1 || true
-            echo
-            echo "=== .env files in /opt/subradar ==="
-            ls -la /opt/subradar/.env* 2>&1 || true
+
+            echo "=== DB schema health ==="
+            DB_URL=$(grep -E '^DATABASE_URL=' "$ENVFILE" | cut -d= -f2-)
+            if [ -n "$DB_URL" ]; then
+              docker run --rm -i postgres:16-alpine psql "$DB_URL" <<'SQL' 2>&1
+              \echo '-- new tables'
+              SELECT tablename FROM pg_tables
+              WHERE tablename IN ('fx_rate_snapshots','catalog_services','catalog_plans','migrations')
+              ORDER BY tablename;
+
+              \echo
+              \echo '-- new subscription columns'
+              SELECT column_name, data_type, is_nullable FROM information_schema.columns
+              WHERE table_name = 'subscriptions'
+                AND column_name IN ('originalCurrency','catalogServiceId','catalogPlanId')
+              ORDER BY column_name;
+
+              \echo
+              \echo '-- new user columns'
+              SELECT column_name, data_type, column_default FROM information_schema.columns
+              WHERE table_name = 'users'
+                AND column_name IN ('region','displayCurrency','timezoneDetected')
+              ORDER BY column_name;
+
+              \echo
+              \echo '-- latest FX snapshot'
+              SELECT id, base, "fetchedAt", source,
+                     (SELECT COUNT(*) FROM jsonb_object_keys(rates)) AS currency_count
+              FROM fx_rate_snapshots
+              ORDER BY "fetchedAt" DESC LIMIT 3;
+
+              \echo
+              \echo '-- catalog counts'
+              SELECT
+                (SELECT COUNT(*) FROM catalog_services) AS services,
+                (SELECT COUNT(*) FROM catalog_plans) AS plans;
+
+              \echo
+              \echo '-- migrations applied (last 5)'
+              SELECT "timestamp", name FROM migrations ORDER BY "timestamp" DESC LIMIT 5;
+              SQL
+            else
+              echo "DATABASE_URL not found in $ENVFILE"
+            fi
