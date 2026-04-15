@@ -7,7 +7,9 @@ import { REDIS_CLIENT } from '../common/redis.module';
 import { FxRateSnapshot } from './entities/fx-rate-snapshot.entity';
 
 const REDIS_KEY = 'fx:latest';
+const REDIS_REFRESH_LOCK = 'fx:refresh:lock';
 const REDIS_TTL_SECONDS = 6 * 60 * 60;
+const REFRESH_LOCK_TTL_SECONDS = 30;
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 const SOURCE = 'exchangerate.host';
 
@@ -68,34 +70,61 @@ export class FxService {
   }
 
   async refreshFromApi(): Promise<FxRates> {
-    const resp = await fetch('https://api.exchangerate.host/latest?base=USD');
-    if (!resp.ok) {
-      throw new Error(`FX API returned HTTP ${resp.status}`);
-    }
-    const data: any = await resp.json();
-    if (!data?.rates || typeof data.rates.USD === 'undefined') {
-      throw new Error('FX API response missing rates');
+    // Redis-based single-flight lock to prevent concurrent API calls across
+    // multiple backend instances (cold start, cron, lazy refresh).
+    const acquired = await this.redis
+      .set(REDIS_REFRESH_LOCK, '1', 'EX', REFRESH_LOCK_TTL_SECONDS, 'NX')
+      .catch(() => null);
+
+    if (!acquired) {
+      // Another instance is refreshing — wait briefly, then return cached.
+      await new Promise((r) => setTimeout(r, 1500));
+      const cached = await this.redis.get(REDIS_KEY).catch(() => null);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          return { ...parsed, fetchedAt: new Date(parsed.fetchedAt) };
+        } catch {
+          // fall through and fetch ourselves
+        }
+      }
+      // No cached result yet — fall through to fetch without lock.
     }
 
-    const now = new Date();
-    const entity = this.repo.create({
-      base: 'USD',
-      rates: data.rates,
-      source: SOURCE,
-      fetchedAt: now,
-    });
-    await this.repo.save(entity);
+    try {
+      const resp = await fetch('https://api.exchangerate.host/latest?base=USD');
+      if (!resp.ok) {
+        throw new Error(`FX API returned HTTP ${resp.status}`);
+      }
+      const data: any = await resp.json();
+      if (!data?.rates || typeof data.rates.USD === 'undefined') {
+        throw new Error('FX API response missing rates');
+      }
 
-    const result: FxRates = {
-      base: 'USD',
-      rates: data.rates,
-      fetchedAt: now,
-      source: SOURCE,
-    };
-    await this.redis
-      .set(REDIS_KEY, JSON.stringify(result), 'EX', REDIS_TTL_SECONDS)
-      .catch(() => {});
-    return result;
+      const now = new Date();
+      const entity = this.repo.create({
+        base: 'USD',
+        rates: data.rates,
+        source: SOURCE,
+        fetchedAt: now,
+      });
+      await this.repo.save(entity);
+
+      const result: FxRates = {
+        base: 'USD',
+        rates: data.rates,
+        fetchedAt: now,
+        source: SOURCE,
+      };
+      await this.redis
+        .set(REDIS_KEY, JSON.stringify(result), 'EX', REDIS_TTL_SECONDS)
+        .catch(() => {});
+      return result;
+    } finally {
+      if (acquired) {
+        await this.redis.del(REDIS_REFRESH_LOCK).catch(() => {});
+      }
+    }
   }
 
   convert(

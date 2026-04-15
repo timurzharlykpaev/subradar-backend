@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import type { Queue } from 'bull';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../common/redis.module';
@@ -21,12 +21,27 @@ const LOCK_TTL_SEC = 60;
 const LOCK_POLL_INTERVAL_MS = 500;
 const LOCK_MAX_WAIT_MS = 20_000;
 const STALE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_QUERY_LENGTH = 200;
 
 function slugify(s: string): string {
   return s
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
+}
+
+/**
+ * Sanitize user-supplied query before sending to OpenAI prompt.
+ * Strips control chars and prompt-injection payload candidates (quotes,
+ * braces, backticks), then truncates to a safe length.
+ */
+function sanitizeQuery(s: string): string {
+  return (s || '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/["'`{}\\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_QUERY_LENGTH);
 }
 
 @Injectable()
@@ -38,6 +53,7 @@ export class CatalogService {
     private readonly serviceRepo: Repository<CatalogEntity>,
     @InjectRepository(CatalogPlan)
     private readonly planRepo: Repository<CatalogPlan>,
+    @InjectDataSource() private readonly dataSource: DataSource,
     private readonly ai: AiCatalogProvider,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue('catalog-refresh') private readonly refreshQueue: Queue,
@@ -47,15 +63,20 @@ export class CatalogService {
     query: string,
     region: string,
   ): Promise<{ service: CatalogEntity; plans: CatalogPlan[] }> {
-    const slug = slugify(query);
+    const safeQuery = sanitizeQuery(query);
+    if (!safeQuery) {
+      throw new Error('Invalid catalog query');
+    }
+    const slug = slugify(safeQuery);
+    const upperRegion = region.toUpperCase();
     let service = await this.findBySlug(slug);
 
     if (service) {
       const plans = await this.planRepo.find({
-        where: { serviceId: service.id, region },
+        where: { serviceId: service.id, region: upperRegion },
       });
       if (plans.length > 0 && this.hasStalePlans(plans)) {
-        await this.enqueueLazyRefresh(service, region, plans);
+        await this.enqueueLazyRefresh(service, upperRegion, plans);
       }
       return { service, plans };
     }
@@ -69,7 +90,7 @@ export class CatalogService {
       service = await this.waitForService(slug);
       if (service) {
         const plans = await this.planRepo.find({
-          where: { serviceId: service.id, region },
+          where: { serviceId: service.id, region: upperRegion },
         });
         return { service, plans };
       }
@@ -77,10 +98,22 @@ export class CatalogService {
     }
 
     try {
-      const result = await this.ai.fullResearch(query, [region]);
-      service = await this.persistService(result.service);
-      const plans = await this.persistPlans(service.id, result.plans);
-      return { service, plans };
+      const result = await this.ai.fullResearch(safeQuery, [upperRegion]);
+      // Transactional: service + plans saved together, or neither.
+      return await this.dataSource.transaction(async (manager) => {
+        const svcRepo = manager.getRepository(CatalogEntity);
+        const planRepo = manager.getRepository(CatalogPlan);
+        const savedService = await this.persistServiceWithManager(
+          svcRepo,
+          result.service,
+        );
+        const savedPlans = await this.persistPlansWithManager(
+          planRepo,
+          savedService.id,
+          result.plans,
+        );
+        return { service: savedService, plans: savedPlans };
+      });
     } finally {
       await this.redis.del(lockKey).catch(() => {});
     }
@@ -91,11 +124,15 @@ export class CatalogService {
   }
 
   private hasStalePlans(plans: CatalogPlan[]): boolean {
-    const oldest = plans.reduce(
-      (min, p) =>
-        Math.min(min, p.lastPriceRefreshAt?.getTime() ?? 0),
-      Infinity,
-    );
+    if (plans.length === 0) return false;
+    // Consider a plan stale if it has no refresh timestamp at all, or the
+    // oldest real timestamp is older than STALE_AGE_MS.
+    let oldest = Infinity;
+    for (const p of plans) {
+      const ts = p.lastPriceRefreshAt?.getTime();
+      if (!ts) return true; // never refreshed → definitely stale
+      if (ts < oldest) oldest = ts;
+    }
     return Date.now() - oldest > STALE_AGE_MS;
   }
 
@@ -142,17 +179,21 @@ export class CatalogService {
     return null;
   }
 
-  private async persistService(data: any): Promise<CatalogEntity> {
+  private async persistServiceWithManager(
+    repo: Repository<CatalogEntity>,
+    data: any,
+  ): Promise<CatalogEntity> {
     const slug = slugify(data.slug || data.name);
-    const existing = await this.findBySlug(slug);
+    const existing = await repo.findOne({ where: { slug } });
     if (existing) {
       existing.researchCount = (existing.researchCount ?? 0) + 1;
       existing.lastResearchedAt = new Date();
-      return this.serviceRepo.save(existing);
+      return repo.save(existing);
     }
-    const category = (SubscriptionCategory as any)[data.category] ??
+    const category =
+      (SubscriptionCategory as any)[data.category] ??
       SubscriptionCategory.OTHER;
-    const entity = this.serviceRepo.create({
+    const entity = repo.create({
       slug,
       name: data.name,
       category,
@@ -162,26 +203,26 @@ export class CatalogService {
       lastResearchedAt: new Date(),
       researchCount: 1,
     });
-    return this.serviceRepo.save(entity);
+    return repo.save(entity);
   }
 
-  private async persistPlans(
+  private async persistPlansWithManager(
+    repo: Repository<CatalogPlan>,
     serviceId: string,
     plans: any[],
   ): Promise<CatalogPlan[]> {
     const now = new Date();
-    const saved: CatalogPlan[] = [];
-    for (const p of plans) {
+    const entities = plans.map((p) => {
       const period =
         (BillingPeriod as any)[p.period] ?? BillingPeriod.MONTHLY;
       const confidence =
         (PriceConfidence as any)[p.confidence] ?? PriceConfidence.HIGH;
-      const entity = this.planRepo.create({
+      return repo.create({
         serviceId,
-        region: p.region,
+        region: String(p.region || '').toUpperCase(),
         planName: p.planName,
         price: String(p.price),
-        currency: p.currency,
+        currency: String(p.currency || '').toUpperCase(),
         period,
         trialDays: p.trialDays ?? null,
         features: Array.isArray(p.features) ? p.features : [],
@@ -189,8 +230,7 @@ export class CatalogService {
         priceConfidence: confidence,
         lastPriceRefreshAt: now,
       });
-      saved.push(await this.planRepo.save(entity));
-    }
-    return saved;
+    });
+    return repo.save(entities);
   }
 }

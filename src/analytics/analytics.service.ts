@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -15,6 +15,8 @@ import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class AnalyticsService {
+  private readonly logger = new Logger(AnalyticsService.name);
+
   constructor(
     @InjectRepository(Subscription)
     private readonly subRepo: Repository<Subscription>,
@@ -35,6 +37,11 @@ export class AnalyticsService {
     return (user?.displayCurrency || 'USD').toUpperCase();
   }
 
+  /**
+   * Convert to target currency. If conversion fails (unknown currency,
+   * missing rate), returns 0 and logs a warning rather than silently
+   * mixing currencies in aggregates. Callers can safely sum the result.
+   */
   private convertAmount(
     amount: number | string,
     from: string,
@@ -46,8 +53,11 @@ export class AnalyticsService {
     try {
       const converted = this.fx.convert(new Decimal(amount), from, to, rates);
       return parseFloat(converted.toFixed(2));
-    } catch {
-      return Number(amount);
+    } catch (e: any) {
+      this.logger.warn(
+        `FX convert ${from}->${to} failed (amount=${amount}): ${e?.message}; excluded from aggregate`,
+      );
+      return 0;
     }
   }
 

@@ -51,23 +51,33 @@ export class CatalogRefreshProcessor {
 
     const plans = await this.planRepo.find({ where: { serviceId } });
     const now = new Date();
+    const toSave: CatalogPlan[] = [];
+    const diffs: string[] = [];
+
     for (const priceEntry of result.prices ?? []) {
       const plan = plans.find(
         (p) =>
-          p.region === priceEntry.region &&
+          p.region === String(priceEntry.region || '').toUpperCase() &&
           p.planName === priceEntry.planName,
       );
       if (!plan) continue;
       const oldPrice = plan.price;
       plan.price = String(priceEntry.price);
-      plan.currency = priceEntry.currency;
+      plan.currency = String(priceEntry.currency || '').toUpperCase();
       plan.lastPriceRefreshAt = now;
-      await this.planRepo.save(plan);
+      toSave.push(plan);
       if (oldPrice !== plan.price) {
-        this.logger.log(
-          `${serviceName} ${plan.region}/${plan.planName}: ${oldPrice} → ${plan.price} ${plan.currency}`,
+        diffs.push(
+          `${plan.region}/${plan.planName}: ${oldPrice} → ${plan.price} ${plan.currency}`,
         );
       }
+    }
+
+    if (toSave.length > 0) {
+      await this.planRepo.save(toSave);
+    }
+    for (const diff of diffs) {
+      this.logger.log(`${serviceName} ${diff}`);
     }
   }
 }
