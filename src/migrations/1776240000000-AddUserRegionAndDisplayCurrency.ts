@@ -5,13 +5,13 @@ export class AddUserRegionAndDisplayCurrency1776240000000 implements MigrationIn
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      `ALTER TABLE "users" ADD COLUMN "region" VARCHAR(2) NOT NULL DEFAULT 'US'`,
+      `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "region" VARCHAR(2) NOT NULL DEFAULT 'US'`,
     );
     await queryRunner.query(
-      `ALTER TABLE "users" ADD COLUMN "displayCurrency" VARCHAR(3) NOT NULL DEFAULT 'USD'`,
+      `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "displayCurrency" VARCHAR(3) NOT NULL DEFAULT 'USD'`,
     );
     await queryRunner.query(
-      `ALTER TABLE "users" ADD COLUMN "timezoneDetected" VARCHAR(64) DEFAULT NULL`,
+      `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "timezoneDetected" VARCHAR(64) DEFAULT NULL`,
     );
 
     // Backfill from existing country/defaultCurrency if present

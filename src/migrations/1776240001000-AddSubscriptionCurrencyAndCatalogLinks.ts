@@ -6,30 +6,34 @@ export class AddSubscriptionCurrencyAndCatalogLinks1776240001000
   name = 'AddSubscriptionCurrencyAndCatalogLinks1776240001000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // originalCurrency: nullable first, backfill, then NOT NULL
+    // Idempotent: if a previous run (or an old synchronize pass) already
+    // added the column, handle both states cleanly.
     await queryRunner.query(
-      `ALTER TABLE "subscriptions" ADD COLUMN "originalCurrency" VARCHAR(3)`,
+      `ALTER TABLE "subscriptions" ADD COLUMN IF NOT EXISTS "originalCurrency" VARCHAR(3)`,
     );
+    // Backfill NULL rows from currency (which itself may be NULL on legacy rows).
     await queryRunner.query(
-      `UPDATE "subscriptions" SET "originalCurrency" = "currency" WHERE "originalCurrency" IS NULL`,
+      `UPDATE "subscriptions"
+       SET "originalCurrency" = COALESCE("originalCurrency", "currency", 'USD')
+       WHERE "originalCurrency" IS NULL`,
     );
+    // Safety net — guarantee NOT NULL for any future inserts without going through the app layer.
     await queryRunner.query(
       `ALTER TABLE "subscriptions" ALTER COLUMN "originalCurrency" SET NOT NULL`,
     );
 
-    // Catalog links (nullable — backfill is forward-only)
     await queryRunner.query(
-      `ALTER TABLE "subscriptions" ADD COLUMN "catalogServiceId" UUID DEFAULT NULL`,
+      `ALTER TABLE "subscriptions" ADD COLUMN IF NOT EXISTS "catalogServiceId" UUID DEFAULT NULL`,
     );
     await queryRunner.query(
-      `ALTER TABLE "subscriptions" ADD COLUMN "catalogPlanId" UUID DEFAULT NULL`,
+      `ALTER TABLE "subscriptions" ADD COLUMN IF NOT EXISTS "catalogPlanId" UUID DEFAULT NULL`,
     );
 
     await queryRunner.query(
-      `CREATE INDEX "IDX_subscriptions_catalog_service_id" ON "subscriptions" ("catalogServiceId")`,
+      `CREATE INDEX IF NOT EXISTS "IDX_subscriptions_catalog_service_id" ON "subscriptions" ("catalogServiceId")`,
     );
     await queryRunner.query(
-      `CREATE INDEX "IDX_subscriptions_catalog_plan_id" ON "subscriptions" ("catalogPlanId")`,
+      `CREATE INDEX IF NOT EXISTS "IDX_subscriptions_catalog_plan_id" ON "subscriptions" ("catalogPlanId")`,
     );
   }
 

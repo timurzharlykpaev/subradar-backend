@@ -6,7 +6,7 @@ export class CreateFxAndCatalogTables1776240002000 implements MigrationInterface
   public async up(queryRunner: QueryRunner): Promise<void> {
     // FX snapshots
     await queryRunner.query(`
-      CREATE TABLE "fx_rate_snapshots" (
+      CREATE TABLE IF NOT EXISTS "fx_rate_snapshots" (
         "id" UUID NOT NULL DEFAULT uuid_generate_v4(),
         "base" VARCHAR(3) NOT NULL DEFAULT 'USD',
         "rates" JSONB NOT NULL,
@@ -16,12 +16,12 @@ export class CreateFxAndCatalogTables1776240002000 implements MigrationInterface
       )
     `);
     await queryRunner.query(
-      `CREATE INDEX "IDX_fx_rate_snapshots_fetchedAt" ON "fx_rate_snapshots" ("fetchedAt")`,
+      `CREATE INDEX IF NOT EXISTS "IDX_fx_rate_snapshots_fetchedAt" ON "fx_rate_snapshots" ("fetchedAt")`,
     );
 
     // Catalog: services
     await queryRunner.query(`
-      CREATE TABLE "catalog_services" (
+      CREATE TABLE IF NOT EXISTS "catalog_services" (
         "id" UUID NOT NULL DEFAULT uuid_generate_v4(),
         "slug" VARCHAR(64) NOT NULL,
         "name" VARCHAR(128) NOT NULL,
@@ -36,20 +36,24 @@ export class CreateFxAndCatalogTables1776240002000 implements MigrationInterface
       )
     `);
     await queryRunner.query(
-      `CREATE UNIQUE INDEX "IDX_catalog_services_slug" ON "catalog_services" ("slug")`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "IDX_catalog_services_slug" ON "catalog_services" ("slug")`,
     );
 
-    // Price source and confidence enums
+    // Price source and confidence enums — DO block for idempotent CREATE TYPE
     await queryRunner.query(`
-      CREATE TYPE "catalog_plan_price_source_enum" AS ENUM ('AI_RESEARCH','USER_REPORTED','MANUAL')
+      DO $$ BEGIN
+        CREATE TYPE "catalog_plan_price_source_enum" AS ENUM ('AI_RESEARCH','USER_REPORTED','MANUAL');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     `);
     await queryRunner.query(`
-      CREATE TYPE "catalog_plan_price_confidence_enum" AS ENUM ('HIGH','MEDIUM','LOW')
+      DO $$ BEGIN
+        CREATE TYPE "catalog_plan_price_confidence_enum" AS ENUM ('HIGH','MEDIUM','LOW');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     `);
 
     // Catalog: plans
     await queryRunner.query(`
-      CREATE TABLE "catalog_plans" (
+      CREATE TABLE IF NOT EXISTS "catalog_plans" (
         "id" UUID NOT NULL DEFAULT uuid_generate_v4(),
         "serviceId" UUID NOT NULL,
         "region" VARCHAR(2) NOT NULL,
@@ -68,10 +72,10 @@ export class CreateFxAndCatalogTables1776240002000 implements MigrationInterface
       )
     `);
     await queryRunner.query(
-      `CREATE INDEX "IDX_catalog_plans_lastPriceRefreshAt" ON "catalog_plans" ("lastPriceRefreshAt")`,
+      `CREATE INDEX IF NOT EXISTS "IDX_catalog_plans_lastPriceRefreshAt" ON "catalog_plans" ("lastPriceRefreshAt")`,
     );
     await queryRunner.query(
-      `CREATE INDEX "IDX_catalog_plans_service_region" ON "catalog_plans" ("serviceId","region")`,
+      `CREATE INDEX IF NOT EXISTS "IDX_catalog_plans_service_region" ON "catalog_plans" ("serviceId","region")`,
     );
   }
 
