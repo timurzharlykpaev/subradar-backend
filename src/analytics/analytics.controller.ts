@@ -15,11 +15,13 @@ export class AnalyticsController {
     @Request() req,
     @Query('month') month?: string,
     @Query('year') year?: string,
+    @Query('displayCurrency') displayCurrency?: string,
   ) {
     return this.service.getSummary(
       req.user.id,
       month ? +month : undefined,
       year ? +year : undefined,
+      displayCurrency,
     );
   }
 
@@ -29,23 +31,33 @@ export class AnalyticsController {
     @Request() req,
     @Query('month') month?: string,
     @Query('year') year?: string,
+    @Query('displayCurrency') displayCurrency?: string,
   ) {
     return this.service.getSummary(
       req.user.id,
       month ? +month : undefined,
       year ? +year : undefined,
+      displayCurrency,
     );
   }
 
   @Get('monthly')
-  monthly(@Request() req, @Query('months') months?: string) {
-    return this.service.getMonthly(req.user.id, months ? +months : 12);
+  monthly(
+    @Request() req,
+    @Query('months') months?: string,
+    @Query('displayCurrency') displayCurrency?: string,
+  ) {
+    return this.service.getMonthly(req.user.id, months ? +months : 12, displayCurrency);
   }
 
   /** Alias for monthly */
   @Get('trends')
-  trends(@Request() req, @Query('months') months?: string) {
-    return this.service.getMonthly(req.user.id, months ? +months : 12);
+  trends(
+    @Request() req,
+    @Query('months') months?: string,
+    @Query('displayCurrency') displayCurrency?: string,
+  ) {
+    return this.service.getMonthly(req.user.id, months ? +months : 12, displayCurrency);
   }
 
   @Get('by-category')
@@ -53,11 +65,13 @@ export class AnalyticsController {
     @Request() req,
     @Query('month') month?: string,
     @Query('year') year?: string,
+    @Query('displayCurrency') displayCurrency?: string,
   ) {
     return this.service.getByCategory(
       req.user.id,
       month ? +month : undefined,
       year ? +year : undefined,
+      displayCurrency,
     );
   }
 
@@ -67,11 +81,13 @@ export class AnalyticsController {
     @Request() req,
     @Query('month') month?: string,
     @Query('year') year?: string,
+    @Query('displayCurrency') displayCurrency?: string,
   ) {
     return this.service.getByCategory(
       req.user.id,
       month ? +month : undefined,
       year ? +year : undefined,
+      displayCurrency,
     );
   }
 

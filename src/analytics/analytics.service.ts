@@ -2,6 +2,7 @@ import { Injectable, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import Decimal from 'decimal.js';
 import { REDIS_CLIENT } from '../common/redis.module';
 import {
   Subscription,
@@ -9,6 +10,8 @@ import {
   BillingPeriod,
 } from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
+import { FxService, FxRates } from '../fx/fx.service';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class AnalyticsService {
@@ -18,7 +21,35 @@ export class AnalyticsService {
     @InjectRepository(PaymentCard)
     private readonly cardRepo: Repository<PaymentCard>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly fx: FxService,
+    private readonly usersService: UsersService,
   ) {}
+
+  private async resolveDisplayCurrency(
+    userId: string,
+    override: string | null | undefined,
+  ): Promise<string> {
+    const requested = (override ?? '').trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(requested)) return requested;
+    const user = await this.usersService.findById(userId);
+    return (user?.displayCurrency || 'USD').toUpperCase();
+  }
+
+  private convertAmount(
+    amount: number | string,
+    from: string,
+    to: string,
+    rates: Record<string, number>,
+  ): number {
+    if (!amount || amount === '0') return 0;
+    if (from === to) return Number(amount);
+    try {
+      const converted = this.fx.convert(new Decimal(amount), from, to, rates);
+      return parseFloat(converted.toFixed(2));
+    } catch {
+      return Number(amount);
+    }
+  }
 
   private toMonthlyAmount(amount: number, period: BillingPeriod): number {
     const map: Record<BillingPeriod, number> = {
@@ -32,33 +63,48 @@ export class AnalyticsService {
     return map[period] ?? amount;
   }
 
-  async getSummary(userId: string, _month?: number, _year?: number) {
-    const cacheKey = `analytics:summary:${userId}:${_month || 'all'}:${_year || 'all'}`;
+  async getSummary(
+    userId: string,
+    _month?: number,
+    _year?: number,
+    displayCurrencyOverride?: string | null,
+  ) {
+    const displayCurrency = await this.resolveDisplayCurrency(
+      userId,
+      displayCurrencyOverride,
+    );
+    const cacheKey = `analytics:summary:${userId}:${displayCurrency}:${_month || 'all'}:${_year || 'all'}`;
     try {
       const cached = await this.redis?.get(cacheKey);
       if (cached) return JSON.parse(cached);
     } catch { /* redis unavailable, proceed without cache */ }
 
-    const subs = await this.subRepo.find({ where: { userId } });
+    const [subs, fx] = await Promise.all([
+      this.subRepo.find({ where: { userId } }),
+      this.fx.getRates(),
+    ]);
     const active = subs.filter(
       (s) =>
         s.status === SubscriptionStatus.ACTIVE ||
         s.status === SubscriptionStatus.TRIAL,
     );
 
-    const totalMonthly = active.reduce(
-      (sum, s) => sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
-      0,
-    );
+    const monthlyIn = (s: Subscription) => {
+      const amountMonthly = this.toMonthlyAmount(Number(s.amount), s.billingPeriod);
+      return this.convertAmount(
+        amountMonthly,
+        s.originalCurrency || s.currency,
+        displayCurrency,
+        fx.rates,
+      );
+    };
+
+    const totalMonthly = active.reduce((sum, s) => sum + monthlyIn(s), 0);
     const totalYearly = totalMonthly * 12;
     const totalSubscriptions = active.length;
     const businessExpenses = active
       .filter((s) => s.isBusinessExpense)
-      .reduce(
-        (sum, s) =>
-          sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
-        0,
-      );
+      .reduce((sum, s) => sum + monthlyIn(s), 0);
 
     const upcomingNext30 = await this.subRepo.find({
       where: {
@@ -88,10 +134,20 @@ export class AnalyticsService {
         totalSubscriptions > 0
           ? Math.round((totalMonthly / totalSubscriptions) * 100) / 100
           : 0,
+      displayCurrency,
+      fxFetchedAt: fx.fetchedAt,
       upcomingNext30: upcomingNext30.map((s) => ({
         id: s.id,
         name: s.name,
         amount: Number(s.amount),
+        currency: s.originalCurrency || s.currency,
+        displayAmount: this.convertAmount(
+          Number(s.amount),
+          s.originalCurrency || s.currency,
+          displayCurrency,
+          fx.rates,
+        ),
+        displayCurrency,
         nextPaymentDate: s.nextPaymentDate,
       })),
     };
@@ -103,23 +159,34 @@ export class AnalyticsService {
     return result;
   }
 
-  async getMonthly(userId: string, months = 12) {
+  async getMonthly(
+    userId: string,
+    months = 12,
+    displayCurrencyOverride?: string | null,
+  ) {
+    const displayCurrency = await this.resolveDisplayCurrency(
+      userId,
+      displayCurrencyOverride,
+    );
     const now = new Date();
 
-    // Load all active/trial subscriptions once (fixes N+1)
-    const allSubs = await this.subRepo
-      .createQueryBuilder('s')
-      .where('s.userId = :userId', { userId })
-      .andWhere('s.status IN (:...statuses)', {
-        statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
-      })
-      .getMany();
+    const [allSubs, fx] = await Promise.all([
+      this.subRepo
+        .createQueryBuilder('s')
+        .where('s.userId = :userId', { userId })
+        .andWhere('s.status IN (:...statuses)', {
+          statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
+        })
+        .getMany(),
+      this.fx.getRates(),
+    ]);
 
     const result: Array<{
       month: number;
       year: number;
       label: string;
       total: number;
+      displayCurrency: string;
     }> = [];
 
     for (let i = months - 1; i >= 0; i--) {
@@ -128,29 +195,48 @@ export class AnalyticsService {
       const year = d.getFullYear();
       const endOfMonth = new Date(year, month, 0);
 
-      // Filter in application code instead of querying DB per month
       const monthSubs = allSubs.filter(
         (s) => !s.startDate || new Date(s.startDate) <= endOfMonth,
       );
 
-      const total = monthSubs.reduce(
-        (sum, s) =>
-          sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
-        0,
-      );
+      const total = monthSubs.reduce((sum, s) => {
+        const monthly = this.toMonthlyAmount(Number(s.amount), s.billingPeriod);
+        return (
+          sum +
+          this.convertAmount(
+            monthly,
+            s.originalCurrency || s.currency,
+            displayCurrency,
+            fx.rates,
+          )
+        );
+      }, 0);
       result.push({
         month,
         year,
         label: `${year}-${String(month).padStart(2, '0')}`,
         total: Math.round(total * 100) / 100,
+        displayCurrency,
       });
     }
 
     return result;
   }
 
-  async getByCategory(userId: string, _month?: number, _year?: number) {
-    const subs = await this.subRepo.find({ where: { userId } });
+  async getByCategory(
+    userId: string,
+    _month?: number,
+    _year?: number,
+    displayCurrencyOverride?: string | null,
+  ) {
+    const displayCurrency = await this.resolveDisplayCurrency(
+      userId,
+      displayCurrencyOverride,
+    );
+    const [subs, fx] = await Promise.all([
+      this.subRepo.find({ where: { userId } }),
+      this.fx.getRates(),
+    ]);
     const active = subs.filter(
       (s) =>
         s.status === SubscriptionStatus.ACTIVE ||
@@ -160,13 +246,20 @@ export class AnalyticsService {
     const map: Record<string, number> = {};
     for (const s of active) {
       const monthly = this.toMonthlyAmount(Number(s.amount), s.billingPeriod);
-      map[s.category] = (map[s.category] || 0) + monthly;
+      const converted = this.convertAmount(
+        monthly,
+        s.originalCurrency || s.currency,
+        displayCurrency,
+        fx.rates,
+      );
+      map[s.category] = (map[s.category] || 0) + converted;
     }
 
     return Object.entries(map)
       .map(([category, total]) => ({
         category,
         total: Math.round(total * 100) / 100,
+        displayCurrency,
       }))
       .sort((a, b) => b.total - a.total);
   }
