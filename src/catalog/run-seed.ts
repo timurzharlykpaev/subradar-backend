@@ -5,8 +5,8 @@
  *   npm run seed:prices
  */
 import 'dotenv/config';
-import { AppDataSource } from '../data-source.js';
-import { seedRegionalPrices } from './seed-regional-prices.js';
+import { AppDataSource } from '../data-source';
+import { seedRegionalPrices } from './seed-regional-prices';
 
 async function main() {
   console.log('Initializing database connection...');
