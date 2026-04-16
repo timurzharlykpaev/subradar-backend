@@ -53,29 +53,35 @@ function computeNextPaymentDate(
   const now = new Date();
   let next = new Date(startDate);
 
-  const advance = (): Date => {
+  const clampBillingDay = (d: Date): Date => {
+    if (!billingDay || billingPeriod !== BillingPeriod.MONTHLY) return d;
+    const lastDay = lastDayOfMonth(d).getDate();
+    return setDate(d, Math.min(billingDay, lastDay));
+  };
+
+  const advance = (d: Date): Date => {
     switch (billingPeriod) {
       case BillingPeriod.WEEKLY:
-        return addWeeks(next, 1);
+        return addWeeks(d, 1);
       case BillingPeriod.MONTHLY:
-        return addMonths(next, 1);
+        return addMonths(d, 1);
       case BillingPeriod.QUARTERLY:
-        return addQuarters(next, 1);
+        return addQuarters(d, 1);
       case BillingPeriod.YEARLY:
-        return addYears(next, 1);
+        return addYears(d, 1);
       default:
-        return addMonths(next, 1);
+        return addMonths(d, 1);
     }
   };
 
-  while (isBefore(next, now)) {
-    next = advance();
-  }
+  // Apply billingDay first — otherwise a startDate later in the same month
+  // (e.g. Apr 20) + a smaller billingDay (e.g. 5) would produce a past date.
+  next = clampBillingDay(next);
 
-  // Clamp billingDay to last day of target month (e.g., 31 in Feb → 28/29)
-  if (billingDay && billingPeriod === BillingPeriod.MONTHLY) {
-    const lastDay = lastDayOfMonth(next).getDate();
-    next = setDate(next, Math.min(billingDay, lastDay));
+  // Walk forward until we land strictly in the future. Re-clamp after each
+  // step in case addMonths crossed a 28/30/31-day edge.
+  while (!isBefore(now, next)) {
+    next = clampBillingDay(advance(next));
   }
 
   return next;
