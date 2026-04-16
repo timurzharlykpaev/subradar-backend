@@ -3,7 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { AppController } from './app.controller';
 import { ClientErrorController } from './common/client-error.controller';
-import { TelegramAlertService } from './common/telegram-alert.service';
+import { TelegramAlertModule } from './common/telegram-alert.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -33,6 +33,7 @@ import { AuditModule } from './common/audit/audit.module';
   controllers: [AppController, ClientErrorController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    TelegramAlertModule,
     RedisModule,
     ThrottlerModule.forRoot([
       { name: 'default', ttl: 60000, limit: 300 }, // 300 req/min global
@@ -141,9 +142,7 @@ import { AuditModule } from './common/audit/audit.module';
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard }, // global rate limiting
-    TelegramAlertService,
   ],
-  exports: [TelegramAlertService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
