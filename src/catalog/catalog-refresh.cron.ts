@@ -7,6 +7,7 @@ import type { Queue } from 'bull';
 
 const TOP_N = 50;
 const WEEKLY_BUDGET_CAP = 1000;
+const BASE_REGIONS = ['US', 'KZ', 'RU', 'UA', 'TR', 'DE'];
 
 interface TopServiceRow {
   id: string;
@@ -28,11 +29,11 @@ export class CatalogRefreshCron {
     const regionRows: Array<{ region: string }> = await this.dataSource.query(
       `SELECT DISTINCT "region" FROM "users" WHERE "region" IS NOT NULL`,
     );
-    const regions = regionRows.map((r) => r.region);
-    if (regions.length === 0) {
-      this.logger.log('No active regions, skipping catalog refresh');
-      return;
-    }
+    const userRegions = regionRows.map((r) => r.region);
+    const regions = [...new Set([...BASE_REGIONS, ...userRegions])];
+    this.logger.log(
+      `Regions for refresh: ${regions.join(', ')} (${BASE_REGIONS.length} base + ${userRegions.length} from users)`,
+    );
 
     const topServices: TopServiceRow[] = await this.dataSource.query(
       `

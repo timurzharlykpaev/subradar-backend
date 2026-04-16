@@ -44,7 +44,16 @@ export class AiCatalogProvider {
     query: string,
     regions: string[],
   ): Promise<FullResearchResult> {
-    const systemPrompt = `You are a SaaS subscription research assistant. Given a service name, return JSON describing the service and its current publicly-listed plans for each requested region. If a plan is unavailable in a region, omit it. Be precise with currency (ISO-4217) and period (must be one of: WEEKLY, MONTHLY, QUARTERLY, YEARLY, LIFETIME, ONE_TIME). If uncertain about a price, set confidence: "MEDIUM" or "LOW". Normalize slug to lowercase kebab-case. Return JSON matching: {"service":{"name","slug","category","iconUrl","websiteUrl","aliases":[]},"plans":[{"region","planName","price","currency","period","trialDays","features":[],"confidence"}]}`;
+    const systemPrompt = `You are a SaaS subscription research assistant. Given a service name and target regions, return JSON describing the service and its current publicly-listed plans for each requested region.
+
+CRITICAL — Regional pricing rules:
+- Research prices SPECIFICALLY for each requested region/country.
+- Many services (Netflix, YouTube Premium, Spotify, Apple Music, etc.) offer significantly cheaper LOCAL prices in CIS countries (KZ, RU, UA), Turkey (TR), and other developing markets.
+- Return prices in the LOCAL CURRENCY of the region if the service offers regional pricing (e.g., KZT for KZ, RUB for RU, TRY for TR, EUR for DE/EU).
+- Only use USD if the service does NOT offer regional pricing for that country (e.g., ChatGPT, Claude — same USD price globally).
+- If a plan is unavailable in a region (e.g., Netflix not available in RU), omit it entirely.
+
+Be precise with currency (ISO-4217) and period (must be one of: WEEKLY, MONTHLY, QUARTERLY, YEARLY, LIFETIME, ONE_TIME). If uncertain about a price, set confidence: "MEDIUM" or "LOW". Normalize slug to lowercase kebab-case. Return JSON matching: {"service":{"name","slug","category","iconUrl","websiteUrl","aliases":[]},"plans":[{"region","planName","price","currency","period","trialDays","features":[],"confidence"}]}`;
     const userPrompt = JSON.stringify({ query, regions });
 
     return (await this.callWithRetry(
@@ -59,7 +68,15 @@ export class AiCatalogProvider {
     regions: string[],
     knownPlans: string[],
   ): Promise<PriceRefreshResult> {
-    const systemPrompt = `Return ONLY current prices for the listed plans in the listed regions. No new plans, no descriptions. Return JSON: {"prices":[{"region","planName","price","currency"}], "notes":"..."}`;
+    const systemPrompt = `Return ONLY current prices for the listed plans in the listed regions. No new plans, no descriptions.
+
+CRITICAL — Regional pricing:
+- Return prices in LOCAL CURRENCY for each region if the service offers regional pricing (KZT for KZ, RUB for RU, TRY for TR, EUR for DE/EU, etc.).
+- Many services (Netflix, YouTube, Spotify) have significantly cheaper prices in CIS/developing countries — use the ACTUAL local price, not a USD conversion.
+- Only use USD if the service charges the same USD price globally (e.g., ChatGPT, Claude).
+- If a plan is unavailable in a region, omit it.
+
+Return JSON: {"prices":[{"region","planName","price","currency"}], "notes":"..."}`;
     const userPrompt = JSON.stringify({ service, regions, knownPlans });
     return (await this.callWithRetry(
       PRICE_REFRESH_MODEL,
