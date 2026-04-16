@@ -1,5 +1,5 @@
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { NestFactory, Reflector } from '@nestjs/core';
+import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import * as bodyParser from 'body-parser';
@@ -124,6 +124,11 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
     }),
   );
+
+  // Enforce @Exclude() on entity fields (refreshToken, magicLinkToken,
+  // lemonSqueezyCustomerId, password). Without this interceptor, entities
+  // returned from controllers leak every column to clients.
+  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
 
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()

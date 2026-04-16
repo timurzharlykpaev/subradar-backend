@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   OneToMany,
 } from 'typeorm';
+import { Exclude } from 'class-transformer';
 import { Subscription } from '../../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../../payment-cards/entities/payment-card.entity';
 
@@ -27,6 +28,7 @@ export class User {
   email: string;
 
   @Column({ nullable: true, select: false })
+  @Exclude({ toPlainOnly: true })
   password: string;
 
   @Column({ nullable: true })
@@ -45,15 +47,19 @@ export class User {
   isActive: boolean;
 
   @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
   refreshToken: string;
 
   @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
   magicLinkToken: string;
 
   @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
   magicLinkExpiry: Date;
 
   @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
   lemonSqueezyCustomerId: string;
 
   @Column({ default: 'free' })
@@ -123,6 +129,7 @@ export class User {
   weeklyDigestSentAt: Date | null;
 
   @Column({ type: 'timestamp', nullable: true, default: null })
+  @Exclude({ toPlainOnly: true })
   refreshTokenIssuedAt: Date | null;
 
   @OneToMany(() => Subscription, (s) => s.user)
