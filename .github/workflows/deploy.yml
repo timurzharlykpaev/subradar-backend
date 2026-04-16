@@ -19,8 +19,11 @@ jobs:
     # When target == 'prod' and the 'prod' environment has required reviewers
     # configured in GitHub Settings, the job pauses for manual approval before
     # any deploy steps run. See .github/ENVIRONMENT_SETUP.md.
+    # NOTE: environment.name is evaluated at job-start, BEFORE any step runs,
+    # so it cannot reference `steps.*`. Recomputed here using only job-level
+    # contexts. Keep in sync with the "Set environment" step below.
     environment:
-      name: ${{ steps.env.outputs.target }}
+      name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || (github.ref_name == 'main' && 'prod' || 'dev') }}
     permissions:
       contents: read
       packages: write
