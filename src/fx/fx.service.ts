@@ -11,7 +11,13 @@ const REDIS_REFRESH_LOCK = 'fx:refresh:lock';
 const REDIS_TTL_SECONDS = 6 * 60 * 60;
 const REFRESH_LOCK_TTL_SECONDS = 30;
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
-const SOURCE = 'exchangerate.host';
+
+// Primary: open.er-api.com — free, no key, 166 currencies, daily updates
+// Fallback: frankfurter.dev — free, ECB data, fewer currencies (~33, no KZT/RUB)
+const FX_PROVIDERS = [
+  { url: 'https://open.er-api.com/v6/latest/USD', name: 'open.er-api.com' },
+  { url: 'https://api.frankfurter.dev/v1/latest?base=USD', name: 'frankfurter.dev' },
+] as const;
 
 export interface FxRates {
   base: 'USD';
@@ -77,7 +83,6 @@ export class FxService {
       .catch(() => null);
 
     if (!acquired) {
-      // Another instance is refreshing — wait briefly, then return cached.
       await new Promise((r) => setTimeout(r, 1500));
       const cached = await this.redis.get(REDIS_KEY).catch(() => null);
       if (cached) {
@@ -85,46 +90,63 @@ export class FxService {
           const parsed = JSON.parse(cached);
           return { ...parsed, fetchedAt: new Date(parsed.fetchedAt) };
         } catch {
-          // fall through and fetch ourselves
+          // fall through
         }
       }
-      // No cached result yet — fall through to fetch without lock.
     }
 
     try {
-      const resp = await fetch('https://api.exchangerate.host/latest?base=USD');
-      if (!resp.ok) {
-        throw new Error(`FX API returned HTTP ${resp.status}`);
-      }
-      const data: any = await resp.json();
-      if (!data?.rates || typeof data.rates.USD === 'undefined') {
-        throw new Error('FX API response missing rates');
-      }
-
-      const now = new Date();
-      const entity = this.repo.create({
-        base: 'USD',
-        rates: data.rates,
-        source: SOURCE,
-        fetchedAt: now,
-      });
-      await this.repo.save(entity);
-
-      const result: FxRates = {
-        base: 'USD',
-        rates: data.rates,
-        fetchedAt: now,
-        source: SOURCE,
-      };
-      await this.redis
-        .set(REDIS_KEY, JSON.stringify(result), 'EX', REDIS_TTL_SECONDS)
-        .catch(() => {});
-      return result;
+      return await this.fetchFromProviders();
     } finally {
       if (acquired) {
         await this.redis.del(REDIS_REFRESH_LOCK).catch(() => {});
       }
     }
+  }
+
+  private async fetchFromProviders(): Promise<FxRates> {
+    const errors: string[] = [];
+    for (const provider of FX_PROVIDERS) {
+      try {
+        const resp = await fetch(provider.url, { signal: AbortSignal.timeout(10_000) });
+        if (!resp.ok) {
+          errors.push(`${provider.name}: HTTP ${resp.status}`);
+          continue;
+        }
+        const data: any = await resp.json();
+        const rates: Record<string, number> | undefined = data?.rates;
+        if (!rates || typeof rates.USD === 'undefined') {
+          errors.push(`${provider.name}: response missing rates (got keys: ${Object.keys(data || {}).join(',')})`);
+          continue;
+        }
+
+        const now = new Date();
+        const entity = this.repo.create({
+          base: 'USD',
+          rates,
+          source: provider.name,
+          fetchedAt: now,
+        });
+        await this.repo.save(entity);
+
+        const result: FxRates = {
+          base: 'USD',
+          rates,
+          fetchedAt: now,
+          source: provider.name,
+        };
+        await this.redis
+          .set(REDIS_KEY, JSON.stringify(result), 'EX', REDIS_TTL_SECONDS)
+          .catch(() => {});
+        this.logger.log(
+          `FX rates fetched from ${provider.name}: ${Object.keys(rates).length} currencies`,
+        );
+        return result;
+      } catch (e: any) {
+        errors.push(`${provider.name}: ${e.message}`);
+      }
+    }
+    throw new Error(`All FX providers failed: ${errors.join('; ')}`);
   }
 
   convert(
