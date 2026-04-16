@@ -47,14 +47,20 @@ describe('AllExceptionsFilter', () => {
   });
 
   it('handles non-HttpException with 500 status', () => {
-    const exception = new Error('Database connection failed');
-    filter.catch(exception, mockHost);
-    expect(mockResponse.status).toHaveBeenCalledWith(500);
-    expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
-      success: false,
-      statusCode: 500,
-      message: 'Database connection failed',
-    }));
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    try {
+      const exception = new Error('Database connection failed');
+      filter.catch(exception, mockHost);
+      expect(mockResponse.status).toHaveBeenCalledWith(500);
+      expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        statusCode: 500,
+        message: 'Database connection failed',
+      }));
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
   });
 
   it('handles unknown exception without message', () => {

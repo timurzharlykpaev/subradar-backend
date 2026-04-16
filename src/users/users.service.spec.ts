@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { User } from './entities/user.entity';
+import { AuditService } from '../common/audit/audit.service';
 
 const mockUser: Partial<User> = {
   id: 'user-1',
@@ -12,7 +13,7 @@ const mockUser: Partial<User> = {
   refreshToken: undefined,
 };
 
-const mockRepo = {
+const mockRepo: any = {
   findOne: jest.fn(),
   createQueryBuilder: jest.fn(() => ({
     addSelect: jest.fn().mockReturnThis(),
@@ -23,6 +24,9 @@ const mockRepo = {
   save: jest.fn().mockImplementation((e) => Promise.resolve({ id: 'user-1', ...e })),
   update: jest.fn().mockResolvedValue({ affected: 1 }),
   delete: jest.fn().mockResolvedValue({ affected: 1 }),
+  manager: {
+    query: jest.fn().mockResolvedValue([]),
+  },
 };
 
 describe('UsersService', () => {
@@ -33,6 +37,7 @@ describe('UsersService', () => {
       providers: [
         UsersService,
         { provide: getRepositoryToken(User), useValue: mockRepo },
+        { provide: AuditService, useValue: { log: jest.fn() } },
       ],
     }).compile();
     service = module.get<UsersService>(UsersService);
@@ -101,14 +106,22 @@ describe('UsersService', () => {
   });
 
   describe('updateRefreshToken', () => {
-    it('calls repo.update with token', async () => {
+    it('calls repo.update with hashed token', async () => {
       await service.updateRefreshToken('user-1', 'new-token');
-      expect(mockRepo.update).toHaveBeenCalledWith('user-1', { refreshToken: 'new-token' });
+      expect(mockRepo.update).toHaveBeenCalledWith('user-1', expect.objectContaining({
+        refreshToken: expect.any(String),
+      }));
+      const [, payload] = mockRepo.update.mock.calls[0];
+      expect(payload.refreshToken).not.toBe('new-token');
+      expect(payload.refreshTokenIssuedAt).toBeInstanceOf(Date);
     });
 
-    it('uses undefined when null passed', async () => {
+    it('uses null when null passed', async () => {
       await service.updateRefreshToken('user-1', null);
-      expect(mockRepo.update).toHaveBeenCalledWith('user-1', { refreshToken: undefined });
+      expect(mockRepo.update).toHaveBeenCalledWith('user-1', {
+        refreshToken: null,
+        refreshTokenIssuedAt: null,
+      });
     });
   });
 
@@ -130,6 +143,7 @@ describe('UsersService', () => {
 
   describe('deleteAccount', () => {
     it('deletes user by id', async () => {
+      mockRepo.findOne.mockResolvedValueOnce(mockUser);
       mockRepo.delete = jest.fn().mockResolvedValue({ affected: 1 });
       await expect(service.deleteAccount('user-1')).resolves.not.toThrow();
     });

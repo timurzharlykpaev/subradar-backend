@@ -4,6 +4,7 @@ import { TrialCheckerCron } from './trial-checker.cron';
 import { Subscription, SubscriptionStatus } from './entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TelegramAlertService } from '../common/telegram-alert.service';
 
 describe('TrialCheckerCron', () => {
   let cron: TrialCheckerCron;
@@ -22,6 +23,7 @@ describe('TrialCheckerCron', () => {
         { provide: getRepositoryToken(Subscription), useValue: mockSubRepo },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: NotificationsService, useValue: mockNotifications },
+        { provide: TelegramAlertService, useValue: { send: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 

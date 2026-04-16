@@ -4,6 +4,7 @@ import { MonthlyReportService } from './monthly-report.service';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TelegramAlertService } from '../common/telegram-alert.service';
 
 const mockSubRepo = {
   find: jest.fn().mockResolvedValue([]),
@@ -33,6 +34,7 @@ describe('MonthlyReportService', () => {
         { provide: getRepositoryToken(Subscription), useValue: mockSubRepo },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: NotificationsService, useValue: mockNotifications },
+        { provide: TelegramAlertService, useValue: { send: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
     service = module.get<MonthlyReportService>(MonthlyReportService);

@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { WorkspaceController } from './workspace.controller';
 import { WorkspaceService } from './workspace.service';
+import { AnalysisService } from '../analysis/analysis.service';
 
 const mockService = { create: jest.fn(), findById: jest.fn(), getMyWorkspace: jest.fn(), invite: jest.fn(), removeMember: jest.fn(), getWorkspaceAnalytics: jest.fn() };
+const mockAnalysisService = { getLatest: jest.fn(), run: jest.fn() };
 const mockReq = { user: { id: 'user-1' } };
 
 describe('WorkspaceController', () => {
@@ -11,7 +13,10 @@ describe('WorkspaceController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [WorkspaceController],
-      providers: [{ provide: WorkspaceService, useValue: mockService }],
+      providers: [
+        { provide: WorkspaceService, useValue: mockService },
+        { provide: AnalysisService, useValue: mockAnalysisService },
+      ],
     })
       .overrideGuard(require('../auth/guards/jwt-auth.guard').JwtAuthGuard).useValue({ canActivate: () => true })
       .compile();

@@ -2,12 +2,30 @@ import configuration from './configuration';
 
 describe('configuration', () => {
   it('returns default config values', () => {
-    const config = configuration();
-    expect(config.port).toBe(3000);
-    expect(['development', 'test']).toContain(config.nodeEnv);
-    expect(config.jwt.secret).toBe('jwt-secret-change-me');
-    expect(config.database.host).toBe('localhost');
-    expect(config.database.port).toBe(5432);
+    const prevPort = process.env.PORT;
+    const prevNodeEnv = process.env.NODE_ENV;
+    const prevJwt = process.env.JWT_SECRET;
+    const prevDbHost = process.env.DB_HOST;
+    const prevDbPort = process.env.DB_PORT;
+    delete process.env.PORT;
+    delete process.env.NODE_ENV;
+    delete process.env.JWT_SECRET;
+    delete process.env.DB_HOST;
+    delete process.env.DB_PORT;
+    try {
+      const config = configuration();
+      expect(config.port).toBe(3000);
+      expect(['development', 'test']).toContain(config.nodeEnv);
+      expect(config.jwt.secret).toBe('jwt-secret-change-me');
+      expect(config.database.host).toBe('localhost');
+      expect(config.database.port).toBe(5432);
+    } finally {
+      if (prevPort !== undefined) process.env.PORT = prevPort;
+      if (prevNodeEnv !== undefined) process.env.NODE_ENV = prevNodeEnv;
+      if (prevJwt !== undefined) process.env.JWT_SECRET = prevJwt;
+      if (prevDbHost !== undefined) process.env.DB_HOST = prevDbHost;
+      if (prevDbPort !== undefined) process.env.DB_PORT = prevDbPort;
+    }
   });
 
   it('parses PORT from environment', () => {

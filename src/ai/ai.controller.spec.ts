@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AiController } from './ai.controller';
 import { AiService } from './ai.service';
 import { BillingService } from '../billing/billing.service';
+import { MarketDataService } from '../analysis/market-data.service';
 
 describe('AiController', () => {
   let controller: AiController;
@@ -10,13 +11,26 @@ describe('AiController', () => {
     lookupService: jest.fn().mockResolvedValue({ name: 'Netflix', price: 15 }),
     parseScreenshot: jest.fn().mockResolvedValue({ name: 'Spotify' }),
     voiceToSubscription: jest.fn().mockResolvedValue({ name: 'Hulu' }),
+    transcribeAudio: jest.fn().mockResolvedValue({ text: 'transcribed' }),
     suggestCancelUrl: jest.fn().mockResolvedValue({ url: 'https://cancel.me' }),
     parseBulkSubscriptions: jest.fn().mockResolvedValue([{ name: 'Netflix' }]),
     voiceToBulkSubscriptions: jest.fn().mockResolvedValue({ text: 'hello', subscriptions: [] }),
   };
 
+  // Valid file signatures for mime validation
+  // PNG: 89 50 4E 47
+  const validImageBuffer = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('filedata')]);
+  // ID3 (MP3): 49 44 33
+  const validAudioBuffer = Buffer.concat([Buffer.from([0x49, 0x44, 0x33]), Buffer.from('voicedata')]);
+  const validAudioBuffer2 = Buffer.concat([Buffer.from([0x49, 0x44, 0x33]), Buffer.from('bulkvoice')]);
+
   const mockBillingService = {
     consumeAiRequest: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const mockMarketDataService = {
+    normalizeServiceName: jest.fn((s: string) => s),
+    getMarketData: jest.fn().mockResolvedValue(null),
   };
 
   const req = { user: { id: 'user-1' } } as any;
@@ -27,6 +41,7 @@ describe('AiController', () => {
       providers: [
         { provide: AiService, useValue: mockAiService },
         { provide: BillingService, useValue: mockBillingService },
+        { provide: MarketDataService, useValue: mockMarketDataService },
       ],
     }).compile();
 
@@ -66,9 +81,9 @@ describe('AiController', () => {
 
   it('parseScreenshot with file upload', async () => {
     const dto = {} as any;
-    const file = { buffer: Buffer.from('filedata') } as any;
+    const file = { buffer: validImageBuffer } as any;
     await controller.parseScreenshot(req, dto, file);
-    expect(mockAiService.parseScreenshot).toHaveBeenCalledWith('ZmlsZWRhdGE=');
+    expect(mockAiService.parseScreenshot).toHaveBeenCalledWith(validImageBuffer.toString('base64'));
   });
 
   it('parseScreenshot falls back to empty string', async () => {
@@ -89,9 +104,9 @@ describe('AiController', () => {
   });
 
   it('voiceToSubscriptionAlias with file upload', async () => {
-    const file = { buffer: Buffer.from('voicedata') } as any;
+    const file = { buffer: validAudioBuffer } as any;
     await controller.voiceToSubscriptionAlias(req, {} as any, file);
-    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('dm9pY2VkYXRh', undefined);
+    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith(validAudioBuffer.toString('base64'), undefined);
   });
 
   it('voiceToSubscriptionAlias with body audio', async () => {
@@ -100,10 +115,10 @@ describe('AiController', () => {
     expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('bodyaudio', 'ru');
   });
 
-  it('parseAudio → delegates to voiceToSubscription', async () => {
+  it('parseAudio → delegates to transcribeAudio', async () => {
     const dto = { audioBase64: 'aud' } as any;
     await controller.parseAudio(req, dto, undefined);
-    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('aud', undefined);
+    expect(mockAiService.transcribeAudio).toHaveBeenCalledWith('aud', undefined);
   });
 
   it('parseText → calls lookupService with text', async () => {
@@ -127,18 +142,18 @@ describe('AiController', () => {
     expect(Array.isArray(result.subscriptions)).toBe(true);
   });
 
-  it('parseBulk → wraps non-array in array', async () => {
+  it('parseBulk → passes through service result', async () => {
     mockAiService.parseBulkSubscriptions.mockResolvedValueOnce({ name: 'Netflix' });
     const dto = { text: 'Netflix', locale: 'ru' } as any;
     const result = await controller.parseBulk(req, dto);
-    expect(result.subscriptions).toHaveLength(1);
+    expect(result.subscriptions).toEqual({ name: 'Netflix' });
   });
 
-  it('parseBulk → returns empty array for null result', async () => {
+  it('parseBulk → passes through null result', async () => {
     mockAiService.parseBulkSubscriptions.mockResolvedValueOnce(null);
     const dto = { text: '' } as any;
     const result = await controller.parseBulk(req, dto);
-    expect(result.subscriptions).toHaveLength(0);
+    expect(result.subscriptions).toBeNull();
   });
 
   it('voiceBulk → calls voiceToBulkSubscriptions', async () => {
@@ -149,8 +164,8 @@ describe('AiController', () => {
   });
 
   it('voiceBulk with file upload', async () => {
-    const file = { buffer: Buffer.from('bulkvoice') } as any;
+    const file = { buffer: validAudioBuffer2 } as any;
     await controller.voiceBulk(req, { locale: 'ru' } as any, file);
-    expect(mockAiService.voiceToBulkSubscriptions).toHaveBeenCalledWith('YnVsa3ZvaWNl', 'ru');
+    expect(mockAiService.voiceToBulkSubscriptions).toHaveBeenCalledWith(validAudioBuffer2.toString('base64'), 'ru');
   });
 });

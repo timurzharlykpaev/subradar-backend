@@ -12,7 +12,12 @@ describe('ReportsController', () => {
   const mockService = {
     generate: jest.fn().mockResolvedValue(mockReport),
     findAll: jest.fn().mockResolvedValue([mockReport]),
+    findOne: jest.fn().mockImplementation((userId: string, id: string) => {
+      if (id === 'nonexistent') throw new NotFoundException();
+      return Promise.resolve(mockReport);
+    }),
     generatePdf: jest.fn().mockResolvedValue(Buffer.from('pdf-content')),
+    downloadPdf: jest.fn().mockResolvedValue(Buffer.from('pdf-content')),
   };
 
   const req = { user: { id: 'user-1' } } as any;
@@ -25,6 +30,13 @@ describe('ReportsController', () => {
 
     controller = module.get<ReportsController>(ReportsController);
     jest.clearAllMocks();
+    mockService.generate.mockResolvedValue(mockReport);
+    mockService.findAll.mockResolvedValue([mockReport]);
+    mockService.findOne.mockImplementation((userId: string, id: string) => {
+      if (id === 'nonexistent') throw new NotFoundException();
+      return Promise.resolve(mockReport);
+    });
+    mockService.downloadPdf.mockResolvedValue(Buffer.from('pdf-content'));
   });
 
   it('should be defined', () => expect(controller).toBeDefined());
@@ -32,20 +44,20 @@ describe('ReportsController', () => {
   it('generate → calls service.generate with from/to/type', async () => {
     const dto = { from: '2024-01-01', to: '2024-01-31', type: ReportType.SUMMARY } as any;
     const result = await controller.generate(req, dto);
-    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-01-01', '2024-01-31', ReportType.SUMMARY);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-01-01', '2024-01-31', ReportType.SUMMARY, undefined);
     expect(result).toHaveProperty('id');
   });
 
   it('generate → uses startDate/endDate aliases', async () => {
     const dto = { startDate: '2024-02-01', endDate: '2024-02-29', type: ReportType.DETAILED } as any;
     await controller.generate(req, dto);
-    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-02-01', '2024-02-29', ReportType.DETAILED);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-02-01', '2024-02-29', ReportType.DETAILED, undefined);
   });
 
   it('generate → falls back to empty strings when no dates', async () => {
     const dto = { type: ReportType.SUMMARY } as any;
     await controller.generate(req, dto);
-    expect(mockService.generate).toHaveBeenCalledWith('user-1', '', '', ReportType.SUMMARY);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '', '', ReportType.SUMMARY, undefined);
   });
 
   it('findAll → returns array of reports', async () => {
@@ -69,7 +81,7 @@ describe('ReportsController', () => {
       end: jest.fn(),
     } as any;
     await controller.download(req, 'report-1', res);
-    expect(mockService.generatePdf).toHaveBeenCalledWith('user-1', 'report-1');
+    expect(mockService.downloadPdf).toHaveBeenCalledWith('user-1', 'report-1');
     expect(res.set).toHaveBeenCalledWith(expect.objectContaining({ 'Content-Type': 'application/pdf' }));
     expect(res.end).toHaveBeenCalled();
   });

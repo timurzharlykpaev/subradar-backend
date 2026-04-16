@@ -3,6 +3,9 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { AnalyticsService } from './analytics.service';
 import { Subscription, SubscriptionStatus, BillingPeriod } from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
+import { REDIS_CLIENT } from '../common/redis.module';
+import { FxService } from '../fx/fx.service';
+import { UsersService } from '../users/users.service';
 
 const mockSubRepo = {
   find: jest.fn(),
@@ -30,6 +33,30 @@ describe('AnalyticsService', () => {
         AnalyticsService,
         { provide: getRepositoryToken(Subscription), useValue: mockSubRepo },
         { provide: getRepositoryToken(PaymentCard), useValue: mockCardRepo },
+        {
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue('OK'),
+            del: jest.fn().mockResolvedValue(1),
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+            ping: jest.fn().mockResolvedValue('PONG'),
+          },
+        },
+        {
+          provide: FxService,
+          useValue: {
+            getRates: jest.fn().mockResolvedValue({ rates: { USD: 1 }, fetchedAt: new Date() }),
+            convert: jest.fn((amount) => amount),
+          },
+        },
+        {
+          provide: UsersService,
+          useValue: {
+            findById: jest.fn().mockResolvedValue({ id: 'user-1', displayCurrency: 'USD' }),
+          },
+        },
       ],
     }).compile();
     service = module.get<AnalyticsService>(AnalyticsService);

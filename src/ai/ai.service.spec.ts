@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { AiService } from './ai.service';
+import { REDIS_CLIENT } from '../common/redis.module';
+import { TelegramAlertService } from '../common/telegram-alert.service';
 
 jest.mock('openai', () => jest.fn().mockImplementation(() => ({
   chat: {
@@ -37,6 +39,21 @@ describe('AiService', () => {
       providers: [
         AiService,
         { provide: ConfigService, useValue: mockConfigService },
+        {
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue('OK'),
+            del: jest.fn().mockResolvedValue(1),
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+            ping: jest.fn().mockResolvedValue('PONG'),
+          },
+        },
+        {
+          provide: TelegramAlertService,
+          useValue: { send: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
     service = module.get<AiService>(AiService);

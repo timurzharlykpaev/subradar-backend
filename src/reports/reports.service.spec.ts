@@ -8,6 +8,7 @@ import { Report, ReportType, ReportStatus } from './entities/report.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
 import { User } from '../users/entities/user.entity';
+import { REDIS_CLIENT } from '../common/redis.module';
 
 // Mock ioredis
 jest.mock('ioredis', () => {
@@ -40,9 +41,15 @@ jest.mock('pdfkit', () => {
       fillColor: jest.fn().mockReturnThis(),
       rect: jest.fn().mockReturnThis(),
       fill: jest.fn().mockReturnThis(),
+      fillAndStroke: jest.fn().mockReturnThis(),
       circle: jest.fn().mockReturnThis(),
       image: jest.fn().mockReturnThis(),
       addPage: jest.fn().mockReturnThis(),
+      opacity: jest.fn().mockReturnThis(),
+      dash: jest.fn().mockReturnThis(),
+      undash: jest.fn().mockReturnThis(),
+      save: jest.fn().mockReturnThis(),
+      restore: jest.fn().mockReturnThis(),
       y: 100,
     };
     return doc;
@@ -85,6 +92,17 @@ describe('ReportsService', () => {
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: getQueueToken('reports'), useValue: mockQueue },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
+        {
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue('OK'),
+            del: jest.fn().mockResolvedValue(1),
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+            ping: jest.fn().mockResolvedValue('PONG'),
+          },
+        },
       ],
     }).compile();
     service = module.get<ReportsService>(ReportsService);
@@ -130,10 +148,10 @@ describe('ReportsService', () => {
         status: ReportStatus.PENDING,
       }));
       expect(mockReportRepo.save).toHaveBeenCalledWith(newReport);
-      expect(mockQueue.add).toHaveBeenCalledWith('generate-pdf', {
+      expect(mockQueue.add).toHaveBeenCalledWith('generate-pdf', expect.objectContaining({
         reportId: 'rep-2',
         userId: 'user-1',
-      });
+      }));
       expect(result).toEqual(newReport);
     });
   });

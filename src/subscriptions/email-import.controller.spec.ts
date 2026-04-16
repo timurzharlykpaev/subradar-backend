@@ -15,11 +15,19 @@ describe('EmailImportController', () => {
 
   const mockAiService = {
     parseEmailText: jest.fn().mockResolvedValue({ name: 'Netflix', amount: 15, currency: 'USD', billingPeriod: 'MONTHLY', category: 'ENTERTAINMENT' }),
+    parseBulkSubscriptions: jest.fn().mockResolvedValue({ name: 'Netflix', amount: 15, currency: 'USD', billingPeriod: 'MONTHLY', category: 'ENTERTAINMENT' }),
   };
 
   const mockUsersService = {
     findById: jest.fn().mockResolvedValue({ id: 'user-abc', email: 'user@test.com' }),
   };
+
+  const ORIG_TOKEN = process.env.EMAIL_IMPORT_TOKEN;
+  beforeAll(() => { process.env.EMAIL_IMPORT_TOKEN = 'token'; });
+  afterAll(() => {
+    if (ORIG_TOKEN === undefined) delete process.env.EMAIL_IMPORT_TOKEN;
+    else process.env.EMAIL_IMPORT_TOKEN = ORIG_TOKEN;
+  });
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -33,6 +41,10 @@ describe('EmailImportController', () => {
 
     controller = module.get<EmailImportController>(EmailImportController);
     jest.clearAllMocks();
+    mockSubsService.findAll.mockResolvedValue([]);
+    mockSubsService.create.mockResolvedValue({ name: 'Netflix', amount: 15 });
+    mockAiService.parseBulkSubscriptions.mockResolvedValue({ name: 'Netflix', amount: 15, currency: 'USD', billingPeriod: 'MONTHLY', category: 'ENTERTAINMENT' });
+    mockUsersService.findById.mockResolvedValue({ id: 'user-abc', email: 'user@test.com' });
   });
 
   it('should be defined', () => expect(controller).toBeDefined());
@@ -57,14 +69,14 @@ describe('EmailImportController', () => {
   });
 
   it('returns ai_parse_failed when AI throws', async () => {
-    mockAiService.parseEmailText.mockRejectedValueOnce(new Error('AI down'));
+    mockAiService.parseBulkSubscriptions.mockRejectedValueOnce(new Error('AI down'));
     const payload = { From: 'sender@test.com', To: 'import+user-abc@subradar.ai', Subject: 'Your subscription receipt', TextBody: 'Your Netflix subscription billing receipt payment' };
     const result = await controller.handleInbound(payload as any, 'token');
     expect(result).toEqual({ ok: false, reason: 'ai_parse_failed' });
   });
 
   it('returns not_enough_data when AI returns no name', async () => {
-    mockAiService.parseEmailText.mockResolvedValueOnce({ amount: 15 });
+    mockAiService.parseBulkSubscriptions.mockResolvedValueOnce({ amount: 15 });
     const payload = { From: 'sender@test.com', To: 'import+user-abc@subradar.ai', Subject: 'Invoice', TextBody: 'your monthly subscription billing payment receipt' };
     const result = await controller.handleInbound(payload as any, 'token');
     expect(result).toEqual({ ok: false, reason: 'not_enough_data' });
@@ -72,7 +84,7 @@ describe('EmailImportController', () => {
 
   it('returns duplicate when subscription already exists', async () => {
     mockSubsService.findAll.mockResolvedValueOnce([{ name: 'Netflix', status: SubscriptionStatus.ACTIVE }]);
-    mockAiService.parseEmailText.mockResolvedValueOnce({ name: 'Netflix', amount: 15 });
+    mockAiService.parseBulkSubscriptions.mockResolvedValueOnce({ name: 'Netflix', amount: 15 });
     const payload = { From: 'sender@test.com', To: 'import+user-abc@subradar.ai', Subject: 'Netflix receipt', TextBody: 'Your Netflix subscription renewal billing payment receipt' };
     const result = await controller.handleInbound(payload as any, 'token');
     expect(result).toEqual({ ok: true, reason: 'duplicate', name: 'Netflix' });
@@ -92,7 +104,7 @@ describe('EmailImportController', () => {
   });
 
   it('getImportAddress returns email with userId', () => {
-    const result = controller.getImportAddress({ userId: 'user-123' });
+    const result = controller.getImportAddress({ user: { id: 'user-123' } } as any);
     expect(result.email).toBe('import+user-123@subradar.ai');
     expect(result).toHaveProperty('instructions');
   });

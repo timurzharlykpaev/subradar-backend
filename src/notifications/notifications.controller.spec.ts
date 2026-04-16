@@ -53,6 +53,12 @@ describe('NotificationsController', () => {
 
   it('updateSettings persists settings via UsersService', async () => {
     const dto = { enabled: false, daysBefore: 7 };
+    mockUsersService.findById.mockResolvedValueOnce({
+      id: 'user-1',
+      notificationsEnabled: false,
+      reminderDaysBefore: 7,
+      fcmToken: 'fcm-token',
+    });
     const result = await controller.updateSettings(req, dto);
     expect(mockUsersService.update).toHaveBeenCalledWith('user-1', {
       notificationsEnabled: false,

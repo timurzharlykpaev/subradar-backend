@@ -8,6 +8,7 @@ import { Workspace } from '../workspace/entities/workspace.entity';
 import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
 import { WebhookEvent } from './entities/webhook-event.entity';
 import { TelegramAlertService } from '../common/telegram-alert.service';
+import { AuditService } from '../common/audit/audit.service';
 
 const mockUsersService = {
   findById: jest.fn(), findByEmail: jest.fn(), update: jest.fn(), save: jest.fn(),
@@ -64,6 +65,7 @@ describe('BillingService', () => {
         { provide: getRepositoryToken(WebhookEvent), useValue: mockWebhookEventRepo },
         { provide: getDataSourceToken(), useValue: mockDataSource },
         { provide: TelegramAlertService, useValue: mockTelegramAlert },
+        { provide: AuditService, useValue: { log: jest.fn() } },
       ],
     }).compile();
     service = module.get<BillingService>(BillingService);

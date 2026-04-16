@@ -4,6 +4,7 @@ import { RemindersService } from './reminders.service';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TelegramAlertService } from '../common/telegram-alert.service';
 
 const mockSubscriptionRepo = {
   createQueryBuilder: jest.fn(() => ({
@@ -41,6 +42,7 @@ describe('RemindersService', () => {
         { provide: getRepositoryToken(Subscription), useValue: mockSubscriptionRepo },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: NotificationsService, useValue: mockNotificationsService },
+        { provide: TelegramAlertService, useValue: { send: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
     service = module.get<RemindersService>(RemindersService);

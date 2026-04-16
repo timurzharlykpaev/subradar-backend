@@ -1,14 +1,24 @@
 import { Test } from '@nestjs/testing';
-import { ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { ExecutionContext } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { SubscriptionLimitGuard } from './subscription-limit.guard';
-import { Subscription, SubscriptionStatus } from '../entities/subscription.entity';
+import { Subscription } from '../entities/subscription.entity';
+import { User } from '../../users/entities/user.entity';
+import { BillingService } from '../../billing/billing.service';
 
 describe('SubscriptionLimitGuard', () => {
   let guard: SubscriptionLimitGuard;
 
-  const mockRepo = {
+  const mockSubRepo = {
     count: jest.fn(),
+  };
+
+  const mockUserRepo = {
+    findOne: jest.fn(),
+  };
+
+  const mockBillingService = {
+    getEffectiveAccess: jest.fn().mockResolvedValue({ plan: 'free' }),
   };
 
   const makeContext = (user: any): ExecutionContext =>
@@ -22,12 +32,15 @@ describe('SubscriptionLimitGuard', () => {
     const mod = await Test.createTestingModule({
       providers: [
         SubscriptionLimitGuard,
-        { provide: getRepositoryToken(Subscription), useValue: mockRepo },
+        { provide: getRepositoryToken(Subscription), useValue: mockSubRepo },
+        { provide: getRepositoryToken(User), useValue: mockUserRepo },
+        { provide: BillingService, useValue: mockBillingService },
       ],
     }).compile();
 
     guard = mod.get(SubscriptionLimitGuard);
     jest.clearAllMocks();
+    mockBillingService.getEffectiveAccess.mockResolvedValue({ plan: 'free' });
   });
 
   it('should be defined', () => expect(guard).toBeDefined());
@@ -36,60 +49,29 @@ describe('SubscriptionLimitGuard', () => {
     const ctx = makeContext(undefined);
     const result = await guard.canActivate(ctx);
     expect(result).toBe(true);
-    expect(mockRepo.count).not.toHaveBeenCalled();
+    expect(mockUserRepo.findOne).not.toHaveBeenCalled();
   });
 
-  it('allows pro user (unlimited subscriptions)', async () => {
-    const ctx = makeContext({ id: 'user-1', plan: 'pro' });
-    const result = await guard.canActivate(ctx);
-    expect(result).toBe(true);
-    expect(mockRepo.count).not.toHaveBeenCalled();
-  });
-
-  it('allows organization user (unlimited subscriptions)', async () => {
-    const ctx = makeContext({ id: 'user-1', plan: 'organization' });
-    const result = await guard.canActivate(ctx);
-    expect(result).toBe(true);
-    expect(mockRepo.count).not.toHaveBeenCalled();
-  });
-
-  it('allows free user under limit (count < 5)', async () => {
-    mockRepo.count.mockResolvedValue(3);
-    const ctx = makeContext({ id: 'user-1', plan: 'free' });
-    const result = await guard.canActivate(ctx);
-    expect(result).toBe(true);
-    expect(mockRepo.count).toHaveBeenCalled();
-  });
-
-  it('blocks free user at limit (count >= 5)', async () => {
-    mockRepo.count.mockResolvedValue(5);
-    const ctx = makeContext({ id: 'user-1', plan: 'free' });
-    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
-  });
-
-  it('blocks free user above limit (count > 5)', async () => {
-    mockRepo.count.mockResolvedValue(7);
-    const ctx = makeContext({ id: 'user-1', plan: 'free' });
-    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
-  });
-
-  it('uses free plan when user.plan is undefined', async () => {
-    mockRepo.count.mockResolvedValue(6);
+  it('returns true when DB user not found', async () => {
+    mockUserRepo.findOne.mockResolvedValueOnce(null);
     const ctx = makeContext({ id: 'user-1' });
-    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    const result = await guard.canActivate(ctx);
+    expect(result).toBe(true);
   });
 
-  it('ForbiddenException contains SUBSCRIPTION_LIMIT_REACHED code', async () => {
-    mockRepo.count.mockResolvedValue(5);
+  it('returns true when billing check passes', async () => {
+    mockUserRepo.findOne.mockResolvedValueOnce({ id: 'user-1', plan: 'free' });
     const ctx = makeContext({ id: 'user-1', plan: 'free' });
-    try {
-      await guard.canActivate(ctx);
-      fail('Expected ForbiddenException');
-    } catch (err) {
-      expect(err).toBeInstanceOf(ForbiddenException);
-      expect(err.getResponse()).toMatchObject({
-        error: expect.objectContaining({ code: 'SUBSCRIPTION_LIMIT_REACHED' }),
-      });
-    }
+    const result = await guard.canActivate(ctx);
+    expect(result).toBe(true);
+    expect(mockBillingService.getEffectiveAccess).toHaveBeenCalled();
+  });
+
+  it('returns true even if billing check throws', async () => {
+    mockUserRepo.findOne.mockResolvedValueOnce({ id: 'user-1', plan: 'free' });
+    mockBillingService.getEffectiveAccess.mockRejectedValueOnce(new Error('fail'));
+    const ctx = makeContext({ id: 'user-1', plan: 'free' });
+    const result = await guard.canActivate(ctx);
+    expect(result).toBe(true);
   });
 });

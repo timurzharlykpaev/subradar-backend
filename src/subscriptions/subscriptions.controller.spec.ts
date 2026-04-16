@@ -3,7 +3,7 @@ import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionsService } from './subscriptions.service';
 import { ReceiptsService } from '../receipts/receipts.service';
 
-const mockService = { findAll: jest.fn(), findOne: jest.fn(), create: jest.fn(), update: jest.fn(), remove: jest.fn(), countActive: jest.fn(), updateStatus: jest.fn() };
+const mockService = { findAll: jest.fn(), findAllWithDisplay: jest.fn(), findOne: jest.fn(), create: jest.fn(), update: jest.fn(), remove: jest.fn(), countActive: jest.fn(), updateStatus: jest.fn() };
 const mockReceiptsService = { parseScreenshot: jest.fn() };
 const mockReq = { user: { id: 'user-1', plan: 'pro' } };
 
@@ -27,10 +27,14 @@ describe('SubscriptionsController', () => {
 
   it('should be defined', () => { expect(controller).toBeDefined(); });
 
-  it('findAll calls service.findAll', async () => {
-    mockService.findAll.mockResolvedValue([]);
+  it('findAll delegates to service.findAllWithDisplay', async () => {
+    mockService.findAllWithDisplay.mockResolvedValue([]);
     const result = await controller.findAll(mockReq as any, {});
-    expect(mockService.findAll).toHaveBeenCalledWith('user-1', {});
+    expect(mockService.findAllWithDisplay).toHaveBeenCalledWith(
+      'user-1',
+      undefined,
+      {},
+    );
     expect(result).toEqual([]);
   });
 

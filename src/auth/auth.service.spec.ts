@@ -5,6 +5,7 @@ import { UnauthorizedException, ConflictException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { REDIS_CLIENT } from '../common/redis.module';
 
 // Mock ioredis
 jest.mock('ioredis', () => {
@@ -14,6 +15,12 @@ jest.mock('ioredis', () => {
     del: jest.fn().mockResolvedValue(1),
   }));
 });
+
+// Mock apple-signin-auth for appleLogin tests
+const mockAppleVerify = jest.fn();
+jest.mock('apple-signin-auth', () => ({
+  verifyIdToken: (...args: any[]) => mockAppleVerify(...args),
+}));
 
 const mockUser = {
   id: 'user-1',
@@ -43,7 +50,11 @@ const mockJwtService = {
 };
 
 const mockConfigService = {
-  get: jest.fn().mockImplementation((key: string, def?: any) => def ?? null),
+  get: jest.fn().mockImplementation((key: string, def?: any) => {
+    if (key === 'JWT_ACCESS_SECRET' || key === 'JWT_SECRET') return 'test-jwt-secret';
+    if (key === 'JWT_REFRESH_SECRET') return 'test-refresh-secret';
+    return def ?? null;
+  }),
 };
 
 const mockNotificationsService = {
@@ -61,12 +72,44 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: NotificationsService, useValue: mockNotificationsService },
+        {
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue('OK'),
+            del: jest.fn().mockResolvedValue(1),
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+            ping: jest.fn().mockResolvedValue('PONG'),
+          },
+        },
       ],
     }).compile();
     service = module.get<AuthService>(AuthService);
     jest.clearAllMocks();
+    // Reset once-queues that aren't cleared by clearAllMocks
+    mockJwtService.verify.mockReset();
+    mockJwtService.verify.mockReturnValue({ sub: 'user-1', email: 'test@test.com' });
+    mockUsersService.findById.mockReset();
+    mockUsersService.findByEmail.mockReset();
+    mockUsersService.findByEmailWithPassword.mockReset();
+    mockUsersService.findByMagicLinkToken.mockReset();
+    mockUsersService.findByMagicLinkToken.mockResolvedValue(null);
+    mockUsersService.create.mockReset();
+    mockUsersService.create.mockResolvedValue(mockUser);
+    mockUsersService.update.mockReset();
+    mockUsersService.update.mockResolvedValue(mockUser);
+    mockUsersService.updateRefreshToken.mockReset();
+    mockUsersService.updateRefreshToken.mockResolvedValue(undefined);
+    mockAppleVerify.mockReset();
+    mockNotificationsService.sendEmail.mockReset();
+    mockNotificationsService.sendEmail.mockResolvedValue(undefined);
     mockJwtService.sign.mockReturnValue('test-jwt-token');
-    mockConfigService.get.mockImplementation((key: string, def?: any) => def ?? null);
+    mockConfigService.get.mockImplementation((key: string, def?: any) => {
+      if (key === 'JWT_ACCESS_SECRET' || key === 'JWT_SECRET') return 'test-jwt-secret';
+      if (key === 'JWT_REFRESH_SECRET') return 'test-refresh-secret';
+      return def ?? null;
+    });
   });
 
   it('should be defined', () => {
@@ -136,19 +179,19 @@ describe('AuthService', () => {
 
   describe('appleLogin', () => {
     it('throws UnauthorizedException if token decode fails', async () => {
-      mockJwtService.decode.mockImplementationOnce(() => { throw new Error('bad token'); });
+      mockAppleVerify.mockRejectedValueOnce(new Error('bad token'));
       await expect(service.appleLogin({ idToken: 'bad', name: 'Test' } as any))
         .rejects.toThrow(UnauthorizedException);
     });
 
     it('throws BadRequestException if no email in payload', async () => {
-      mockJwtService.decode.mockReturnValueOnce({ sub: 'apple-sub' }); // no email
+      mockAppleVerify.mockResolvedValueOnce({ sub: 'apple-sub' }); // no email
       await expect(service.appleLogin({ idToken: 'tok', name: 'Test' } as any))
         .rejects.toThrow();
     });
 
     it('creates new user when not exists', async () => {
-      mockJwtService.decode.mockReturnValueOnce({ email: 'apple@test.com', sub: 'apple-sub' });
+      mockAppleVerify.mockResolvedValueOnce({ email: 'apple@test.com', sub: 'apple-sub' });
       mockUsersService.findByEmail.mockResolvedValueOnce(null);
       mockUsersService.create.mockResolvedValueOnce(mockUser);
       mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
@@ -157,7 +200,7 @@ describe('AuthService', () => {
     });
 
     it('uses existing user', async () => {
-      mockJwtService.decode.mockReturnValueOnce({ email: 'test@test.com', sub: 'apple-sub' });
+      mockAppleVerify.mockResolvedValueOnce({ email: 'test@test.com', sub: 'apple-sub' });
       mockUsersService.findByEmail.mockResolvedValueOnce(mockUser);
       mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
       const result = await service.appleLogin({ idToken: 'tok' } as any);
@@ -234,10 +277,13 @@ describe('AuthService', () => {
     });
 
     it('returns new tokens for valid refresh', async () => {
+      const bcrypt = require('bcrypt');
+      const refreshTokenValue = 'valid-refresh';
+      const hashed = await bcrypt.hash(refreshTokenValue, 4);
       mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
-      mockUsersService.findById.mockResolvedValueOnce({ ...mockUser, refreshToken: 'valid-refresh' });
+      mockUsersService.findById.mockResolvedValueOnce({ ...mockUser, refreshToken: hashed });
       mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
-      const result = await service.refresh('valid-refresh');
+      const result = await service.refresh(refreshTokenValue);
       expect(result).toHaveProperty('accessToken');
     });
   });

@@ -5,6 +5,8 @@ import { WorkspaceService } from './workspace.service';
 import { Workspace } from './entities/workspace.entity';
 import { WorkspaceMember, WorkspaceMemberRole, WorkspaceMemberStatus } from './entities/workspace-member.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { InviteCode } from './entities/invite-code.entity';
+import { UsersService } from '../users/users.service';
 
 const mockWorkspaceRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn() };
 const mockMemberRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn(), count: jest.fn(), delete: jest.fn() };
@@ -27,6 +29,26 @@ describe('WorkspaceService', () => {
         { provide: getRepositoryToken(Workspace), useValue: mockWorkspaceRepo },
         { provide: getRepositoryToken(WorkspaceMember), useValue: mockMemberRepo },
         { provide: getRepositoryToken(Subscription), useValue: mockSubRepo },
+        {
+          provide: getRepositoryToken(InviteCode),
+          useValue: {
+            find: jest.fn().mockResolvedValue([]),
+            findOne: jest.fn().mockResolvedValue(null),
+            save: jest.fn().mockImplementation((e) => Promise.resolve(e)),
+            create: jest.fn().mockImplementation((d) => d),
+            update: jest.fn().mockResolvedValue({ affected: 1 }),
+            delete: jest.fn().mockResolvedValue({ affected: 1 }),
+          },
+        },
+        {
+          provide: UsersService,
+          useValue: {
+            findById: jest.fn().mockResolvedValue(null),
+            findByEmail: jest.fn().mockResolvedValue(null),
+            create: jest.fn().mockResolvedValue({ id: 'new-user', email: 'new@example.com' }),
+            update: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
     service = module.get<WorkspaceService>(WorkspaceService);
