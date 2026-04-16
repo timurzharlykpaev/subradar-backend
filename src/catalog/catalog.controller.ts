@@ -1,5 +1,5 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CatalogService } from './catalog.service';
 import { SearchCatalogDto } from './dto/search-catalog.dto';
@@ -10,6 +10,19 @@ import { SearchCatalogDto } from './dto/search-catalog.dto';
 @Controller('catalog')
 export class CatalogController {
   constructor(private readonly catalog: CatalogService) {}
+
+  @Get('popular')
+  @ApiQuery({ name: 'region', required: false, example: 'KZ' })
+  @ApiQuery({ name: 'currency', required: false, example: 'KZT' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  async getPopular(
+    @Req() req: any,
+    @Query('region') region?: string,
+    @Query('currency') currency?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.catalog.getPopular(region, currency, limit, req.user);
+  }
 
   @Get('search')
   async search(@Query() dto: SearchCatalogDto) {

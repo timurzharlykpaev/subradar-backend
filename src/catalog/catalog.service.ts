@@ -3,6 +3,7 @@ import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { DataSource, Repository } from 'typeorm';
 import type { Queue } from 'bull';
+import Decimal from 'decimal.js';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../common/redis.module';
 import { CatalogService as CatalogEntity } from './entities/catalog-service.entity';
@@ -12,6 +13,8 @@ import {
   PriceSource,
 } from './entities/catalog-plan.entity';
 import { AiCatalogProvider } from './ai-catalog.provider';
+import { FxService } from '../fx/fx.service';
+import { UsersService } from '../users/users.service';
 import {
   SubscriptionCategory,
   BillingPeriod,
@@ -55,9 +58,149 @@ export class CatalogService {
     private readonly planRepo: Repository<CatalogPlan>,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly ai: AiCatalogProvider,
+    private readonly fxService: FxService,
+    private readonly usersService: UsersService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue('catalog-refresh') private readonly refreshQueue: Queue,
   ) {}
+
+  async getPopular(
+    regionParam?: string,
+    currencyParam?: string,
+    limitParam?: number,
+    jwtUser?: { id: string },
+  ) {
+    const POPULAR_CACHE_TTL = 3600; // 1 hour
+    const limit = Math.min(Math.max(limitParam || 20, 1), 50);
+
+    // Resolve region & currency: param → user prefs → defaults
+    let region = regionParam?.toUpperCase();
+    let currency = currencyParam?.toUpperCase();
+
+    if ((!region || !currency) && jwtUser?.id) {
+      try {
+        const user = await this.usersService.findById(jwtUser.id);
+        if (!region) region = user.region || 'US';
+        if (!currency) currency = user.displayCurrency || 'USD';
+      } catch {
+        // user lookup failed — use defaults
+      }
+    }
+    region = region || 'US';
+    currency = currency || 'USD';
+
+    // Check Redis cache
+    const cacheKey = `catalog:popular:${region}:${currency}`;
+    const cached = await this.redis.get(cacheKey).catch(() => null);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        // Apply limit on cached result (cache stores up to 50)
+        return parsed.slice(0, limit);
+      } catch {
+        // corrupted cache — fall through
+      }
+    }
+
+    // Query top services by subscription count.
+    // Uses catalogServiceId for accurate matching; falls back to name match
+    // for subscriptions created before catalog linking was introduced.
+    const rows: Array<CatalogEntity & { sub_count: string }> =
+      await this.dataSource.query(
+        `SELECT cs.*, COUNT(s.id)::text AS sub_count
+         FROM catalog_services cs
+         LEFT JOIN subscriptions s
+           ON s."catalogServiceId" = cs.id
+           OR (s."catalogServiceId" IS NULL AND LOWER(s.name) = LOWER(cs.name))
+         GROUP BY cs.id
+         ORDER BY COUNT(s.id) DESC, cs."researchCount" DESC
+         LIMIT $1`,
+        [50], // fetch max for caching, slice for response
+      );
+
+    // Fetch FX rates once (needed for potential conversions)
+    let fxRates: Record<string, number> | null = null;
+
+    const result: Array<{
+      id: string;
+      name: string;
+      slug: string;
+      category: SubscriptionCategory;
+      iconUrl: string | null;
+      plans: Array<{
+        name: string;
+        price: number;
+        currency: string;
+        period: BillingPeriod;
+      }>;
+    }> = [];
+
+    for (const row of rows) {
+      // 1) Try plans for requested region
+      let plans = await this.planRepo.find({
+        where: { serviceId: row.id, region },
+      });
+
+      // 2) Fallback to US region if no plans for requested region
+      if (plans.length === 0 && region !== 'US') {
+        plans = await this.planRepo.find({
+          where: { serviceId: row.id, region: 'US' },
+        });
+      }
+
+      // Map plans with currency conversion
+      const mappedPlans: Array<{
+        name: string;
+        price: number;
+        currency: string;
+        period: BillingPeriod;
+      }> = [];
+
+      for (const plan of plans) {
+        let price = new Decimal(plan.price);
+        let planCurrency = plan.currency;
+
+        if (planCurrency !== currency) {
+          try {
+            if (!fxRates) {
+              const fx = await this.fxService.getRates();
+              fxRates = fx.rates;
+            }
+            price = this.fxService.convert(price, planCurrency, currency, fxRates);
+            planCurrency = currency;
+          } catch (e) {
+            // Graceful fallback: return plan in original currency
+            this.logger.warn(
+              `FX conversion failed for ${planCurrency}→${currency}: ${(e as Error).message}`,
+            );
+          }
+        }
+
+        mappedPlans.push({
+          name: plan.planName,
+          price: parseFloat(price.toFixed(2)),
+          currency: planCurrency,
+          period: plan.period,
+        });
+      }
+
+      result.push({
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        category: row.category,
+        iconUrl: row.iconUrl,
+        plans: mappedPlans,
+      });
+    }
+
+    // Cache full result (up to 50 items)
+    await this.redis
+      .set(cacheKey, JSON.stringify(result), 'EX', POPULAR_CACHE_TTL)
+      .catch(() => {});
+
+    return result.slice(0, limit);
+  }
 
   async search(
     query: string,

@@ -10,11 +10,15 @@ import { CatalogService } from './catalog.service';
 import { CatalogController } from './catalog.controller';
 import { CatalogRefreshProcessor } from './catalog-refresh.processor';
 import { CatalogRefreshCron } from './catalog-refresh.cron';
+import { FxModule } from '../fx/fx.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([CatalogEntity, CatalogPlan]),
     BullModule.registerQueue({ name: 'catalog-refresh' }),
+    FxModule,
+    UsersModule,
   ],
   providers: [
     CatalogService,
