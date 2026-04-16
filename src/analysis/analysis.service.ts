@@ -372,7 +372,7 @@ export class AnalysisService {
     const planLower = (user.plan || 'free').toLowerCase();
 
     if (planLower === 'pro') return 'pro';
-    if (planLower === 'team') return 'team';
+    if (planLower === 'organization' || planLower === 'team') return 'team';
 
     // Check if user is in active trial
     if (user.trialEndDate && new Date(user.trialEndDate) > new Date()) {
