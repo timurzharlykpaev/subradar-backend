@@ -1,15 +1,20 @@
-import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiQuery, ApiOperation } from '@nestjs/swagger';
+import { DataSource } from 'typeorm';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CatalogService } from './catalog.service';
 import { SearchCatalogDto } from './dto/search-catalog.dto';
+import { seedRegionalPrices } from './seed-regional-prices.js';
 
 @ApiTags('catalog')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('catalog')
 export class CatalogController {
-  constructor(private readonly catalog: CatalogService) {}
+  constructor(
+    private readonly catalog: CatalogService,
+    private readonly dataSource: DataSource,
+  ) {}
 
   @Get('popular')
   @ApiQuery({ name: 'region', required: false, example: 'KZ' })
@@ -22,6 +27,13 @@ export class CatalogController {
     @Query('limit') limit?: number,
   ) {
     return this.catalog.getPopular(region, currency, limit, req.user);
+  }
+
+  @Post('seed-prices')
+  @ApiOperation({ summary: 'Seed regional catalog prices (admin, one-time)' })
+  async seedPrices() {
+    await seedRegionalPrices(this.dataSource);
+    return { ok: true, message: 'Regional prices seeded' };
   }
 
   @Get('search')
