@@ -114,7 +114,7 @@ describe('AiController', () => {
 
   it('suggestCancel → calls suggestCancelUrl', async () => {
     const dto = { serviceName: 'Netflix' } as any;
-    const result = await controller.suggestCancel(dto);
+    const result = await controller.suggestCancel(req, dto);
     expect(mockAiService.suggestCancelUrl).toHaveBeenCalledWith('Netflix');
     expect(result).toHaveProperty('url');
   });

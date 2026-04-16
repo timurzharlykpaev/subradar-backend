@@ -24,6 +24,8 @@ import {
 import Redis from 'ioredis';
 import { Inject } from '@nestjs/common';
 import { REDIS_CLIENT } from '../common/redis.module';
+import { createHash, randomBytes } from 'crypto';
+import { maskEmail } from '../common/utils/pii';
 
 @Injectable()
 export class AuthService {
@@ -74,7 +76,7 @@ export class AuthService {
       provider: AuthProvider.LOCAL,
     });
 
-    this.logger.log(`Account created: ${dto.email}`);
+    this.logger.log(`Account created: ${maskEmail(dto.email)}`);
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
@@ -90,7 +92,7 @@ export class AuthService {
 
     const user = await this.usersService.findByEmailWithPassword(dto.email);
     if (!user || !user.password) {
-      this.logger.warn(`Login failed (user not found): ${dto.email}`);
+      this.logger.warn(`Login failed (user not found): ${maskEmail(dto.email)}`);
       await this.redis.incr(lockKey);
       await this.redis.expire(lockKey, 3600);
       throw new UnauthorizedException('Invalid credentials');
@@ -98,7 +100,7 @@ export class AuthService {
 
     const valid = await bcrypt.compare(dto.password, user.password);
     if (!valid) {
-      this.logger.warn(`Login failed (wrong password): ${dto.email}`);
+      this.logger.warn(`Login failed (wrong password): ${maskEmail(dto.email)}`);
       await this.redis.incr(lockKey);
       await this.redis.expire(lockKey, 3600);
       throw new UnauthorizedException('Invalid credentials');
@@ -107,7 +109,7 @@ export class AuthService {
     // Clear lockout on success
     await this.redis.del(lockKey);
 
-    this.logger.log(`Login success: ${dto.email}`);
+    this.logger.log(`Login success: ${maskEmail(dto.email)}`);
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
@@ -171,22 +173,14 @@ export class AuthService {
       });
     }
 
-    const magicLinkSecret = this.cfg.get('MAGIC_LINK_SECRET');
-    if (!magicLinkSecret) {
-      throw new Error('MAGIC_LINK_SECRET env var is required');
-    }
-
-    const token = this.jwtService.sign(
-      { sub: user.id, email: user.email, type: 'magic-link' },
-      {
-        secret: magicLinkSecret,
-        expiresIn: '15m',
-      },
-    );
+    // Generate opaque random token (sent to user via email) and store only its
+    // sha256 hash in the DB. Prevents DB-read attackers from using leaked tokens.
+    const token = randomBytes(32).toString('hex');
+    const tokenHash = createHash('sha256').update(token).digest('hex');
 
     const expiry = new Date(Date.now() + 15 * 60 * 1000);
     await this.usersService.update(user.id, {
-      magicLinkToken: token,
+      magicLinkToken: tokenHash,
       magicLinkExpiry: expiry,
     });
 
@@ -218,20 +212,34 @@ export class AuthService {
   }
 
   async verifyMagicLink(token: string) {
-    let payload: any;
-    try {
-      const magicSecret = this.cfg.get('MAGIC_LINK_SECRET');
-      if (!magicSecret) throw new Error('MAGIC_LINK_SECRET env var is required');
-      payload = this.jwtService.verify(token, {
-        secret: magicSecret,
-      });
-    } catch {
+    if (!token || typeof token !== 'string') {
       throw new UnauthorizedException('Invalid or expired magic link');
     }
 
-    const user = await this.usersService.findById(payload.sub);
-    if (user.magicLinkToken !== token)
-      throw new UnauthorizedException('Token already used');
+    // New format: opaque hex token; DB stores sha256(token).
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    let user = await this.usersService.findByMagicLinkToken(tokenHash);
+
+    // Legacy fallback: older links shipped a JWT stored verbatim in the column.
+    // Verify signature + expiry via JWT, then lookup the user by the raw token.
+    if (!user) {
+      const magicSecret = this.cfg.get('MAGIC_LINK_SECRET');
+      if (magicSecret) {
+        try {
+          const payload: any = this.jwtService.verify(token, { secret: magicSecret });
+          if (payload?.sub) {
+            const byId = await this.usersService.findById(payload.sub).catch(() => null);
+            if (byId && byId.magicLinkToken === token) {
+              user = byId;
+            }
+          }
+        } catch {
+          // fall through
+        }
+      }
+    }
+
+    if (!user) throw new UnauthorizedException('Invalid or expired magic link');
     if (!user.magicLinkExpiry || new Date() > new Date(user.magicLinkExpiry))
       throw new UnauthorizedException('Link expired');
 
@@ -243,6 +251,23 @@ export class AuthService {
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
+  }
+
+  private parseDurationMs(value: string | undefined, fallbackMs: number): number {
+    if (!value) return fallbackMs;
+    const m = /^(\d+)\s*([smhd])$/.exec(value.trim());
+    if (!m) {
+      const asInt = parseInt(value, 10);
+      return Number.isFinite(asInt) && asInt > 0 ? asInt * 1000 : fallbackMs;
+    }
+    const n = parseInt(m[1], 10);
+    const unit = m[2];
+    const mult =
+      unit === 's' ? 1000 :
+      unit === 'm' ? 60_000 :
+      unit === 'h' ? 3_600_000 :
+      86_400_000;
+    return n * mult;
   }
 
   async refresh(token: string) {
@@ -262,39 +287,138 @@ export class AuthService {
     const valid = await bcrypt.compare(token, user.refreshToken);
     if (!valid) throw new UnauthorizedException('Refresh token revoked');
 
+    // Absolute expiry guard — reject tokens older than JWT_REFRESH_EXPIRES_IN
+    // even if the JWT `exp` claim says otherwise. Belt-and-suspenders in case
+    // the signing secret leaks or a forged JWT slips through.
+    const expiresIn = this.cfg.get<string>('JWT_REFRESH_EXPIRES_IN', '30d');
+    const maxAgeMs = this.parseDurationMs(expiresIn, 30 * 24 * 3600 * 1000);
+    if (user.refreshTokenIssuedAt) {
+      const ageMs = Date.now() - new Date(user.refreshTokenIssuedAt).getTime();
+      if (ageMs > maxAgeMs) {
+        await this.usersService.updateRefreshToken(user.id, null);
+        throw new UnauthorizedException('Refresh token expired');
+      }
+    }
+
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return tokens;
   }
 
+  /**
+   * Returns the list of accepted Google OAuth audiences (client IDs).
+   * Supports distinct IDs per platform so iOS/Android tokens can be validated
+   * without cross-accepting tokens minted for a different client.
+   */
+  private getGoogleAudiences(): string[] {
+    const audiences = [
+      this.cfg.get<string>('GOOGLE_CLIENT_ID_IOS'),
+      this.cfg.get<string>('GOOGLE_CLIENT_ID_ANDROID'),
+      this.cfg.get<string>('GOOGLE_CLIENT_ID_WEB'),
+      this.cfg.get<string>('GOOGLE_CLIENT_ID'),
+    ]
+      .filter((x): x is string => !!x && x.length > 0)
+      .map((x) => x.trim());
+    // Deduplicate
+    return Array.from(new Set(audiences));
+  }
+
+  /**
+   * Verify a Google ID token (JWT) signature and audience using Google's public keys.
+   * Fails closed on any mismatch between `aud`/`azp` and the list of accepted client IDs.
+   */
+  private async verifyGoogleIdToken(
+    idToken: string,
+  ): Promise<{ email: string; name?: string; picture?: string; sub: string } | null> {
+    const audiences = this.getGoogleAudiences();
+    if (audiences.length === 0) {
+      this.logger.warn('verifyGoogleIdToken: no GOOGLE_CLIENT_ID_* configured');
+      return null;
+    }
+    try {
+      // Dynamic require to avoid hard dependency at module-load time — the lib
+      // ships transitively via firebase-admin.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { OAuth2Client } = require('google-auth-library');
+      const client = new OAuth2Client();
+      const ticket = await client.verifyIdToken({ idToken, audience: audiences });
+      const payload = ticket.getPayload();
+      if (!payload?.email) return null;
+      // Extra defense: verifyIdToken already validates `aud`, but re-check `azp`
+      // (authorized party) explicitly — some libs treat it as advisory only.
+      if (payload.azp && !audiences.includes(payload.azp)) {
+        this.logger.warn(`verifyGoogleIdToken: azp mismatch (${payload.azp})`);
+        return null;
+      }
+      return {
+        email: payload.email,
+        name: payload.name,
+        picture: payload.picture,
+        sub: payload.sub!,
+      };
+    } catch (e: any) {
+      this.logger.warn(`verifyGoogleIdToken: signature/audience check failed: ${e?.message}`);
+      return null;
+    }
+  }
+
   async googleTokenLogin(token: string) {
     if (!token) throw new UnauthorizedException('Token required');
 
-    let email: string, name: string, avatarUrl: string, providerId: string;
+    let email: string | undefined;
+    let name: string | undefined;
+    let avatarUrl: string | undefined;
+    let providerId: string | undefined;
 
-    // Try as access_token first (from @react-oauth/google useGoogleLogin)
-    try {
-      const res = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const profile = await res.json();
+    // Path 1: treat as Google ID token (JWT with 3 dot-separated segments).
+    // Native mobile flows (iOS/Android) send idToken — this is the preferred
+    // path because it cryptographically binds the token to our client IDs.
+    const looksLikeJwt = token.split('.').length === 3;
+    if (looksLikeJwt) {
+      const verified = await this.verifyGoogleIdToken(token);
+      if (verified) {
+        email = verified.email;
+        name = verified.name || verified.email.split('@')[0];
+        avatarUrl = verified.picture;
+        providerId = verified.sub;
+      }
+    }
+
+    // Path 2: fall back to treating the value as an access_token (web flow via
+    // @react-oauth/google useGoogleLogin). userinfo endpoint implicitly validates
+    // the token by issuing a profile — but it does NOT validate audience, so this
+    // path is riskier and should eventually be retired in favor of idToken.
+    if (!email) {
+      try {
+        const res = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          throw new UnauthorizedException('Invalid Google token — userinfo request failed');
+        }
+        const profile = (await res.json()) as any;
+        if (!profile?.email) {
+          throw new UnauthorizedException('Google token missing email');
+        }
         email = profile.email;
         name = profile.name || profile.email.split('@')[0];
         avatarUrl = profile.picture;
         providerId = profile.sub;
-      } else {
-        throw new UnauthorizedException('Invalid Google token — userinfo request failed');
+      } catch (e) {
+        if (e instanceof UnauthorizedException) throw e;
+        throw new UnauthorizedException('Failed to verify Google token');
       }
-    } catch {
+    }
+
+    if (!email || !providerId) {
       throw new UnauthorizedException('Failed to verify Google token');
     }
 
-    this.logger.log(`googleTokenLogin: email=${email}, providerId=${providerId}`);
+    this.logger.log(`googleTokenLogin: email=${maskEmail(email)}`);
     try {
       let user = await this.usersService.findByEmail(email);
       if (!user) {
-        this.logger.log(`googleTokenLogin: creating new user ${email}`);
+        this.logger.log(`googleTokenLogin: creating new user ${maskEmail(email)}`);
         user = await this.usersService.create({
           email,
           name,
@@ -303,20 +427,28 @@ export class AuthService {
           providerId,
         });
       }
-      this.logger.log(`googleTokenLogin: generating tokens for user ${user.id}`);
       const tokens = this.generateTokens(user);
       await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
-      this.logger.log(`googleTokenLogin: success for ${email}`);
+      this.logger.log(`googleTokenLogin: success for ${maskEmail(email)}`);
       return { user, ...tokens };
     } catch (dbError: any) {
-      this.logger.error(`googleTokenLogin DB error for ${email}: ${dbError?.message}`, dbError?.stack);
+      this.logger.error(`googleTokenLogin DB error for ${maskEmail(email)}: ${dbError?.message}`, dbError?.stack);
       throw new InternalServerErrorException('Authentication failed. Please try again.');
     }
   }
 
   async sendOtp(dto: OtpSendDto) {
-    // Fixed OTP for App Store review account
+    // Fixed OTP for App Store review account. This is a live backdoor into any
+    // email matching review@subradar.ai, so it must be explicitly enabled per
+    // environment — in production we only flip ENABLE_REVIEW_ACCOUNT=true while
+    // Apple is actively reviewing the build.
     const isReviewAccount = dto.email === 'review@subradar.ai';
+    if (isReviewAccount && process.env.ENABLE_REVIEW_ACCOUNT !== 'true') {
+      this.logger.warn(
+        `Review account OTP attempted while disabled: ${maskEmail(dto.email)}`,
+      );
+      throw new ForbiddenException('Review account is disabled');
+    }
     const code = isReviewAccount
       ? '000000'
       : Math.floor(100000 + Math.random() * 900000).toString();
@@ -354,13 +486,13 @@ export class AuthService {
 
     const stored = await this.redis.get(`otp:${dto.email}`);
     if (!stored) {
-      this.logger.warn(`OTP verification failed (expired/not found): ${dto.email}`);
+      this.logger.warn(`OTP verification failed (expired/not found): ${maskEmail(dto.email)}`);
       await this.redis.incr(otpLockKey);
       await this.redis.expire(otpLockKey, 3600);
       throw new UnauthorizedException('OTP expired or not found');
     }
     if (stored !== dto.code) {
-      this.logger.warn(`OTP verification failed (wrong code): ${dto.email}`);
+      this.logger.warn(`OTP verification failed (wrong code): ${maskEmail(dto.email)}`);
       await this.redis.incr(otpLockKey);
       await this.redis.expire(otpLockKey, 3600);
       throw new UnauthorizedException('Invalid OTP code');
@@ -376,10 +508,10 @@ export class AuthService {
         email: dto.email,
         provider: AuthProvider.LOCAL,
       });
-      this.logger.log(`Account created via OTP: ${dto.email}`);
+      this.logger.log(`Account created via OTP: ${maskEmail(dto.email)}`);
     }
 
-    this.logger.log(`Login success via OTP: ${dto.email}`);
+    this.logger.log(`Login success via OTP: ${maskEmail(dto.email)}`);
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };

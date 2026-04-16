@@ -61,7 +61,7 @@ export class FxService {
       };
       await this.redis
         .set(REDIS_KEY, JSON.stringify(rates), 'EX', REDIS_TTL_SECONDS)
-        .catch(() => {});
+        .catch((err) => this.logger.debug(`Redis SET ${REDIS_KEY} failed: ${err?.message}`));
 
       const ageMs = Date.now() - snapshot.fetchedAt.getTime();
       if (ageMs > STALE_THRESHOLD_MS) {
@@ -99,7 +99,11 @@ export class FxService {
       return await this.fetchFromProviders();
     } finally {
       if (acquired) {
-        await this.redis.del(REDIS_REFRESH_LOCK).catch(() => {});
+        await this.redis
+          .del(REDIS_REFRESH_LOCK)
+          .catch((err) =>
+            this.logger.debug(`Redis DEL ${REDIS_REFRESH_LOCK} failed: ${err?.message}`),
+          );
       }
     }
   }
@@ -137,7 +141,7 @@ export class FxService {
         };
         await this.redis
           .set(REDIS_KEY, JSON.stringify(result), 'EX', REDIS_TTL_SECONDS)
-          .catch(() => {});
+          .catch((err) => this.logger.debug(`Redis SET ${REDIS_KEY} (fetched) failed: ${err?.message}`));
         this.logger.log(
           `FX rates fetched from ${provider.name}: ${Object.keys(rates).length} currencies`,
         );
@@ -156,10 +160,19 @@ export class FxService {
     rates: Record<string, number>,
   ): Decimal {
     if (from === to) return amount;
-    const fromRate = rates[from];
-    const toRate = rates[to];
-    if (!fromRate) throw new Error(`No FX rate for ${from}`);
-    if (!toRate) throw new Error(`No FX rate for ${to}`);
-    return amount.div(fromRate).mul(toRate);
+    const fromRate = from === 'USD' ? 1 : rates[from];
+    const toRate = to === 'USD' ? 1 : rates[to];
+    if (!fromRate || fromRate <= 0 || !isFinite(fromRate)) {
+      throw new Error(`Invalid FX rate for ${from}`);
+    }
+    if (!toRate || toRate <= 0 || !isFinite(toRate)) {
+      throw new Error(`Invalid FX rate for ${to}`);
+    }
+    // Wrap the numeric rates in Decimal before dividing/multiplying. Passing
+    // raw Number to Decimal.div triggers internal Number→string conversion
+    // per operand, which can preserve IEEE-754 artifacts (e.g. rate 0.1 +
+    // 0.2 shows up as 0.30000000000000004). Explicit Decimal construction
+    // avoids accumulating float error across large aggregates.
+    return amount.div(new Decimal(fromRate)).mul(new Decimal(toRate));
   }
 }

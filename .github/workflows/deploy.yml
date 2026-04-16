@@ -15,29 +15,87 @@ on:
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
+    # Environment protection is driven by the computed target below.
+    # When target == 'prod' and the 'prod' environment has required reviewers
+    # configured in GitHub Settings, the job pauses for manual approval before
+    # any deploy steps run. See .github/ENVIRONMENT_SETUP.md.
+    environment:
+      name: ${{ steps.env.outputs.target }}
     permissions:
       contents: read
       packages: write
 
+    # Ephemeral services for the test step. Only reachable inside this job.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       - uses: actions/checkout@v4.2.2
+
+      - name: Set environment
+        id: env
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENV: ${{ github.event.inputs.environment }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "target=$INPUT_ENV" >> $GITHUB_OUTPUT
+          elif [ "$REF_NAME" = "main" ]; then
+            echo "target=prod" >> $GITHUB_OUTPUT
+          else
+            echo "target=dev" >> $GITHUB_OUTPUT
+          fi
+
+      # --- Quality gates BEFORE any image push / deploy ---
+      # Running tests and the TS type-check here prevents shipping a broken
+      # image. If this step fails, nothing downstream (build / push / ssh)
+      # executes — the deploy is effectively atomic w.r.t. test signal.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test -- --passWithNoTests
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/test
+          REDIS_URL: redis://localhost:6379
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      # --- Image build + push (only after gates pass) ---
       - uses: docker/setup-buildx-action@v3.10.0
       - uses: docker/login-action@v3.4.0
         with:
           registry: ghcr.io
           username: timurzharlykpaev
           password: ${{ secrets.GHCR_TOKEN }}
-
-      - name: Set environment
-        id: env
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "target=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.ref_name }}" = "main" ]; then
-            echo "target=prod" >> $GITHUB_OUTPUT
-          else
-            echo "target=dev" >> $GITHUB_OUTPUT
-          fi
 
       - name: Build & push dev image
         if: steps.env.outputs.target == 'dev'

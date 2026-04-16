@@ -2,9 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, LessThan } from 'typeorm';
+import { toZonedTime } from 'date-fns-tz';
 import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TelegramAlertService } from '../common/telegram-alert.service';
+import { runCronHandler } from '../common/cron/run-cron-handler';
 
 @Injectable()
 export class RemindersService {
@@ -16,18 +19,26 @@ export class RemindersService {
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     private readonly notificationsService: NotificationsService,
+    private readonly tg: TelegramAlertService,
   ) {}
 
   @Cron('0 9 * * *')
   async sendDailyReminders() {
+    return runCronHandler('sendDailyReminders', this.logger, this.tg, () =>
+      this.sendDailyRemindersImpl(),
+    );
+  }
+
+  private async sendDailyRemindersImpl() {
     this.logger.log('Running daily billing reminders cron...');
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Find all active subscriptions with nextPaymentDate in next 7 days
-    const in7Days = new Date(today);
-    in7Days.setDate(today.getDate() + 7);
+    // Widen the SQL window to ±1 day of UTC today to cover users in tz offsets
+    // that shift the calendar boundary (e.g. UTC-12 / UTC+14). The exact per-user
+    // daysLeft comparison happens in the user's detected timezone below.
+    const utcToday = new Date();
+    utcToday.setUTCHours(0, 0, 0, 0);
+    const utcFrom = new Date(utcToday.getTime() - 86400000);
+    const utcTo = new Date(utcToday.getTime() + 8 * 86400000);
 
     const subscriptions = await this.subscriptionRepo
       .createQueryBuilder('sub')
@@ -35,8 +46,8 @@ export class RemindersService {
         statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
       })
       .andWhere('sub.nextPaymentDate BETWEEN :from AND :to', {
-        from: new Date(today.getTime() + 86400000).toISOString().split('T')[0], // tomorrow
-        to: in7Days.toISOString().split('T')[0],
+        from: utcFrom.toISOString().split('T')[0],
+        to: utcTo.toISOString().split('T')[0],
       })
       .andWhere('sub.reminderEnabled = true')
       .getMany();
@@ -54,8 +65,26 @@ export class RemindersService {
 
         const paymentDate = new Date(sub.nextPaymentDate);
         if (isNaN(paymentDate.getTime())) continue;
-        const diffMs = paymentDate.getTime() - today.getTime();
-        const daysLeft = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+        // Compute daysLeft in the user's timezone so "1 day before" lines up with
+        // their local calendar, not the server's UTC day.
+        const userTz = user.timezoneDetected || user.timezone || 'UTC';
+        const nowInUserTz = toZonedTime(new Date(), userTz);
+        const todayInUserTz = new Date(
+          nowInUserTz.getFullYear(),
+          nowInUserTz.getMonth(),
+          nowInUserTz.getDate(),
+        );
+        const paymentInUserTz = toZonedTime(paymentDate, userTz);
+        const paymentDayInUserTz = new Date(
+          paymentInUserTz.getFullYear(),
+          paymentInUserTz.getMonth(),
+          paymentInUserTz.getDate(),
+        );
+        const daysLeft = Math.floor(
+          (paymentDayInUserTz.getTime() - todayInUserTz.getTime()) / 86400000,
+        );
+        if (daysLeft < 0) continue;
         const dateStr = paymentDate.toISOString().split('T')[0];
 
         // Check if today matches one of the subscription's reminder days
@@ -101,6 +130,12 @@ export class RemindersService {
   /** Notify users whose trial is about to expire — runs daily at 10:00 */
   @Cron('0 10 * * *')
   async sendTrialExpiryReminders() {
+    return runCronHandler('sendTrialExpiryReminders', this.logger, this.tg, () =>
+      this.sendTrialExpiryRemindersImpl(),
+    );
+  }
+
+  private async sendTrialExpiryRemindersImpl() {
     this.logger.log('Running trial expiry reminders cron...');
 
     const today = new Date();
@@ -166,6 +201,12 @@ export class RemindersService {
   /** Notify users whose Pro subscription is about to expire — runs daily at 10:00 UTC */
   @Cron('0 10 * * *')
   async sendProExpirationReminders() {
+    return runCronHandler('sendProExpirationReminders', this.logger, this.tg, () =>
+      this.sendProExpirationRemindersImpl(),
+    );
+  }
+
+  private async sendProExpirationRemindersImpl() {
     this.logger.log('Running Pro expiration reminders cron...');
 
     const today = new Date();
@@ -254,6 +295,12 @@ export class RemindersService {
   /** Weekly push digest — every Sunday at 11:00 UTC */
   @Cron('0 11 * * 0')
   async sendWeeklyPushDigest() {
+    return runCronHandler('sendWeeklyPushDigest', this.logger, this.tg, () =>
+      this.sendWeeklyPushDigestImpl(),
+    );
+  }
+
+  private async sendWeeklyPushDigestImpl() {
     this.logger.log('Running weekly push digest...');
 
     const now = new Date();
@@ -324,6 +371,12 @@ export class RemindersService {
   /** Downgrade users whose trial has expired — runs every hour */
   @Cron('0 * * * *')
   async expireTrials() {
+    return runCronHandler('expireTrials', this.logger, this.tg, () =>
+      this.expireTrialsImpl(),
+    );
+  }
+
+  private async expireTrialsImpl() {
     const expired = await this.userRepo
       .createQueryBuilder('u')
       .where("u.plan = 'pro'")
@@ -344,6 +397,12 @@ export class RemindersService {
   /** Win-back push for users inactive 7+ days — daily at 14:00 UTC */
   @Cron('0 14 * * *')
   async sendWinBackPush() {
+    return runCronHandler('sendWinBackPush', this.logger, this.tg, () =>
+      this.sendWinBackPushImpl(),
+    );
+  }
+
+  private async sendWinBackPushImpl() {
     this.logger.log('Running win-back push cron...');
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000);

@@ -197,7 +197,7 @@ export class CatalogService {
     // Cache full result (up to 50 items)
     await this.redis
       .set(cacheKey, JSON.stringify(result), 'EX', POPULAR_CACHE_TTL)
-      .catch(() => {});
+      .catch((err) => this.logger.debug(`Redis SET ${cacheKey} failed: ${err?.message}`));
 
     return result.slice(0, limit);
   }
@@ -258,7 +258,9 @@ export class CatalogService {
         return { service: savedService, plans: savedPlans };
       });
     } finally {
-      await this.redis.del(lockKey).catch(() => {});
+      await this.redis
+        .del(lockKey)
+        .catch((err) => this.logger.debug(`Redis DEL ${lockKey} failed: ${err?.message}`));
     }
   }
 

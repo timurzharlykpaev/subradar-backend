@@ -12,6 +12,7 @@ describe('BillingController', () => {
   const mockBillingService = {
     verifyWebhookSignature: jest.fn().mockReturnValue(true),
     handleWebhook: jest.fn().mockResolvedValue(undefined),
+    handleLemonSqueezyWebhook: jest.fn().mockResolvedValue(undefined),
     createCheckout: jest.fn().mockResolvedValue({ checkoutUrl: 'https://checkout.url' }),
     getBillingInfo: jest.fn().mockResolvedValue({ plan: 'free', aiRequestsLeft: 10 }),
     startTrial: jest.fn().mockResolvedValue(undefined),
@@ -53,25 +54,23 @@ describe('BillingController', () => {
   it('should be defined', () => expect(controller).toBeDefined());
 
   it('webhook → verifies signature and handles event', async () => {
-    const mockReq = { rawBody: Buffer.from('{}') } as any;
+    const mockReq = { rawBody: '{}' } as any;
     const body = { meta: { event_name: 'order_created' }, data: {} };
     const result = await controller.webhook(mockReq, 'sig123', body);
     expect(mockBillingService.verifyWebhookSignature).toHaveBeenCalled();
-    expect(mockBillingService.handleWebhook).toHaveBeenCalledWith('order_created', {});
+    expect(mockBillingService.handleLemonSqueezyWebhook).toHaveBeenCalledWith(body);
     expect(result).toEqual({ received: true });
   });
 
   it('webhook → throws BadRequestException on invalid signature', async () => {
     mockBillingService.verifyWebhookSignature.mockReturnValueOnce(false);
-    const mockReq = { rawBody: Buffer.from('{}') } as any;
+    const mockReq = { rawBody: '{}' } as any;
     await expect(controller.webhook(mockReq, 'bad-sig', {})).rejects.toThrow(BadRequestException);
   });
 
-  it('webhook → handles missing rawBody by stringifying body', async () => {
+  it('webhook → throws BadRequestException when rawBody missing', async () => {
     const mockReq = {} as any;
-    const body = { meta: { event_name: 'test' }, data: {} };
-    await controller.webhook(mockReq, 'sig', body);
-    expect(mockBillingService.verifyWebhookSignature).toHaveBeenCalled();
+    await expect(controller.webhook(mockReq, 'sig', {})).rejects.toThrow(BadRequestException);
   });
 
   it('createCheckout → creates checkout with variantId', async () => {

@@ -5,6 +5,8 @@ import { Repository } from 'typeorm';
 import { Subscription, SubscriptionStatus } from './entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TelegramAlertService } from '../common/telegram-alert.service';
+import { runCronHandler } from '../common/cron/run-cron-handler';
 
 @Injectable()
 export class TrialCheckerCron {
@@ -16,12 +18,19 @@ export class TrialCheckerCron {
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     private readonly notifications: NotificationsService,
+    private readonly tg: TelegramAlertService,
   ) {}
 
   // ── Subscription trial reminders (1d, 3d before end) ──────────────────────
 
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
   async checkExpiringTrials() {
+    return runCronHandler('checkExpiringTrials', this.logger, this.tg, () =>
+      this.checkExpiringTrialsImpl(),
+    );
+  }
+
+  private async checkExpiringTrialsImpl() {
     this.logger.log('Checking for expiring trials...');
 
     const trials = await this.subRepo.find({
@@ -91,6 +100,12 @@ export class TrialCheckerCron {
 
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
   async warnExpiringProTrials() {
+    return runCronHandler('warnExpiringProTrials', this.logger, this.tg, () =>
+      this.warnExpiringProTrialsImpl(),
+    );
+  }
+
+  private async warnExpiringProTrialsImpl() {
     this.logger.log('Checking for expiring Pro trials (1-day warning)...');
 
     const tomorrow = new Date();
@@ -150,6 +165,12 @@ export class TrialCheckerCron {
    */
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async downgradeExpiredTrials() {
+    return runCronHandler('downgradeExpiredTrials', this.logger, this.tg, () =>
+      this.downgradeExpiredTrialsImpl(),
+    );
+  }
+
+  private async downgradeExpiredTrialsImpl() {
     this.logger.log('Checking for expired Pro trials to downgrade...');
 
     const now = new Date();

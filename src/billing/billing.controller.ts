@@ -74,14 +74,20 @@ export class BillingController {
     @Headers('x-signature') signature: string,
     @Body() body: any,
   ) {
-    const rawBody = req.rawBody?.toString() || JSON.stringify(body);
+    // Lemon Squeezy signs the EXACT raw bytes of the request body. We must
+    // compare against req.rawBody captured by express.json({ verify }) in
+    // main.ts — any re-serialization (JSON.stringify) breaks the HMAC.
+    if (!req.rawBody) {
+      throw new BadRequestException('Raw body missing — webhook body parser is misconfigured');
+    }
+    const rawBody: string =
+      typeof req.rawBody === 'string' ? req.rawBody : req.rawBody.toString('utf8');
 
     if (!this.billingService.verifyWebhookSignature(rawBody, signature)) {
       throw new BadRequestException('Invalid webhook signature');
     }
 
-    const event = body?.meta?.event_name;
-    await this.billingService.handleWebhook(event, body?.data);
+    await this.billingService.handleLemonSqueezyWebhook(body);
     return { received: true };
   }
 

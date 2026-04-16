@@ -1,7 +1,7 @@
 import { Process, Processor } from '@nestjs/bull';
 import type { Job } from 'bull';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Logger } from '@nestjs/common';
 import { CatalogPlan } from './entities/catalog-plan.entity';
 import { CatalogService as CatalogEntity } from './entities/catalog-service.entity';
@@ -23,6 +23,7 @@ export class CatalogRefreshProcessor {
     private readonly planRepo: Repository<CatalogPlan>,
     @InjectRepository(CatalogEntity)
     private readonly serviceRepo: Repository<CatalogEntity>,
+    @InjectDataSource() private readonly dataSource: DataSource,
     private readonly ai: AiCatalogProvider,
   ) {}
 
@@ -51,31 +52,61 @@ export class CatalogRefreshProcessor {
 
     const plans = await this.planRepo.find({ where: { serviceId } });
     const now = new Date();
-    const toSave: CatalogPlan[] = [];
     const diffs: string[] = [];
 
-    for (const priceEntry of result.prices ?? []) {
-      const plan = plans.find(
-        (p) =>
-          p.region === String(priceEntry.region || '').toUpperCase() &&
-          p.planName === priceEntry.planName,
-      );
-      if (!plan) continue;
-      const oldPrice = plan.price;
-      plan.price = String(priceEntry.price);
-      plan.currency = String(priceEntry.currency || '').toUpperCase();
-      plan.lastPriceRefreshAt = now;
-      toSave.push(plan);
-      if (oldPrice !== plan.price) {
-        diffs.push(
-          `${plan.region}/${plan.planName}: ${oldPrice} → ${plan.price} ${plan.currency}`,
+    // Batch upsert inside a single transaction. We use a raw INSERT ... ON
+    // CONFLICT statement keyed on the unique index (serviceId, region, planName)
+    // so concurrent refresh jobs (e.g. two workers picking up the same job due
+    // to a retry) won't race on TypeORM's insert-or-update detection.
+    await this.dataSource.transaction(async (em) => {
+      for (const priceEntry of result.prices ?? []) {
+        const region = String(priceEntry.region || '').toUpperCase();
+        const planName = priceEntry.planName;
+        const plan = plans.find(
+          (p) => p.region === region && p.planName === planName,
         );
-      }
-    }
+        if (!plan) continue;
 
-    if (toSave.length > 0) {
-      await this.planRepo.save(toSave);
-    }
+        const newPrice = String(priceEntry.price);
+        const newCurrency = String(priceEntry.currency || '').toUpperCase();
+        const oldPrice = plan.price;
+
+        await em.query(
+          `
+          INSERT INTO "catalog_plans"
+            ("id", "serviceId", "region", "planName", "price", "currency",
+             "period", "features", "priceSource", "priceConfidence",
+             "lastPriceRefreshAt")
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          ON CONFLICT ("serviceId", "region", "planName")
+          DO UPDATE SET
+            "price" = EXCLUDED."price",
+            "currency" = EXCLUDED."currency",
+            "lastPriceRefreshAt" = EXCLUDED."lastPriceRefreshAt"
+          `,
+          [
+            plan.id,
+            plan.serviceId,
+            plan.region,
+            plan.planName,
+            newPrice,
+            newCurrency,
+            plan.period,
+            plan.features ?? [],
+            plan.priceSource,
+            plan.priceConfidence,
+            now,
+          ],
+        );
+
+        if (oldPrice !== newPrice) {
+          diffs.push(
+            `${plan.region}/${plan.planName}: ${oldPrice} → ${newPrice} ${newCurrency}`,
+          );
+        }
+      }
+    });
+
     for (const diff of diffs) {
       this.logger.log(`${serviceName} ${diff}`);
     }

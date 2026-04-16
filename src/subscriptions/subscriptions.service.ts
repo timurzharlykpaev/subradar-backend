@@ -5,13 +5,25 @@ import {
   Logger,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
+import { DataSource, In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
 import Redis from 'ioredis';
+import {
+  addMonths,
+  addQuarters,
+  addWeeks,
+  addYears,
+  isBefore,
+  lastDayOfMonth,
+  setDate,
+} from 'date-fns';
 import { REDIS_CLIENT } from '../common/redis.module';
+import { TelegramAlertService } from '../common/telegram-alert.service';
+import { runCronHandler } from '../common/cron/run-cron-handler';
 import {
   Subscription,
   BillingPeriod,
@@ -29,6 +41,7 @@ import { CatalogPlan } from '../catalog/entities/catalog-plan.entity';
 function computeNextPaymentDate(
   startDate: Date,
   billingPeriod: BillingPeriod,
+  billingDay?: number | null,
 ): Date | null {
   if (
     billingPeriod === BillingPeriod.LIFETIME ||
@@ -38,42 +51,52 @@ function computeNextPaymentDate(
   }
 
   const now = new Date();
-  const next = new Date(startDate);
-  const originalDay = next.getDate();
+  let next = new Date(startDate);
 
-  while (next <= now) {
+  const advance = (): Date => {
     switch (billingPeriod) {
       case BillingPeriod.WEEKLY:
-        next.setDate(next.getDate() + 7);
-        break;
-      case BillingPeriod.MONTHLY: {
-        const m = next.getMonth() + 1;
-        const y = next.getFullYear() + (m > 11 ? 1 : 0);
-        const newMonth = m % 12;
-        const lastDay = new Date(y, newMonth + 1, 0).getDate();
-        next.setFullYear(y);
-        next.setMonth(newMonth);
-        next.setDate(Math.min(originalDay, lastDay));
-        break;
-      }
-      case BillingPeriod.QUARTERLY: {
-        const mq = next.getMonth() + 3;
-        const yq = next.getFullYear() + Math.floor(mq / 12);
-        const newMonthQ = mq % 12;
-        const lastDayQ = new Date(yq, newMonthQ + 1, 0).getDate();
-        next.setFullYear(yq);
-        next.setMonth(newMonthQ);
-        next.setDate(Math.min(originalDay, lastDayQ));
-        break;
-      }
+        return addWeeks(next, 1);
+      case BillingPeriod.MONTHLY:
+        return addMonths(next, 1);
+      case BillingPeriod.QUARTERLY:
+        return addQuarters(next, 1);
       case BillingPeriod.YEARLY:
-        next.setFullYear(next.getFullYear() + 1);
-        break;
+        return addYears(next, 1);
+      default:
+        return addMonths(next, 1);
     }
+  };
+
+  while (isBefore(next, now)) {
+    next = advance();
+  }
+
+  // Clamp billingDay to last day of target month (e.g., 31 in Feb → 28/29)
+  if (billingDay && billingPeriod === BillingPeriod.MONTHLY) {
+    const lastDay = lastDayOfMonth(next).getDate();
+    next = setDate(next, Math.min(billingDay, lastDay));
   }
 
   return next;
 }
+
+// Allowed subscription status transitions. CANCELLED is terminal — restore is handled explicitly.
+const VALID_STATUS_TRANSITIONS: Record<SubscriptionStatus, SubscriptionStatus[]> = {
+  [SubscriptionStatus.ACTIVE]: [
+    SubscriptionStatus.PAUSED,
+    SubscriptionStatus.CANCELLED,
+  ],
+  [SubscriptionStatus.TRIAL]: [
+    SubscriptionStatus.ACTIVE,
+    SubscriptionStatus.CANCELLED,
+  ],
+  [SubscriptionStatus.PAUSED]: [
+    SubscriptionStatus.ACTIVE,
+    SubscriptionStatus.CANCELLED,
+  ],
+  [SubscriptionStatus.CANCELLED]: [],
+};
 
 @Injectable()
 export class SubscriptionsService implements OnModuleInit {
@@ -88,7 +111,21 @@ export class SubscriptionsService implements OnModuleInit {
     @Inject(forwardRef(() => AnalysisService))
     private readonly analysisService: AnalysisService,
     private readonly fx: FxService,
+    private readonly dataSource: DataSource,
+    private readonly tg: TelegramAlertService,
   ) {}
+
+  /**
+   * Stable 32-bit hash of userId for postgres advisory locks (serialize subscription
+   * creation per-user to prevent limit bypass via concurrent requests).
+   */
+  private hashUserIdForLock(userId: string): number {
+    let hash = 0;
+    for (let i = 0; i < userId.length; i++) {
+      hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
+    }
+    return hash;
+  }
 
   async onModuleInit() {
     await this.recalculateNextPaymentDates();
@@ -114,8 +151,12 @@ export class SubscriptionsService implements OnModuleInit {
           }
         } while (cursor !== '0');
       }
-    } catch {
-      this.logger.warn('Failed to invalidate analytics cache');
+    } catch (err: any) {
+      // Redis unavailable shouldn't block writes — log & continue. Including the
+      // error message helps trace scan/del failures vs full connection loss.
+      this.logger.debug(
+        `Failed to invalidate analytics cache for user ${userId}: ${err?.message}`,
+      );
     }
   }
 
@@ -125,20 +166,6 @@ export class SubscriptionsService implements OnModuleInit {
   ): Promise<Subscription> {
     const user = await this.usersService.findById(userId);
     const planConfig = PLANS[user.plan] ?? PLANS.free;
-
-    if (planConfig.subscriptionLimit !== null) {
-      const activeCount = await this.repo.count({
-        where: [
-          { userId, status: SubscriptionStatus.ACTIVE },
-          { userId, status: SubscriptionStatus.TRIAL },
-        ],
-      });
-      if (activeCount >= planConfig.subscriptionLimit) {
-        throw new ForbiddenException(
-          `Subscription limit reached (${planConfig.subscriptionLimit} on Free plan). Upgrade to Pro for unlimited subscriptions.`,
-        );
-      }
-    }
 
     let catalogServiceId: string | null = null;
     let catalogPlanId: string | null = null;
@@ -155,28 +182,60 @@ export class SubscriptionsService implements OnModuleInit {
       }
     }
 
-    const sub = this.repo.create({
-      ...dto,
-      currency: resolvedCurrency,
-      originalCurrency: resolvedCurrency,
-      catalogServiceId,
-      catalogPlanId,
-      userId,
+    // Serialize subscription creation per-user with pg advisory lock inside a
+    // transaction — prevents race condition where concurrent requests bypass
+    // subscriptionLimit (both read count < limit before either writes).
+    const lockKey = this.hashUserIdForLock(userId);
+    const saved = await this.dataSource.transaction(async (em) => {
+      await em.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
+
+      if (planConfig.subscriptionLimit !== null) {
+        const activeCount = await em.count(Subscription, {
+          where: [
+            { userId, status: SubscriptionStatus.ACTIVE },
+            { userId, status: SubscriptionStatus.TRIAL },
+          ],
+        });
+        if (activeCount >= planConfig.subscriptionLimit) {
+          throw new ForbiddenException(
+            `Subscription limit reached (${planConfig.subscriptionLimit} on Free plan). Upgrade to Pro for unlimited subscriptions.`,
+          );
+        }
+      }
+
+      const sub = em.create(Subscription, {
+        ...dto,
+        currency: resolvedCurrency,
+        originalCurrency: resolvedCurrency,
+        catalogServiceId,
+        catalogPlanId,
+        userId,
+      });
+
+      if (sub.startDate && sub.billingPeriod) {
+        const next = computeNextPaymentDate(
+          new Date(sub.startDate),
+          sub.billingPeriod,
+          sub.billingDay,
+        );
+        sub.nextPaymentDate = next as Date;
+      }
+
+      return em.save(Subscription, sub);
     });
 
-    if (sub.startDate && sub.billingPeriod) {
-      const next = computeNextPaymentDate(
-        new Date(sub.startDate),
-        sub.billingPeriod,
-      );
-      sub.nextPaymentDate = next as Date;
-    }
-
-    const saved = await this.repo.save(sub);
-    await this.invalidateAnalyticsCache(userId);
-    // Trigger analysis re-evaluation (debounced)
-    this.analysisService.onSubscriptionChange(userId).catch(err =>
-      this.logger.warn(`Analysis trigger failed: ${err.message}`),
+    // Post-commit side effects — never throw from here (the subscription is
+    // already persisted). Cache + analysis failures are best-effort and should
+    // surface in logs only.
+    this.invalidateAnalyticsCache(userId).catch((err) =>
+      this.logger.warn(
+        `invalidateAnalyticsCache failed for user ${userId} (sub ${saved.id}): ${err?.message}`,
+      ),
+    );
+    this.analysisService.onSubscriptionChange(userId).catch((err) =>
+      this.logger.warn(
+        `Analysis trigger failed for user ${userId} (sub ${saved.id}): ${err?.message}`,
+      ),
     );
     return saved;
   }
@@ -290,10 +349,14 @@ export class SubscriptionsService implements OnModuleInit {
     const sub = await this.findOne(userId, id);
     Object.assign(sub, dto);
 
-    if (dto.billingPeriod || dto.startDate) {
+    if (dto.billingPeriod || dto.startDate || dto.billingDay !== undefined) {
       const startDate = sub.startDate ? new Date(sub.startDate) : null;
       if (startDate && sub.billingPeriod) {
-        const next = computeNextPaymentDate(startDate, sub.billingPeriod);
+        const next = computeNextPaymentDate(
+          startDate,
+          sub.billingPeriod,
+          sub.billingDay,
+        );
         sub.nextPaymentDate = next as Date;
       }
     }
@@ -323,6 +386,31 @@ export class SubscriptionsService implements OnModuleInit {
     status: SubscriptionStatus,
   ): Promise<Subscription> {
     const sub = await this.findOne(userId, id);
+
+    // Explicit restore: CANCELLED → ACTIVE clears cancelledAt timestamp.
+    // This is the only legal exit from the terminal CANCELLED state.
+    if (
+      sub.status === SubscriptionStatus.CANCELLED &&
+      status === SubscriptionStatus.ACTIVE
+    ) {
+      sub.cancelledAt = null as unknown as Date;
+      sub.status = SubscriptionStatus.ACTIVE;
+      const restored = await this.repo.save(sub);
+      await this.invalidateAnalyticsCache(userId);
+      return restored;
+    }
+
+    if (sub.status === status) {
+      return sub;
+    }
+
+    const allowed = VALID_STATUS_TRANSITIONS[sub.status] ?? [];
+    if (!allowed.includes(status)) {
+      throw new BadRequestException(
+        `Cannot transition subscription status ${sub.status} → ${status}`,
+      );
+    }
+
     sub.status = status;
     if (status === SubscriptionStatus.CANCELLED) {
       sub.cancelledAt = new Date();
@@ -359,6 +447,7 @@ export class SubscriptionsService implements OnModuleInit {
       const next = computeNextPaymentDate(
         new Date(sub.startDate),
         sub.billingPeriod,
+        sub.billingDay,
       );
       if (next && (!sub.nextPaymentDate || next > sub.nextPaymentDate)) {
         sub.nextPaymentDate = next;
@@ -376,7 +465,8 @@ export class SubscriptionsService implements OnModuleInit {
 
   @Cron('0 0 * * *')
   async dailyNextPaymentUpdate(): Promise<void> {
-    this.logger.log('Running daily nextPaymentDate update');
-    await this.recalculateNextPaymentDates();
+    await runCronHandler('dailyNextPaymentUpdate', this.logger, this.tg, async () => {
+      await this.recalculateNextPaymentDates();
+    });
   }
 }

@@ -5,6 +5,7 @@ AI-powered subscription management backend built with NestJS.
 ## Documentation
 
 See `docs/` folder for full product specification:
+- [Architecture](docs/ARCHITECTURE.md) — system diagram, components, deployment topology
 - [Product Overview](docs/PRODUCT_OVERVIEW.md) — vision, principles, monetization, MVP criteria
 - [Domain Model](docs/DOMAIN_MODEL.md) — entities, enums, status lifecycle
 - [API Contracts](docs/API_CONTRACTS.md) — all endpoints with examples
@@ -14,6 +15,9 @@ See `docs/` folder for full product specification:
 - [Module Boundaries](docs/MODULE_BOUNDARIES.md) — NestJS module responsibilities
 - [Jobs and Crons](docs/JOBS_AND_CRONS.md) — background tasks
 - [AI Pipelines](docs/AI_PIPELINES.md) — text/screenshot/matcher/insights/audit pipelines
+- [Runbook](docs/RUNBOOK.md) — incident response procedures
+- [Feature Flags](docs/FEATURE_FLAGS.md) — toggle strategy & roadmap
+- [Status Page](docs/STATUS_PAGE.md) — uptime monitoring plan
 
 ## Stack
 
@@ -226,3 +230,111 @@ docker ps
 - **Grafana:** `https://grafana.steptogoal.io` (admin/Admin123!)
 - **Telegram alerts:** `@StepToGoalAlertbot` — runtime errors auto-reported
 - **Auto-restart:** error-monitor restarts container on 5xx errors (5 min debounce)
+- **Uptime:** see [docs/STATUS_PAGE.md](docs/STATUS_PAGE.md) for Better Uptime setup plan
+
+---
+
+## Environment setup
+
+See [docs/ENVIRONMENT_SETUP.md](docs/ENVIRONMENT_SETUP.md) for complete environment variable reference (database, Redis, OAuth, RevenueCat, Lemon Squeezy, OpenAI, FCM, Resend, DO Spaces).
+
+Copy template:
+```bash
+cp .env.example .env
+```
+
+Each variable is documented in `.env.example` with format, example, and whether it is required.
+
+---
+
+## Demo account for App Store review
+
+Apple / Play reviewers use a gated demo account that bypasses OTP. The account is guarded by the backend flag `ENABLE_REVIEW_ACCOUNT=true` (only enabled on prod).
+
+| Field | Value |
+|-------|-------|
+| Email | `review@subradar.ai` |
+| Magic-link code | `000000` |
+| Plan | Pro (full access) |
+
+Test flow for reviewers:
+1. Open app → tap "Continue with Email" → enter `review@subradar.ai`
+2. Enter code `000000`
+3. Dashboard loads with seeded subscriptions → add one more → open Analytics
+
+**Rotation:** if leaked, change `REVIEW_ACCOUNT_CODE` env var and redeploy. Account data is refreshed by the `review-account-refresh` cron each midnight.
+
+---
+
+## Backup & recovery
+
+**Database:**
+- Managed PostgreSQL on DigitalOcean — **7-day automated backups** (daily snapshots, point-in-time recovery).
+- Restore via DO console → Databases → `subradar-prod-db` → Backups → Restore.
+- Logical backups (pg_dump) are not configured; rely on DO snapshots.
+
+**Object storage (receipts, PDFs):**
+- DO Spaces has versioning enabled on the `subradar-receipts` bucket.
+- Lifecycle rule retains non-current versions 30 days.
+
+**Redis:**
+- Ephemeral. Jobs are re-enqueued on container restart. No backups needed.
+
+**Config / secrets:**
+- `.env.prod` lives on the droplet (`/opt/subradar/.env.prod`). Copy offline to a password manager quarterly.
+
+**Recovery drill:** once per quarter — restore staging from prod backup to verify procedure works.
+
+---
+
+## Rollback procedure
+
+### Backend rollback
+
+Option A — revert commit (preferred):
+```bash
+git revert <bad-commit-sha>
+git push origin main
+# CI redeploys automatically
+```
+
+Option B — re-deploy previous image (emergency, faster):
+```bash
+ssh -i ~/.ssh/id_steptogoal root@46.101.197.19
+cd /opt/subradar
+
+# List recent images
+docker images ghcr.io/timurzharlykpaev/subradar-backend
+
+# Pin compose to previous tag
+sed -i 's|subradar-backend:latest|subradar-backend:<previous-sha>|' docker-compose.yml
+docker compose up -d --force-recreate --no-deps subradar-api-prod
+```
+
+Option C — revert DB migration:
+```bash
+docker exec subradar-api-prod npm run migration:revert
+```
+
+### Mobile rollback
+
+**OTA (immediate, JS-only changes):**
+```bash
+# List recent updates
+eas update:list --branch production
+
+# Roll back to a previous update (publishes a new "revert" update)
+eas update --branch production --republish --group <previous-group-id>
+```
+
+**Native rollback (requires TestFlight resubmit):**
+```bash
+# List finished builds
+eas build:list --platform ios --status finished
+
+# Submit an older build to App Store Connect
+eas submit --platform ios --id <older-build-id>
+# Promote that build via App Store Connect → Ready for Sale
+```
+
+> Note: once a build is live in the App Store, full rollback requires a new submission. OTA is the fast path for anything that doesn't touch native code.

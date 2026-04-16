@@ -119,6 +119,12 @@ export class User {
   @Column({ type: 'boolean', default: true })
   weeklyDigestEnabled: boolean;
 
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  weeklyDigestSentAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  refreshTokenIssuedAt: Date | null;
+
   @OneToMany(() => Subscription, (s) => s.user)
   subscriptions: Subscription[];
 

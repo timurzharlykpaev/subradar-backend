@@ -328,21 +328,44 @@ export class AnalyticsService {
     });
   }
 
-  async getForecast(userId: string) {
-    const subscriptions = await this.subRepo.find({
-      where: { userId, status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]) },
-    });
-
-    const monthlyTotal = subscriptions.reduce(
-      (sum, s) => sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
-      0,
+  async getForecast(
+    userId: string,
+    displayCurrencyOverride?: string | null,
+  ) {
+    const displayCurrency = await this.resolveDisplayCurrency(
+      userId,
+      displayCurrencyOverride,
     );
+    const [subscriptions, fx] = await Promise.all([
+      this.subRepo.find({
+        where: {
+          userId,
+          status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]),
+        },
+      }),
+      this.fx.getRates(),
+    ]);
+
+    const monthlyTotal = subscriptions.reduce((sum, s) => {
+      const monthly = this.toMonthlyAmount(Number(s.amount), s.billingPeriod);
+      return (
+        sum +
+        this.convertAmount(
+          monthly,
+          s.originalCurrency || s.currency,
+          displayCurrency,
+          fx.rates,
+        )
+      );
+    }, 0);
 
     return {
       forecast30d: Math.round(monthlyTotal * 100) / 100,
       forecast6mo: Math.round(monthlyTotal * 6 * 100) / 100,
       forecast12mo: Math.round(monthlyTotal * 12 * 100) / 100,
-      currency: 'USD',
+      currency: displayCurrency,
+      displayCurrency,
+      fxFetchedAt: fx.fetchedAt,
     };
   }
 
@@ -408,18 +431,41 @@ export class AnalyticsService {
     };
   }
 
-  async getByCard(userId: string) {
-    const cards = await this.cardRepo.find({ where: { userId } });
-    const subs = await this.subRepo.find({ where: { userId } });
+  async getByCard(
+    userId: string,
+    displayCurrencyOverride?: string | null,
+  ) {
+    const displayCurrency = await this.resolveDisplayCurrency(
+      userId,
+      displayCurrencyOverride,
+    );
+    const [cards, subs, fx] = await Promise.all([
+      this.cardRepo.find({ where: { userId } }),
+      this.subRepo.find({ where: { userId } }),
+      this.fx.getRates(),
+    ]);
     const active = subs.filter(
       (s) =>
         s.status === SubscriptionStatus.ACTIVE ||
         s.status === SubscriptionStatus.TRIAL,
     );
 
+    const monthlyIn = (s: Subscription) => {
+      const amountMonthly = this.toMonthlyAmount(
+        Number(s.amount),
+        s.billingPeriod,
+      );
+      return this.convertAmount(
+        amountMonthly,
+        s.originalCurrency || s.currency,
+        displayCurrency,
+        fx.rates,
+      );
+    };
+
     const unassigned = active.filter((s) => !s.paymentCardId);
     const unassignedTotal = unassigned.reduce(
-      (sum, s) => sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
+      (sum, s) => sum + monthlyIn(s),
       0,
     );
 
@@ -433,13 +479,10 @@ export class AnalyticsService {
       };
       subscriptions: number;
       total: number;
+      displayCurrency: string;
     }> = cards.map((card) => {
       const cardSubs = active.filter((s) => s.paymentCardId === card.id);
-      const total = cardSubs.reduce(
-        (sum, s) =>
-          sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
-        0,
-      );
+      const total = cardSubs.reduce((sum, s) => sum + monthlyIn(s), 0);
       return {
         card: {
           id: card.id as string | null,
@@ -450,6 +493,7 @@ export class AnalyticsService {
         },
         subscriptions: cardSubs.length,
         total: Math.round(total * 100) / 100,
+        displayCurrency,
       };
     });
 
@@ -464,6 +508,7 @@ export class AnalyticsService {
         },
         subscriptions: unassigned.length,
         total: Math.round(unassignedTotal * 100) / 100,
+        displayCurrency,
       });
     }
 

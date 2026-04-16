@@ -6,6 +6,8 @@ import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subs
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { buildMonthlyReportHtml } from '../notifications/email-templates';
+import { TelegramAlertService } from '../common/telegram-alert.service';
+import { runCronHandler } from '../common/cron/run-cron-handler';
 
 @Injectable()
 export class MonthlyReportService {
@@ -17,11 +19,18 @@ export class MonthlyReportService {
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     private readonly notifications: NotificationsService,
+    private readonly tg: TelegramAlertService,
   ) {}
 
   /** Runs on the 1st of every month at 10:00 */
   @Cron('0 10 1 * *')
   async sendMonthlyReports() {
+    return runCronHandler('sendMonthlyReports', this.logger, this.tg, () =>
+      this.sendMonthlyReportsImpl(),
+    );
+  }
+
+  private async sendMonthlyReportsImpl() {
     this.logger.log('Monthly report job started');
 
     const now = new Date();

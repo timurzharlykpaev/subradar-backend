@@ -1,4 +1,11 @@
-import { Injectable, Inject, Logger, ForbiddenException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  Logger,
+  ForbiddenException,
+  ConflictException,
+  forwardRef,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Repository, In } from 'typeorm';
@@ -11,6 +18,7 @@ import { AnalysisResult } from './entities/analysis-result.entity';
 import { AnalysisUsage } from './entities/analysis-usage.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
+import { BillingService } from '../billing/billing.service';
 import {
   ANALYSIS_LIMITS,
   ANALYSIS_QUEUE,
@@ -37,6 +45,8 @@ export class AnalysisService {
     private readonly redis: Redis,
     @InjectQueue(ANALYSIS_QUEUE)
     private readonly analysisQueue: Queue,
+    @Inject(forwardRef(() => BillingService))
+    private readonly billingService: BillingService,
   ) {}
 
   /**
@@ -285,18 +295,29 @@ export class AnalysisService {
 
   /**
    * Compute SHA-256 hash of user's subscription data for dedup.
+   *
+   * displayCurrency is included so changing preferred currency forces fresh
+   * analysis (totals, optimisation suggestions and AI explanations are rendered
+   * in that currency).
    */
   async computeInputHash(userId: string, workspaceId?: string, locale?: string): Promise<string> {
-    const subscriptions = await this.subscriptionRepo.find({
-      where: { userId, status: In(['ACTIVE', 'TRIAL'] as any) },
-      order: { id: 'ASC' },
-      select: ['id', 'name', 'amount', 'currency', 'billingPeriod', 'status'],
-    });
+    const [subscriptions, user] = await Promise.all([
+      this.subscriptionRepo.find({
+        where: { userId, status: In(['ACTIVE', 'TRIAL'] as any) },
+        order: { id: 'ASC' },
+        select: ['id', 'name', 'amount', 'currency', 'billingPeriod', 'status'],
+      }),
+      this.userRepo.findOne({
+        where: { id: userId },
+        select: ['id', 'displayCurrency'],
+      }),
+    ]);
 
     const payload = JSON.stringify({
       userId,
       workspaceId: workspaceId ?? null,
       locale: locale ?? 'en',
+      displayCurrency: (user?.displayCurrency || 'USD').toUpperCase(),
       subscriptions: subscriptions.map((s) => ({
         id: s.id,
         name: s.name,
@@ -367,18 +388,17 @@ export class AnalysisService {
 
   /**
    * Map user.plan string to AnalysisPlan or null (free users).
+   *
+   * Delegates trial / cancel-at-period-end handling to
+   * `BillingService.getEffectivePlan`, so users with plan='pro' in the DB
+   * but an expired trial or lapsed subscription are correctly treated as
+   * free.
    */
   getUserPlan(user: User): AnalysisPlan | null {
-    const planLower = (user.plan || 'free').toLowerCase();
-
-    if (planLower === 'pro') return 'pro';
-    if (planLower === 'organization' || planLower === 'team') return 'team';
-
-    // Check if user is in active trial
-    if (user.trialEndDate && new Date(user.trialEndDate) > new Date()) {
-      return 'pro';
-    }
-
+    if (!user) return null;
+    const effective = (this.billingService.getEffectivePlan(user) || 'free').toLowerCase();
+    if (effective === 'pro') return 'pro';
+    if (effective === 'organization' || effective === 'team') return 'team';
     return null;
   }
 

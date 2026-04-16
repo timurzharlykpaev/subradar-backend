@@ -26,6 +26,7 @@ import {
 } from './dto/auth.dto';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { EmailThrottlerGuard } from './guards/email-throttler.guard';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -35,12 +36,16 @@ export class AuthController {
     private readonly usersService: UsersService,
   ) {}
 
+  // Per-email limits (5 per 15 min) — see EmailThrottlerGuard.
+  @UseGuards(EmailThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('register')
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
+  // Credential-stuffing protection: 5 failed attempts per email per 15 min.
+  @UseGuards(EmailThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('login')
   login(@Body() dto: LoginDto) {
@@ -80,18 +85,25 @@ export class AuthController {
     return this.authService.appleLogin(dto);
   }
 
+  // OTP send throttled per-email to prevent SMS/email bombing a single user.
+  @UseGuards(EmailThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('otp/send')
   sendOtp(@Body() dto: OtpSendDto) {
     return this.authService.sendOtp(dto);
   }
 
+  // OTP verify throttled per-email to prevent code-guessing (10^6 space for
+  // a 6-digit code is insufficient without rate limiting).
+  @UseGuards(EmailThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('otp/verify')
   verifyOtp(@Body() dto: OtpVerifyDto) {
     return this.authService.verifyOtp(dto);
   }
 
+  // Magic-link request per-email — matches the 5-per-15-min budget of OTP.
+  @UseGuards(EmailThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('magic-link')
   sendMagicLink(@Body() dto: MagicLinkDto) {

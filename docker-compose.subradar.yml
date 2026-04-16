@@ -7,6 +7,28 @@ services:
       dockerfile: Dockerfile
     container_name: subradar-api
     restart: unless-stopped
+    # Resource caps keep a runaway container from starving the host (host also
+    # runs Postgres, Redis, and possibly other compose services). Reservations
+    # guarantee baseline capacity so we don't get OOM-killed under normal load.
+    # `deploy.resources` works under `docker compose up` too, despite being a
+    # Swarm-era key.
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.5"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+    # Container-level healthcheck. Orchestrators (and `docker ps`) use this to
+    # mark the container unhealthy when the API can't reach Postgres/Redis —
+    # `unless-stopped` + unhealthy state triggers our monitoring alerts.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     ports:
       - "3000:3000"
     environment:

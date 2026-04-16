@@ -97,8 +97,11 @@ export class AnalyticsController {
   }
 
   @Get('by-card')
-  byCard(@Request() req) {
-    return this.service.getByCard(req.user.id);
+  byCard(
+    @Request() req,
+    @Query('displayCurrency') displayCurrency?: string,
+  ) {
+    return this.service.getByCard(req.user.id, displayCurrency);
   }
 
   @Get('trials')
@@ -107,8 +110,11 @@ export class AnalyticsController {
   }
 
   @Get('forecast')
-  async forecast(@Request() req) {
-    return this.service.getForecast(req.user.id);
+  async forecast(
+    @Request() req,
+    @Query('displayCurrency') displayCurrency?: string,
+  ) {
+    return this.service.getForecast(req.user.id, displayCurrency);
   }
 
   @Get('savings')

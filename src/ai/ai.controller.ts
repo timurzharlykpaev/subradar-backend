@@ -209,7 +209,9 @@ export class AiController {
   }
 
   @Post('suggest-cancel')
-  suggestCancel(@Body() dto: SuggestCancelDto) {
+  @UseGuards(JwtAuthGuard)
+  async suggestCancel(@Request() req, @Body() dto: SuggestCancelDto) {
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.suggestCancelUrl(dto.serviceName);
   }
 

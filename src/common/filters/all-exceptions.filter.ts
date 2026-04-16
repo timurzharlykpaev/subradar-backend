@@ -22,10 +22,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
-    const request = ctx.getRequest<Request>();
+    const request = ctx.getRequest<Request & { correlationId?: string }>();
+    const isProd = process.env.NODE_ENV === 'production';
+    const correlationId = request.correlationId;
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | object = 'Internal server error';
+    const rawStack: string | undefined = (exception as any)?.stack;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -35,33 +38,49 @@ export class AllExceptionsFilter implements ExceptionFilter {
           ? (exceptionResponse as any).message || exceptionResponse
           : exceptionResponse;
     } else {
+      // Always log the full stack server-side — we still need it for debugging.
+      const cidTag = correlationId ? ` [cid=${correlationId}]` : '';
       this.logger.error(
-        `Unhandled exception on ${request.method} ${request.url}: ${(exception as any)?.message || exception}`,
-        (exception as any)?.stack,
+        `Unhandled exception on ${request.method} ${request.url}${cidTag}: ${(exception as any)?.message || exception}`,
+        rawStack,
       );
-      message = (exception as any)?.message || 'Internal server error';
+      // In production, return a generic message to prevent info leakage via
+      // unhandled-exception messages (which can include stack-trace-like detail).
+      message = isProd
+        ? 'Internal server error'
+        : (exception as any)?.message || 'Internal server error';
     }
 
     // Alert on 5xx errors (skip health/silent paths)
     const isSilent = SILENT_PATHS.some((p) => request.url.startsWith(p));
     if (status >= 500 && !isSilent && this.tg) {
       const errMsg = typeof message === 'string' ? message : JSON.stringify(message);
-      const stack = (exception as any)?.stack?.slice(0, 600) ?? '';
+      const stack = rawStack?.slice(0, 600) ?? '';
       const tgText =
         `🔴 <b>Server Error 5xx [PROD]</b>\n` +
         `<code>${request.method} ${request.url}</code>\n` +
         `Status: <code>${status}</code>\n` +
+        (correlationId ? `CID: <code>${correlationId}</code>\n` : '') +
         `\n<b>${errMsg}</b>` +
         (stack ? `\n\n<code>${stack}</code>` : '');
       this.tg.send(tgText, `${status}:${request.method}:${request.url}`).catch(() => {});
     }
 
-    response.status(status).json({
+    const body: Record<string, unknown> = {
       success: false,
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,
       message,
-    });
+      ...(correlationId ? { correlationId } : {}),
+    };
+
+    // Only expose the stack in non-production — never leak server internals to
+    // clients in prod. Stack is already logged and sent to Telegram above.
+    if (!isProd && rawStack) {
+      body.stack = rawStack;
+    }
+
+    response.status(status).json(body);
   }
 }

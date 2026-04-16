@@ -9,6 +9,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
+      // Pin algorithm to HS256 — prevents algorithm-confusion attacks where an
+      // attacker swaps the header alg to "none" or an asymmetric algorithm.
+      algorithms: ['HS256'],
       secretOrKey: (() => {
         const secret = cfg.get('JWT_ACCESS_SECRET') || cfg.get('JWT_SECRET');
         if (!secret) throw new Error('JWT_ACCESS_SECRET env var is required');

@@ -1,5 +1,6 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { AppController } from './app.controller';
 import { ClientErrorController } from './common/client-error.controller';
 import { TelegramAlertService } from './common/telegram-alert.service';
@@ -25,6 +26,8 @@ import { RedisModule } from './common/redis.module';
 import { AnalysisModule } from './analysis/analysis.module';
 import { FxModule } from './fx/fx.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { HealthModule } from './health/health.module';
+import { AuditModule } from './common/audit/audit.module';
 
 @Module({
   controllers: [AppController, ClientErrorController],
@@ -60,9 +63,40 @@ import { CatalogModule } from './catalog/catalog.module';
           // nullable-then-backfill-then-NOT-NULL dance explicitly.
           synchronize: false,
           migrations: [__dirname + '/migrations/*.{ts,js}'],
+          // MIGRATION STRATEGY (tracked for future hardening):
+          //   `migrationsRun: true` runs pending migrations on every app boot.
+          //   Pros: zero-ops, every replica rolls itself forward.
+          //   Cons: with multiple replicas the first to boot races to acquire
+          //     the TypeORM migrations lock; others block until it finishes. A
+          //     long/failing migration can stall the whole fleet.
+          //   TODO (safer): move to an explicit `typeorm migration:run` step in
+          //     the deploy pipeline (single invocation, fails the deploy
+          //     cleanly) and set this to `false`. Left as-is for now to avoid
+          //     breaking existing DO App Platform deploys that rely on boot-
+          //     time migrations.
           migrationsRun: true,
           logging: false,
+          // DigitalOcean managed Postgres terminates TLS with its own CA; the
+          // cert chain isn't in Node's default trust store, so strict
+          // verification fails. rejectUnauthorized:false still negotiates TLS
+          // and encrypts the connection — we only skip CA chain verification.
+          // This is acceptable because:
+          //   1. Network path to DO managed DB is private (VPC peering or
+          //      IP allow-list on DO side).
+          //   2. TLS itself (encryption + server identity via cert) still works.
+          //   3. Pinning DO's CA would need per-region cert bundles + rotation.
+          // If/when we need stricter posture, download DO's CA and set
+          // `ssl: { ca: fs.readFileSync(...), rejectUnauthorized: true }`.
           ssl: isProd ? { rejectUnauthorized: false } : undefined,
+          // pg driver pool tuning. Defaults (max:10) are too low for bursts
+          // (AI endpoints hold a connection while awaiting OpenAI). Keeping
+          // min:5 warm avoids cold-start spikes under traffic.
+          extra: {
+            max: 20,
+            min: 5,
+            idleTimeoutMillis: 30_000,
+            connectionTimeoutMillis: 5_000,
+          },
         } as any;
       },
       inject: [ConfigService],
@@ -101,6 +135,8 @@ import { CatalogModule } from './catalog/catalog.module';
     AnalysisModule,
     FxModule,
     CatalogModule,
+    HealthModule,
+    AuditModule,
     ScheduleModule.forRoot(),
   ],
   providers: [
@@ -109,4 +145,9 @@ import { CatalogModule } from './catalog/catalog.module';
   ],
   exports: [TelegramAlertService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    // Attach correlation ID to every request (early, before route handlers).
+    consumer.apply(CorrelationIdMiddleware).forRoutes('*');
+  }
+}

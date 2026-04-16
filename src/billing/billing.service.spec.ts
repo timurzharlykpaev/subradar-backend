@@ -1,11 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
 import { Workspace } from '../workspace/entities/workspace.entity';
 import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
+import { WebhookEvent } from './entities/webhook-event.entity';
+import { TelegramAlertService } from '../common/telegram-alert.service';
 
 const mockUsersService = {
   findById: jest.fn(), findByEmail: jest.fn(), update: jest.fn(), save: jest.fn(),
@@ -25,6 +27,24 @@ const mockWorkspaceMemberRepo = {
   find: jest.fn().mockResolvedValue([]),
 };
 
+const mockWebhookEventRepo = {
+  insert: jest.fn().mockResolvedValue(undefined),
+  delete: jest.fn().mockResolvedValue(undefined),
+};
+
+const mockDataSource = {
+  transaction: jest.fn(async (cb: any) =>
+    cb({
+      findOne: jest.fn().mockResolvedValue(null),
+      update: jest.fn().mockResolvedValue(undefined),
+    }),
+  ),
+};
+
+const mockTelegramAlert = {
+  send: jest.fn().mockResolvedValue(true),
+};
+
 const mockUser = {
   id: 'user-1', email: 'test@example.com', plan: 'free', trialUsed: false,
   trialEndDate: null, proInviteeEmail: null, aiRequestsUsed: 0, aiRequestsMonth: null,
@@ -41,6 +61,9 @@ describe('BillingService', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: getRepositoryToken(Workspace), useValue: mockWorkspaceRepo },
         { provide: getRepositoryToken(WorkspaceMember), useValue: mockWorkspaceMemberRepo },
+        { provide: getRepositoryToken(WebhookEvent), useValue: mockWebhookEventRepo },
+        { provide: getDataSourceToken(), useValue: mockDataSource },
+        { provide: TelegramAlertService, useValue: mockTelegramAlert },
       ],
     }).compile();
     service = module.get<BillingService>(BillingService);
@@ -117,7 +140,16 @@ describe('BillingService', () => {
     it('verifies correct HMAC signature', () => {
       const { createHmac } = require('crypto');
       const secret = 'test-secret';
-      const svc = new BillingService({ get: () => secret } as any, mockUsersService as any, mockWorkspaceRepo as any, mockWorkspaceMemberRepo as any);
+      const svc = new BillingService(
+        { get: () => secret } as any,
+        mockUsersService as any,
+        mockWorkspaceRepo as any,
+        mockWorkspaceMemberRepo as any,
+        mockWebhookEventRepo as any,
+        mockDataSource as any,
+        mockTelegramAlert as any,
+        { log: jest.fn() } as any, // AuditService stub
+      );
       const payload = 'test-payload';
       const sig = createHmac('sha256', secret).update(payload).digest('hex');
       expect(svc.verifyWebhookSignature(payload, sig)).toBe(true);

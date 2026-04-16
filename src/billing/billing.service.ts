@@ -4,16 +4,22 @@ import {
   ForbiddenException,
   BadRequestException,
   NotFoundException,
+  ServiceUnavailableException,
+  ConflictException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { UsersService } from '../users/users.service';
+import { AuditService } from '../common/audit/audit.service';
 import { PLANS, PLAN_DETAILS } from './plans.config';
 import { Workspace } from '../workspace/entities/workspace.entity';
 import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
 import { User } from '../users/entities/user.entity';
+import { WebhookEvent } from './entities/webhook-event.entity';
+import { TelegramAlertService } from '../common/telegram-alert.service';
+import { maskEmail } from '../common/utils/pii';
 
 export interface EffectiveAccess {
   plan: 'free' | 'pro' | 'organization';
@@ -43,6 +49,10 @@ export class BillingService {
     private readonly usersService: UsersService,
     @InjectRepository(Workspace) private readonly workspaceRepo: Repository<Workspace>,
     @InjectRepository(WorkspaceMember) private readonly workspaceMemberRepo: Repository<WorkspaceMember>,
+    @InjectRepository(WebhookEvent) private readonly webhookEventRepo: Repository<WebhookEvent>,
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly telegramAlert: TelegramAlertService,
+    private readonly audit: AuditService,
   ) {
     this.webhookSecret = cfg.get('LEMON_SQUEEZY_WEBHOOK_SECRET', '');
     this.apiKey = cfg.get('LEMON_SQUEEZY_API_KEY', '');
@@ -194,7 +204,21 @@ export class BillingService {
       if (m.userId === ownerId) continue;
       const u = await this.usersService.findById(m.userId).catch(() => null);
       if (!u) continue;
-      if (u.billingSource === 'revenuecat' && !u.cancelAtPeriodEnd) continue;
+
+      // Member has their own active RC subscription — they should keep access on
+      // their own paid plan. Organization-tier membership only made sense while the
+      // team workspace was active; since it expired, demote them to personal 'pro'
+      // (they paid individually). No grace period needed — they already pay.
+      if (u.billingSource === 'revenuecat' && !u.cancelAtPeriodEnd) {
+        if (u.plan === 'organization' || u.plan === 'free') {
+          u.plan = 'pro';
+        }
+        u.gracePeriodEnd = null;
+        u.gracePeriodReason = null;
+        await this.usersService.save(u);
+        continue;
+      }
+
       u.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       u.gracePeriodReason = 'team_expired';
       await this.usersService.save(u);
@@ -203,17 +227,49 @@ export class BillingService {
   }
 
   /**
-   * Returns the effective plan considering trial expiry.
-   * Database may have plan='pro' for expired trials — this returns 'free' in that case.
+   * Synchronous, DB-only view of the user's effective plan.
+   *
+   * NOTE: for the full picture (team membership, grace periods) use
+   * `getEffectiveAccess()`. This helper is intentionally fast & sync —
+   * it's safe to call inside guards / feature flags that only care about
+   * the user's own billing state.
+   *
+   * Rules:
+   *   - plan='free'                             → 'free'
+   *   - trial active (trialEndDate > now)       → user.plan
+   *   - trial expired, billingSource='trial'    → 'free'
+   *   - trial expired, no billingSource         → 'free'
+   *   - RC/LS cancelled + currentPeriodEnd < now→ 'free' (grace expired)
+   *   - RC/LS cancelled + currentPeriodEnd > now→ user.plan (still in period)
+   *   - RC/LS active                            → user.plan
    */
   getEffectivePlan(user: any): string {
+    if (!user) return 'free';
     if (user.plan === 'free') return 'free';
-    // If user has RC or LS billing source, trust the plan field
-    if (user.billingSource) return user.plan;
-    // If trialing and trial still active, trust the plan
-    if (user.trialEndDate && new Date(user.trialEndDate) > new Date()) return user.plan;
-    // If trial expired and no billing source — effective plan is free
-    if (user.trialUsed && !user.billingSource) return 'free';
+
+    const now = new Date();
+
+    // Trial path — only valid while trialEndDate is in the future.
+    const trialActive = user.trialEndDate && new Date(user.trialEndDate) > now;
+    if (user.billingSource === 'trial') {
+      return trialActive ? user.plan : 'free';
+    }
+    if (trialActive) {
+      // Legacy trial without explicit billingSource — still honour it.
+      return user.plan;
+    }
+
+    // No paid source and trial already used / absent → back to free.
+    if (!user.billingSource) {
+      return 'free';
+    }
+
+    // Paid subscription — respect cancel-at-period-end.
+    if (user.cancelAtPeriodEnd && user.currentPeriodEnd) {
+      const periodEnd = new Date(user.currentPeriodEnd);
+      if (periodEnd.getTime() <= now.getTime()) return 'free';
+    }
+
     return user.plan;
   }
 
@@ -230,13 +286,127 @@ export class BillingService {
     'com.goalin.subradar.team.yearly': 'organization',
   };
 
+  /**
+   * HMAC-SHA256 compare with timing-safe equal. Accepts an optional fallback
+   * secret (LEMON_SQUEEZY_WEBHOOK_SECRET_V2) so we can rotate the webhook
+   * signing secret without downtime: set V2 to the new secret, redeploy, then
+   * flip the primary and drop V2 when Lemon Squeezy confirms the cutover.
+   */
   verifyWebhookSignature(payload: string, signature: string): boolean {
-    const hmac = createHmac('sha256', this.webhookSecret);
-    const digest = hmac.update(payload).digest('hex');
-    const digestBuf = Buffer.from(digest);
-    const signatureBuf = Buffer.from(signature);
-    if (digestBuf.length !== signatureBuf.length) return false;
-    return timingSafeEqual(digestBuf, signatureBuf);
+    if (!signature) return false;
+    const primary = this.webhookSecret;
+    const secondary = this.cfg.get<string>('LEMON_SQUEEZY_WEBHOOK_SECRET_V2', '');
+
+    const check = (secret: string): boolean => {
+      if (!secret) return false;
+      const digest = createHmac('sha256', secret).update(payload).digest('hex');
+      const digestBuf = Buffer.from(digest);
+      const signatureBuf = Buffer.from(signature);
+      if (digestBuf.length !== signatureBuf.length) return false;
+      return timingSafeEqual(digestBuf, signatureBuf);
+    };
+
+    if (check(primary)) return true;
+    if (secondary && check(secondary)) {
+      this.logger.warn(
+        'Webhook verified with LEMON_SQUEEZY_WEBHOOK_SECRET_V2 — rotate primary when ready',
+      );
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Attempt to claim a webhook event for processing. Returns:
+   *   - `true`  if this is the first time we've seen this (provider, eventId)
+   *   - `false` if the event was already processed (duplicate delivery)
+   *
+   * The unique index on (provider, event_id) is the source of truth — on
+   * UNIQUE-constraint violation the INSERT fails and we know someone else
+   * (or an earlier retry) has already handled this event.
+   */
+  async claimWebhookEvent(provider: string, eventId: string): Promise<boolean> {
+    if (!eventId) {
+      // Without a stable event_id we can't dedupe — just let it through
+      // and rely on downstream idempotency of the individual operations.
+      this.logger.warn(`claimWebhookEvent: missing eventId for provider=${provider}`);
+      return true;
+    }
+    try {
+      await this.webhookEventRepo.insert({ provider, eventId });
+      return true;
+    } catch (err) {
+      const isUniqueViolation =
+        err instanceof QueryFailedError &&
+        ((err as any).code === '23505' ||
+          /duplicate key|unique constraint/i.test(String((err as any).message)));
+      if (isUniqueViolation) {
+        this.logger.log(
+          `claimWebhookEvent: duplicate ${provider} event ${eventId} — skipping`,
+        );
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Send a Telegram alert about a webhook failure and re-throw so the
+   * provider (RC / LS) can retry delivery. `userEmail` is masked before
+   * sending — we don't want full PII in the alert channel.
+   */
+  private async alertWebhookFailure(
+    provider: 'revenuecat' | 'lemon_squeezy',
+    eventType: string,
+    userEmail: string | undefined,
+    err: unknown,
+  ): Promise<void> {
+    const msg = err instanceof Error ? err.message : String(err);
+    const text =
+      `[billing-webhook] <b>${provider}</b> failure\n` +
+      `event: <code>${eventType || 'unknown'}</code>\n` +
+      `user:  <code>${maskEmail(userEmail ?? '')}</code>\n` +
+      `error: <code>${msg.slice(0, 500)}</code>`;
+    try {
+      await this.telegramAlert.send(text, `webhook:${provider}:${eventType}:${msg.slice(0, 80)}`);
+    } catch (alertErr) {
+      this.logger.warn(`alertWebhookFailure: telegram send failed: ${alertErr}`);
+    }
+  }
+
+  /**
+   * Entry point for Lemon Squeezy webhooks. The controller passes the full
+   * parsed body so we can:
+   *   1. Dedupe via `body.meta.webhook_id`
+   *   2. Extract event name from `body.meta.event_name`
+   *   3. Alert Telegram on failure and re-throw (so LS retries)
+   */
+  async handleLemonSqueezyWebhook(body: any): Promise<void> {
+    const event: string = body?.meta?.event_name ?? '';
+    const data = body?.data;
+    const eventId: string =
+      body?.meta?.webhook_id ||
+      body?.meta?.event_id ||
+      (data?.id && event ? `${event}:${data.id}:${data?.attributes?.updated_at ?? ''}` : '');
+
+    const email: string | undefined = data?.attributes?.user_email;
+
+    const claimed = await this.claimWebhookEvent('lemon_squeezy', eventId);
+    if (!claimed) return;
+
+    try {
+      await this.handleWebhook(event, data);
+    } catch (err) {
+      this.logger.error(
+        `Lemon Squeezy webhook ${event} failed: ${err instanceof Error ? err.stack : err}`,
+      );
+      // Roll back the idempotency record so LS retries on the next delivery.
+      await this.webhookEventRepo
+        .delete({ provider: 'lemon_squeezy', eventId })
+        .catch(() => undefined);
+      await this.alertWebhookFailure('lemon_squeezy', event, email, err);
+      throw err;
+    }
   }
 
   async handleWebhook(event: string, data: any) {
@@ -272,8 +442,24 @@ export class BillingService {
               lemonSqueezyCustomerId: String(customerId),
               billingSource: 'lemon_squeezy',
             };
-            this.logger.log(`Webhook upgrade: email=${email} variantId=${variantId} isTeam=${isTeam} plan=${updates.plan} period=${updates.billingPeriod} status=${status}`);
+            this.logger.log(`Webhook upgrade: email=${maskEmail(email)} variantId=${variantId} isTeam=${isTeam} plan=${updates.plan} period=${updates.billingPeriod} status=${status}`);
+            const previousPlan = user.plan;
             await this.usersService.update(user.id, updates);
+            await this.audit.log({
+              userId: user.id,
+              action: 'billing.webhook.plan_change',
+              resourceType: 'user',
+              resourceId: user.id,
+              metadata: {
+                provider: 'lemon_squeezy',
+                event,
+                previousPlan,
+                nextPlan: updates.plan,
+                billingPeriod: updates.billingPeriod,
+                variantId,
+                lemonSqueezyStatus: status,
+              },
+            });
           }
         }
         break;
@@ -283,13 +469,22 @@ export class BillingService {
         if (email) {
           const user = await this.usersService.findByEmail(email);
           if (user) {
+            const previousPlan = user.plan;
             await this.usersService.update(user.id, { plan: 'free' });
+            await this.audit.log({
+              userId: user.id,
+              action: 'billing.webhook.plan_change',
+              resourceType: 'user',
+              resourceId: user.id,
+              metadata: {
+                provider: 'lemon_squeezy',
+                event,
+                previousPlan,
+                nextPlan: 'free',
+              },
+            });
             if (user.proInviteeEmail) {
-              const invitee = await this.usersService.findByEmail(user.proInviteeEmail);
-              // Only downgrade invitee if they don't have their own paid subscription
-              if (invitee && !invitee.billingSource) {
-                await this.usersService.update(invitee.id, { plan: 'free' });
-              }
+              await this.downgradeInviteeIfEligible(user.proInviteeEmail);
               await this.usersService.update(user.id, { proInviteeEmail: undefined as any });
             }
           }
@@ -311,10 +506,18 @@ export class BillingService {
     const appUserId: string = event.app_user_id;
     const productId: string = event.product_id;
 
+    // RC provides a stable `event.id` on every delivery.
+    const eventId: string =
+      event.id ||
+      (type && appUserId ? `${type}:${appUserId}:${event.event_timestamp_ms ?? ''}` : '');
+
     if (!appUserId || appUserId.startsWith('$RCAnonymousID')) {
       this.logger.warn(`RevenueCat webhook: anonymous user, type: ${type}`);
       return;
     }
+
+    const claimed = await this.claimWebhookEvent('revenuecat', eventId);
+    if (!claimed) return;
 
     const user = await this.usersService.findById(appUserId).catch(() => null);
     if (!user) {
@@ -322,12 +525,35 @@ export class BillingService {
       return;
     }
 
+    try {
+      await this.processRevenueCatEvent(type, event, user, productId);
+    } catch (err) {
+      this.logger.error(
+        `RevenueCat webhook ${type} failed: ${err instanceof Error ? err.stack : err}`,
+      );
+      // Roll back idempotency record so RC retries on the next delivery.
+      await this.webhookEventRepo
+        .delete({ provider: 'revenuecat', eventId })
+        .catch(() => undefined);
+      await this.alertWebhookFailure('revenuecat', type, user.email, err);
+      throw err;
+    }
+  }
+
+  private async processRevenueCatEvent(
+    type: string,
+    event: any,
+    user: User,
+    productId: string,
+  ): Promise<void> {
+    const appUserId = user.id;
     switch (type) {
       case 'INITIAL_PURCHASE':
       case 'RENEWAL':
       case 'PRODUCT_CHANGE': {
         const plan = this.RC_PRODUCT_TO_PLAN[productId] || 'pro';
         const billingPeriod = this.extractBillingPeriod(productId);
+        const previousPlan = user.plan;
         user.plan = plan;
         user.billingPeriod = billingPeriod;
         user.billingSource = 'revenuecat';
@@ -344,6 +570,20 @@ export class BillingService {
           await this.workspaceRepo.save(ownedWs);
         }
         this.logger.log(`RevenueCat: ${type} — user ${appUserId} → plan ${plan} (${billingPeriod})`);
+        await this.audit.log({
+          userId: user.id,
+          action: 'billing.webhook.plan_change',
+          resourceType: 'user',
+          resourceId: user.id,
+          metadata: {
+            provider: 'revenuecat',
+            event: type,
+            productId,
+            previousPlan,
+            nextPlan: plan,
+            billingPeriod,
+          },
+        });
         break;
       }
       case 'CANCELLATION': {
@@ -361,6 +601,7 @@ export class BillingService {
         break;
       }
       case 'EXPIRATION': {
+        const previousPlan = user.plan;
         user.plan = 'free';
         user.billingPeriod = null;
         user.downgradedAt = new Date();
@@ -372,6 +613,19 @@ export class BillingService {
         user.gracePeriodReason = 'pro_expired';
         await this.usersService.save(user);
         this.logger.log(`RevenueCat: EXPIRATION — user ${appUserId} → free, grace 7d`);
+        await this.audit.log({
+          userId: user.id,
+          action: 'billing.webhook.plan_change',
+          resourceType: 'user',
+          resourceId: user.id,
+          metadata: {
+            provider: 'revenuecat',
+            event: 'EXPIRATION',
+            previousPlan,
+            nextPlan: 'free',
+            gracePeriodReason: 'pro_expired',
+          },
+        });
         await this.handleTeamOwnerExpiration(user.id);
         break;
       }
@@ -423,7 +677,7 @@ export class BillingService {
 
   async createCheckout(userId: string, planIdOrVariantId: string, email: string, billing: 'monthly' | 'yearly' = 'monthly') {
     const variantId = this.resolveVariantId(planIdOrVariantId, billing);
-    this.logger.log(`Creating checkout: plan=${planIdOrVariantId} variantId=${variantId} billing=${billing} email=${email}`);
+    this.logger.log(`Creating checkout: plan=${planIdOrVariantId} variantId=${variantId} billing=${billing} email=${maskEmail(email)}`);
 
     let response: Response;
     try {
@@ -522,12 +776,29 @@ export class BillingService {
     if (!owner.proInviteeEmail) {
       throw new BadRequestException('No active invite to remove');
     }
-    const invitee = await this.usersService.findByEmail(owner.proInviteeEmail);
-    // Only downgrade invitee if they don't have their own paid subscription
-    if (invitee && !invitee.billingSource) {
-      await this.usersService.update(invitee.id, { plan: 'free' });
-    }
+    await this.downgradeInviteeIfEligible(owner.proInviteeEmail);
     await this.usersService.update(ownerId, { proInviteeEmail: undefined as any });
+  }
+
+  /**
+   * Downgrade an invitee to free — only if they don't have their own paid
+   * subscription. Uses a pessimistic lock so concurrent writes (e.g. owner
+   * cancels while invitee is mid-checkout) can't race into an inconsistent
+   * state where we clobber a freshly-purchased billingSource.
+   */
+  private async downgradeInviteeIfEligible(inviteeEmail: string): Promise<void> {
+    await this.dataSource.transaction(async (em) => {
+      const freshInvitee = await em.findOne(User, {
+        where: { email: inviteeEmail },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!freshInvitee) return;
+      // If the invitee now has their own paid subscription we must NOT
+      // reset them to free — their plan is theirs.
+      if (freshInvitee.billingSource) return;
+      if (freshInvitee.plan === 'free') return;
+      await em.update(User, freshInvitee.id, { plan: 'free' });
+    });
   }
 
   private getCurrentMonth(): string {
@@ -538,6 +809,9 @@ export class BillingService {
   async consumeAiRequest(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
     const currentMonth = this.getCurrentMonth();
+    // getEffectiveAccess already incorporates team membership, grace
+    // periods AND trial expiry — no need to call getEffectivePlan here,
+    // but double-check the access plan isn't somehow stale.
     const effective = await this.getEffectiveAccess(user);
     const effectivePlan = effective.plan;
     const planConfig = PLANS[effectivePlan] ?? PLANS.free;
@@ -558,37 +832,24 @@ export class BillingService {
   }
 
   async syncRevenueCat(userId: string, productId: string): Promise<void> {
-    // Verify the user actually has an active entitlement via RevenueCat REST API
-    const rcApiKey = this.cfg.get('REVENUECAT_API_KEY', '');
+    // MANDATORY server-side verification — never trust the client.
+    // Without the REST API key we cannot confirm the entitlement, so we
+    // refuse the sync (503) rather than upgrading blindly. This protects
+    // us from trivial curl-based plan forgery.
+    const rcApiKey =
+      this.cfg.get<string>('REVENUECAT_API_KEY_SECRET', '') ||
+      this.cfg.get<string>('REVENUECAT_API_KEY', '');
     if (!rcApiKey) {
-      this.logger.warn('syncRevenueCat: REVENUECAT_API_KEY not set — skipping server-side verification');
-    }
-    if (rcApiKey) {
-      try {
-        const res = await fetch(
-          `https://api.revenuecat.com/v1/subscribers/${userId}`,
-          { headers: { Authorization: `Bearer ${rcApiKey}` } },
-        );
-        if (res.ok) {
-          const data = (await res.json()) as any;
-          const entitlements = data?.subscriber?.entitlements ?? {};
-          const hasActive = Object.values(entitlements).some(
-            (e: any) => e.expires_date === null || new Date(e.expires_date) > new Date(),
-          );
-          if (!hasActive) {
-            this.logger.warn(`syncRevenueCat: user ${userId} has no active RC entitlement — rejecting sync`);
-            return;
-          }
-        }
-      } catch (e) {
-        // If RC API is down, fall through to trust the client (better UX than blocking purchase)
-        this.logger.warn(`syncRevenueCat: RC API check failed, proceeding with client data: ${e}`);
-      }
+      this.logger.error(
+        'syncRevenueCat: REVENUECAT_API_KEY_SECRET not set — refusing to sync without server-side verification',
+      );
+      throw new ServiceUnavailableException(
+        'Billing verification is temporarily unavailable. Please try again later.',
+      );
     }
 
-    // Try exact match first, then partial match for flexibility
+    // Resolve plan and billing period from productId first (still validated below against RC entitlements).
     let plan = this.RC_PRODUCT_TO_PLAN[productId];
-
     if (!plan) {
       const lower = productId.toLowerCase();
       if (lower.includes('team') || lower.includes('org')) {
@@ -600,17 +861,87 @@ export class BillingService {
         plan = 'pro';
       }
     }
-
     const billingPeriod = this.extractBillingPeriod(productId);
+
+    // Call RevenueCat REST API to confirm the user actually has an active
+    // entitlement. Docs: https://www.revenuecat.com/docs/service/api-reference
+    let rcRes: Response;
+    try {
+      rcRes = await fetch(
+        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${rcApiKey}`,
+            Accept: 'application/json',
+          },
+        },
+      );
+    } catch (e) {
+      this.logger.error(`syncRevenueCat: RC API fetch failed: ${e}`);
+      throw new ServiceUnavailableException(
+        'Billing verification is temporarily unavailable. Please try again later.',
+      );
+    }
+
+    if (!rcRes.ok) {
+      this.logger.warn(
+        `syncRevenueCat: RC API returned ${rcRes.status} for user ${userId}`,
+      );
+      throw new ServiceUnavailableException(
+        'Billing verification is temporarily unavailable. Please try again later.',
+      );
+    }
+
+    let rcData: any;
+    try {
+      rcData = await rcRes.json();
+    } catch (e) {
+      this.logger.error(`syncRevenueCat: RC API returned invalid JSON: ${e}`);
+      throw new ServiceUnavailableException(
+        'Billing verification is temporarily unavailable. Please try again later.',
+      );
+    }
+
+    const entitlements = rcData?.subscriber?.entitlements ?? {};
+    const now = Date.now();
+
+    const isEntitlementActive = (e: any): boolean => {
+      if (!e) return false;
+      if (e.expires_date === null || e.expires_date === undefined) return true;
+      const ts = typeof e.expires_date === 'number'
+        ? e.expires_date
+        : Date.parse(e.expires_date);
+      return !isNaN(ts) && ts > now;
+    };
+
+    // Require the entitlement matching the requested plan to be active.
+    // Accept both canonical RC names ("pro", "team") and our legacy aliases.
+    const requiredEntitlements = plan === 'organization' ? ['team', 'organization'] : ['pro'];
+    const matchingActive = Object.entries(entitlements).some(
+      ([name, value]: [string, any]) =>
+        requiredEntitlements.includes(name.toLowerCase()) && isEntitlementActive(value),
+    );
+
+    if (!matchingActive) {
+      this.logger.warn(
+        `syncRevenueCat: user ${userId} has no active '${requiredEntitlements.join("'|'")}' entitlement — rejecting sync (product=${productId})`,
+      );
+      throw new ForbiddenException(
+        'No active RevenueCat entitlement found for this account.',
+      );
+    }
+
     const user = await this.usersService.findById(userId);
     user.plan = plan;
     user.billingPeriod = billingPeriod;
     user.billingSource = 'revenuecat';
-    // Reset cancellation flags — new purchase supersedes any previous cancellation
+    // Reset cancellation flags — verified purchase supersedes any previous cancellation
     user.cancelAtPeriodEnd = false;
     user.currentPeriodEnd = null;
     await this.usersService.save(user);
-    this.logger.log(`syncRevenueCat: user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId})`);
+    this.logger.log(
+      `syncRevenueCat: verified via RC — user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId})`,
+    );
   }
 
   async getBillingInfo(userId: string, subscriptionCount: number) {

@@ -21,7 +21,17 @@ import { BillingModule } from '../billing/billing.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([AnalysisJob, AnalysisResult, AnalysisUsage, ServiceCatalog, Subscription, User]),
-    BullModule.registerQueue({ name: ANALYSIS_QUEUE }),
+    BullModule.registerQueue({
+      name: ANALYSIS_QUEUE,
+      defaultJobOptions: {
+        // Clean up completed jobs aggressively (we care about state, not history).
+        removeOnComplete: { age: 24 * 3600, count: 100 },
+        // Keep failed jobs for 7 days (for debugging / retry), cap at 1000.
+        // Without this, BullMQ keeps only the last 50 failures — losing signal
+        // on bursty failures (e.g. OpenAI quota exhaustion affecting 200 jobs).
+        removeOnFail: { age: 7 * 24 * 3600, count: 1000 },
+      },
+    }),
     NotificationsModule,
     forwardRef(() => WorkspaceModule),
     forwardRef(() => BillingModule),

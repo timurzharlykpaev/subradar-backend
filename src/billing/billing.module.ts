@@ -7,15 +7,19 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { Workspace } from '../workspace/entities/workspace.entity';
 import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
 import { User } from '../users/entities/user.entity';
+import { WebhookEvent } from './entities/webhook-event.entity';
 import { GracePeriodCron } from './grace-period.cron';
+import { TelegramAlertService } from '../common/telegram-alert.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Workspace, WorkspaceMember, User]),
+    TypeOrmModule.forFeature([Workspace, WorkspaceMember, User, WebhookEvent]),
     UsersModule,
     forwardRef(() => SubscriptionsModule),
   ],
-  providers: [BillingService, GracePeriodCron],
+  // TelegramAlertService is declared globally in AppModule but we re-provide
+  // it here so the billing module can run in isolation (tests, migrations).
+  providers: [BillingService, GracePeriodCron, TelegramAlertService],
   controllers: [BillingController],
   exports: [BillingService],
 })

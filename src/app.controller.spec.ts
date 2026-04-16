@@ -11,8 +11,9 @@ describe('AppController', () => {
     controller = app.get<AppController>(AppController);
   });
 
-  it('should return health status', () => {
-    const result = controller.health();
+  it('should return ok status from ping', () => {
+    const result = controller.ping();
     expect(result.status).toBe('ok');
+    expect(typeof result.timestamp).toBe('string');
   });
 });

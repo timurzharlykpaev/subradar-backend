@@ -1,11 +1,13 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI, { toFile } from 'openai';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../common/redis.module';
+import { TelegramAlertService } from '../common/telegram-alert.service';
 
 @Injectable()
 export class AiService {
+  private readonly logger = new Logger(AiService.name);
   private readonly openai: OpenAI;
   private readonly model: string;
   private activeRequests = 0;
@@ -15,9 +17,34 @@ export class AiService {
   constructor(
     private readonly cfg: ConfigService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly tg: TelegramAlertService,
   ) {
     this.openai = new OpenAI({ apiKey: cfg.get('OPENAI_API_KEY') });
     this.model = cfg.get('OPENAI_MODEL', 'gpt-4o');
+  }
+
+  /**
+   * Detect 429 / quota_exceeded errors from OpenAI SDK and fan out a Telegram
+   * alert so the operator learns about quota exhaustion without having to
+   * tail logs. Deduplicated per error code so a storm of concurrent 429s
+   * triggers one alert per 10 min.
+   */
+  private handleOpenAIError(err: any, context: string): void {
+    const status = err?.status ?? err?.response?.status;
+    const code = err?.code ?? err?.error?.code;
+    const message = err?.message || String(err);
+
+    if (status === 429 || code === 'insufficient_quota' || /quota/i.test(message)) {
+      this.logger.error(
+        `[OpenAI quota] ${context}: ${message} (status=${status} code=${code})`,
+      );
+      this.tg
+        .send(
+          `<b>OPENAI_QUOTA_EXCEEDED</b>\ncontext: ${context}\nstatus: ${status}\ncode: ${code ?? 'n/a'}\n<pre>${message.slice(0, 600)}</pre>`,
+          `openai_quota`,
+        )
+        .catch(() => {});
+    }
   }
 
   private async acquireSlot(): Promise<void> {
@@ -70,6 +97,9 @@ export class AiService {
         }
         return {};
       }
+    } catch (err: any) {
+      this.handleOpenAIError(err, 'chat');
+      throw err;
     } finally {
       this.releaseSlot();
     }
@@ -166,6 +196,9 @@ If unsure about category, use OTHER. If cannot extract data, return {}.`,
         temperature: 0.1,
       }, { timeout: 30000 });
       return JSON.parse(response.choices[0].message.content || '{}');
+    } catch (err: any) {
+      this.handleOpenAIError(err, 'parseScreenshot');
+      throw err;
     } finally {
       this.releaseSlot();
     }
@@ -194,6 +227,9 @@ If unsure about category, use OTHER. If cannot extract data, return {}.`,
         language: locale.split('-')[0],
       }, { timeout: 30000 });
       text = transcription.text;
+    } catch (err: any) {
+      this.handleOpenAIError(err, 'voiceToSubscription.transcribe');
+      throw err;
     } finally {
       this.releaseSlot();
     }
@@ -247,8 +283,9 @@ If unsure about category, use OTHER.`,
         language: locale.split('-')[0],
       }, { timeout: 30000 });
       return { text: transcription.text || '' };
-    } catch (err) {
-      console.error('Whisper transcription error:', err);
+    } catch (err: any) {
+      this.handleOpenAIError(err, 'transcribeAudio');
+      this.logger.error(`Whisper transcription error: ${err?.message}`);
       return { text: '' };
     } finally {
       this.releaseSlot();
@@ -334,6 +371,9 @@ ${localeHint}`,
         language: locale.split('-')[0],
       }, { timeout: 30000 });
       text = transcription.text;
+    } catch (err: any) {
+      this.handleOpenAIError(err, 'voiceToBulkSubscriptions.transcribe');
+      throw err;
     } finally {
       this.releaseSlot();
     }
@@ -624,8 +664,9 @@ LANGUAGE: Always write the "question" field in the user's language. User locale 
         if (parsed.done !== undefined) return parsed;
       }
       return null;
-    } catch (e) {
-      console.warn(`Wizard web search failed: ${e}`);
+    } catch (e: any) {
+      this.handleOpenAIError(e, 'wizardWithWebSearch');
+      this.logger.warn(`Wizard web search failed: ${e?.message}`);
       return null;
     }
   }

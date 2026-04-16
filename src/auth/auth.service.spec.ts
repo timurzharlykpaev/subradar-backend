@@ -30,6 +30,7 @@ const mockUsersService = {
   findByEmail: jest.fn(),
   findByEmailWithPassword: jest.fn(),
   findById: jest.fn(),
+  findByMagicLinkToken: jest.fn().mockResolvedValue(null),
   create: jest.fn().mockResolvedValue(mockUser),
   update: jest.fn().mockResolvedValue(mockUser),
   updateRefreshToken: jest.fn().mockResolvedValue(undefined),
@@ -196,29 +197,22 @@ describe('AuthService', () => {
 
   describe('verifyMagicLink', () => {
     it('throws UnauthorizedException for invalid token', async () => {
+      // findByMagicLinkToken returns null (default) and legacy JWT path also fails
       mockJwtService.verify.mockImplementationOnce(() => { throw new Error('expired'); });
       await expect(service.verifyMagicLink('bad-token')).rejects.toThrow(UnauthorizedException);
     });
 
-    it('throws UnauthorizedException if token already used', async () => {
-      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
-      mockUsersService.findById.mockResolvedValueOnce({ ...mockUser, magicLinkToken: 'different-token' });
-      await expect(service.verifyMagicLink('magic-token')).rejects.toThrow(UnauthorizedException);
-    });
-
     it('throws UnauthorizedException if magic link expired', async () => {
-      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
-      mockUsersService.findById.mockResolvedValueOnce({
+      mockUsersService.findByMagicLinkToken.mockResolvedValueOnce({
         ...mockUser,
-        magicLinkToken: 'magic-token',
         magicLinkExpiry: new Date(Date.now() - 60000), // expired
       });
       await expect(service.verifyMagicLink('magic-token')).rejects.toThrow(UnauthorizedException);
     });
 
     it('verifies valid magic link and returns tokens', async () => {
-      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
-      mockUsersService.findById.mockResolvedValueOnce(mockUser);
+      // New path: DB row found via sha256 hash lookup
+      mockUsersService.findByMagicLinkToken.mockResolvedValueOnce(mockUser);
       mockUsersService.update.mockResolvedValueOnce(mockUser);
       mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
       const result = await service.verifyMagicLink('magic-token');

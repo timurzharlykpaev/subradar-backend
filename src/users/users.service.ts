@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from './entities/user.entity';
+import { AuditService } from '../common/audit/audit.service';
 
 @Injectable()
 export class UsersService {
@@ -10,6 +11,7 @@ export class UsersService {
 
   constructor(
     @InjectRepository(User) private readonly repo: Repository<User>,
+    private readonly audit: AuditService,
   ) {}
 
   async findById(id: string): Promise<User> {
@@ -30,6 +32,14 @@ export class UsersService {
       .getOne();
   }
 
+  /**
+   * Find user by magic-link token. Supports both the new sha256 hash format
+   * and the legacy JWT stored directly. Used during magic-link verification.
+   */
+  async findByMagicLinkToken(tokenOrHash: string): Promise<User | null> {
+    return this.repo.findOne({ where: { magicLinkToken: tokenOrHash } });
+  }
+
   async create(data: Partial<User>): Promise<User> {
     // New users start on Free plan — trial is offered later via TrialOfferModal
     const user = this.repo.create({
@@ -43,11 +53,13 @@ export class UsersService {
   async update(id: string, data: Partial<User>): Promise<User> {
     // Whitelist only known User columns to avoid TypeORM "Property not found" errors
     const ALLOWED_KEYS = new Set([
-      'name', 'avatarUrl', 'fcmToken', 'refreshToken', 'magicLinkToken', 'magicLinkExpiry',
+      'name', 'avatarUrl', 'fcmToken', 'refreshToken', 'refreshTokenIssuedAt',
+      'magicLinkToken', 'magicLinkExpiry',
       'lemonSqueezyCustomerId', 'plan', 'billingSource', 'billingPeriod', 'trialUsed', 'trialStartDate', 'trialEndDate',
       'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'isActive',
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
-      'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore', 'weeklyDigestEnabled',
+      'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore',
+      'weeklyDigestEnabled', 'weeklyDigestSentAt',
       'cancelAtPeriodEnd', 'currentPeriodEnd', 'status', 'downgradedAt',
       'gracePeriodEnd', 'gracePeriodReason', 'billingIssueAt',
     ]);
@@ -66,8 +78,16 @@ export class UsersService {
   }
 
   async updateRefreshToken(id: string, token: string | null): Promise<void> {
-    const hashed = token ? await bcrypt.hash(token, 10) : undefined;
-    await this.repo.update(id, { refreshToken: hashed });
+    // bcrypt rounds 12 — matches password hashing elsewhere (see AuthService.register).
+    // Keeping rounds consistent across the app prevents the refresh-token column
+    // from being the weakest link if the DB ever leaks.
+    const hashed = token ? await bcrypt.hash(token, 12) : null;
+    // Track issuance time so we can enforce absolute expiry in AuthService.refresh
+    // even if the JWT's own `exp` claim is tampered with.
+    await this.repo.update(id, {
+      refreshToken: hashed as any,
+      refreshTokenIssuedAt: token ? new Date() : (null as any),
+    });
   }
 
   async updatePreferences(
@@ -103,25 +123,42 @@ export class UsersService {
   async deleteAccount(id: string): Promise<void> {
     const em = this.repo.manager;
 
-    // Delete related data that doesn't have onDelete: CASCADE
-    // Use try/catch per table in case some don't exist yet
-    const tables = [
-      `DELETE FROM analysis_jobs WHERE "userId" = $1`,
-      `DELETE FROM analysis_results WHERE "userId" = $1`,
-      `DELETE FROM analysis_usage WHERE "userId" = $1`,
-      `DELETE FROM workspace_members WHERE "userId" = $1`,
-      `DELETE FROM workspaces WHERE "ownerId" = $1`,
-      `DELETE FROM invite_codes WHERE "createdBy" = $1`,
-      `DELETE FROM invite_codes WHERE "usedBy" = $1`,
-    ];
-    for (const sql of tables) {
-      try { await em.query(sql, [id]); } catch (e) {
-        this.logger.warn(`deleteAccount cleanup skipped: ${e.message?.split('\n')[0]}`);
-      }
-    }
+    // Capture a minimal audit snapshot BEFORE we cascade-delete the row — once
+    // `users.delete(id)` returns the identifiers are gone and we can't write a
+    // meaningful audit entry after the fact.
+    const existing = await this.repo.findOne({ where: { id } }).catch(() => null);
+    const snapshot = existing
+      ? {
+          email: existing.email,
+          plan: existing.plan,
+          billingSource: existing.billingSource,
+          createdAt: existing.createdAt,
+        }
+      : null;
+
+    // Order matters: delete children before parents (workspaces own workspace_members
+    // via FK; delete members first, then workspaces). No silent try/catch — if any
+    // delete fails (FK violation, missing table), let it bubble up: a partial
+    // cleanup is worse than a clear error that surfaces the underlying issue.
+    await em.query(`DELETE FROM analysis_jobs WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM analysis_results WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM analysis_usage WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM workspace_members WHERE "userId" = $1`, [id]);
+    await em.query(`DELETE FROM workspaces WHERE "ownerId" = $1`, [id]);
+    await em.query(`DELETE FROM invite_codes WHERE "createdBy" = $1`, [id]);
+    await em.query(`DELETE FROM invite_codes WHERE "usedBy" = $1`, [id]);
+    await em.query(`DELETE FROM push_tokens WHERE "userId" = $1`, [id]);
 
     // subscriptions, payment_cards, receipts, reports, refresh_tokens → CASCADE
     await this.repo.delete(id);
     this.logger.log(`Account deleted: ${id}`);
+
+    await this.audit.log({
+      userId: id,
+      action: 'account.delete',
+      resourceType: 'user',
+      resourceId: id,
+      metadata: snapshot ?? undefined,
+    });
   }
 }
