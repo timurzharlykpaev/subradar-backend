@@ -404,9 +404,24 @@ export class AnalysisService {
 
   /**
    * Helper: get user plan by userId.
+   *
+   * Unlike {@link getUserPlan} (which only reads `user.plan`/`billingSource`),
+   * this version also considers team membership via {@link BillingService.getEffectiveAccess}.
+   * A team member whose owner has an active Team subscription has `user.plan = 'free'`
+   * in the DB but effectively has Team-level access — they should be able to use
+   * AI analysis, not be rejected as a free user.
    */
   private async getUserPlanById(userId: string): Promise<AnalysisPlan | null> {
     const user = await this.userRepo.findOneOrFail({ where: { id: userId } });
-    return this.getUserPlan(user);
+    const own = this.getUserPlan(user);
+    if (own) return own;
+    try {
+      const access = await this.billingService.getEffectiveAccess(user);
+      if (access.plan === 'pro') return 'pro';
+      if (access.plan === 'organization') return 'team';
+    } catch {
+      // If team lookup fails, fall back to own-only plan resolution.
+    }
+    return null;
   }
 }

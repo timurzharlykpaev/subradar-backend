@@ -914,17 +914,32 @@ export class BillingService {
       return !isNaN(ts) && ts > now;
     };
 
-    // Require the entitlement matching the requested plan to be active.
-    // Accept both canonical RC names ("pro", "team") and our legacy aliases.
-    const requiredEntitlements = plan === 'organization' ? ['team', 'organization'] : ['pro'];
+    // Require an active entitlement that matches the requested plan tier.
+    // Match flexibly: RC dashboard often uses display names like "SubRadar Pro"
+    // or "Team Access" rather than canonical slugs. We accept any entitlement
+    // whose lowercased name contains a relevant keyword AND whose productId
+    // (when present) matches the purchase we're syncing.
+    const planKeywords = plan === 'organization'
+      ? ['team', 'org', 'organization']
+      : ['pro', 'premium'];
+
+    const matchesPlanTier = (name: string, value: any): boolean => {
+      const lcName = name.toLowerCase();
+      if (planKeywords.some((k) => lcName.includes(k))) return true;
+      // Fallback: entitlement tied to the exact product we just purchased.
+      const entProductId = String(value?.product_identifier ?? '').toLowerCase();
+      return entProductId === productId.toLowerCase();
+    };
+
     const matchingActive = Object.entries(entitlements).some(
       ([name, value]: [string, any]) =>
-        requiredEntitlements.includes(name.toLowerCase()) && isEntitlementActive(value),
+        matchesPlanTier(name, value) && isEntitlementActive(value),
     );
 
     if (!matchingActive) {
+      const seen = Object.keys(entitlements).join(',') || '<none>';
       this.logger.warn(
-        `syncRevenueCat: user ${userId} has no active '${requiredEntitlements.join("'|'")}' entitlement — rejecting sync (product=${productId})`,
+        `syncRevenueCat: user ${userId} has no active entitlement matching tier=${plan} (product=${productId}); RC returned entitlements=[${seen}]`,
       );
       throw new ForbiddenException(
         'No active RevenueCat entitlement found for this account.',
@@ -932,6 +947,11 @@ export class BillingService {
     }
 
     const user = await this.usersService.findById(userId);
+    // Team membership takes precedence: if user is part of a team workspace,
+    // we keep plan='organization' via effective access but record the independent
+    // Pro purchase in hasOwnPro so it survives leaving the team. The `plan`
+    // column is a simple "own subscription" marker; team access is computed
+    // elsewhere via getEffectiveAccess().
     user.plan = plan;
     user.billingPeriod = billingPeriod;
     user.billingSource = 'revenuecat';
