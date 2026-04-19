@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, EntityManager, QueryFailedError, Repository } from 'typeorm';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { UsersService } from '../users/users.service';
 import { AuditService } from '../common/audit/audit.service';
@@ -20,7 +20,23 @@ import { User } from '../users/entities/user.entity';
 import { WebhookEvent } from './entities/webhook-event.entity';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { OutboxService } from './outbox/outbox.service';
+import { TrialsService } from './trials/trials.service';
 import { maskEmail } from '../common/utils/pii';
+import {
+  BillingEvent,
+  BillingPeriod,
+  BillingSource,
+  BillingState,
+  GraceReason,
+  Plan,
+  UserBillingSnapshot,
+  transition,
+} from './state-machine';
+import {
+  mapRCEventToBillingEvent,
+  PRODUCT_TO_PLAN as RC_PRODUCT_TO_PLAN_MAP,
+  RCRawEvent,
+} from './revenuecat/event-mapper';
 
 export interface EffectiveAccess {
   plan: 'free' | 'pro' | 'organization';
@@ -55,6 +71,7 @@ export class BillingService {
     private readonly telegramAlert: TelegramAlertService,
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
+    private readonly trialsService: TrialsService,
   ) {
     this.webhookSecret = cfg.get('LEMON_SQUEEZY_WEBHOOK_SECRET', '');
     this.apiKey = cfg.get('LEMON_SQUEEZY_API_KEY', '');
@@ -191,41 +208,47 @@ export class BillingService {
     };
   }
 
-  private async handleTeamOwnerExpiration(ownerId: string): Promise<void> {
-    const workspace = await this.workspaceRepo.findOne({ where: { ownerId } });
+  /**
+   * Cascade an organization-owner's expiration to every ACTIVE workspace
+   * member. Each member transitions through the state machine:
+   *   - member with their own active RC sub       → snapshot unchanged
+   *     (transition returns `s` because `memberHasOwnSub: true`)
+   *   - member relying on owner's org sub         → grace_team for 7 days
+   *
+   * Runs inside the caller's transaction so the owner transition + member
+   * cascade commit atomically.
+   */
+  private async handleTeamOwnerExpiration(
+    m: EntityManager,
+    owner: User,
+  ): Promise<void> {
+    const workspace = await m.findOne(Workspace, { where: { ownerId: owner.id } });
     if (!workspace) return;
-
     workspace.expiredAt = new Date();
-    await this.workspaceRepo.save(workspace);
+    await m.save(workspace);
 
-    const members = await this.workspaceMemberRepo.find({
+    const members = await m.find(WorkspaceMember, {
       where: { workspaceId: workspace.id, status: 'ACTIVE' as any },
     });
 
-    for (const m of members) {
-      if (m.userId === ownerId) continue;
-      const u = await this.usersService.findById(m.userId).catch(() => null);
+    for (const member of members) {
+      if (member.userId === owner.id) continue;
+      const u = await m.findOne(User, { where: { id: member.userId } });
       if (!u) continue;
-
-      // Member has their own active RC subscription — they should keep access on
-      // their own paid plan. Organization-tier membership only made sense while the
-      // team workspace was active; since it expired, demote them to personal 'pro'
-      // (they paid individually). No grace period needed — they already pay.
-      if (u.billingSource === 'revenuecat' && !u.cancelAtPeriodEnd) {
-        if (u.plan === 'organization' || u.plan === 'free') {
-          u.plan = 'pro';
-        }
-        u.gracePeriodEnd = null;
-        u.gracePeriodReason = null;
-        await this.usersService.save(u);
-        continue;
-      }
-
-      u.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      u.gracePeriodReason = 'team_expired';
-      await this.usersService.save(u);
+      const current = this.snapshotFromUser(u);
+      const memberHasOwnSub =
+        current.billingSource === 'revenuecat' &&
+        current.state === 'active' &&
+        !current.cancelAtPeriodEnd;
+      const next = transition(current, {
+        type: 'TEAM_OWNER_EXPIRED',
+        memberHasOwnSub,
+      });
+      await this.applySnapshot(m, u, next);
     }
-    this.logger.log(`Team owner ${ownerId} expired — cascaded grace to ${members.length} members`);
+    this.logger.log(
+      `Team owner ${owner.id} expired — cascaded to ${members.length} members`,
+    );
   }
 
   /**
@@ -528,7 +551,7 @@ export class BillingService {
     }
 
     try {
-      await this.processRevenueCatEvent(type, event, user, productId);
+      await this.processRevenueCatEvent(event as RCRawEvent, user);
     } catch (err) {
       this.logger.error(
         `RevenueCat webhook ${type} failed: ${err instanceof Error ? err.stack : err}`,
@@ -542,121 +565,220 @@ export class BillingService {
     }
   }
 
-  private async processRevenueCatEvent(
-    type: string,
-    event: any,
+  /**
+   * Snapshot a User entity as a `UserBillingSnapshot` for the state machine.
+   * Any DB column the state machine reads MUST be mapped here, and any
+   * column it writes MUST be mirrored in `applySnapshot` below.
+   */
+  private snapshotFromUser(u: User): UserBillingSnapshot {
+    return {
+      userId: u.id,
+      plan: (u.plan as Plan) ?? 'free',
+      state: (u.billingStatus as BillingState) ?? 'free',
+      billingSource: (u.billingSource as BillingSource) ?? null,
+      billingPeriod: (u.billingPeriod as BillingPeriod | null) ?? null,
+      currentPeriodStart: u.currentPeriodStart ?? null,
+      currentPeriodEnd: u.currentPeriodEnd ?? null,
+      cancelAtPeriodEnd: !!u.cancelAtPeriodEnd,
+      graceExpiresAt: u.gracePeriodEnd ?? null,
+      graceReason: (u.gracePeriodReason as GraceReason) ?? null,
+      billingIssueAt: u.billingIssueAt ?? null,
+    };
+  }
+
+  /**
+   * Apply a state-machine snapshot back onto the User row via the active
+   * EntityManager. Participates in the caller's transaction. Also mutates
+   * the in-memory `user` object so downstream code sees the new state
+   * without having to re-fetch.
+   */
+  private async applySnapshot(
+    m: EntityManager,
     user: User,
-    productId: string,
+    next: UserBillingSnapshot,
   ): Promise<void> {
-    const appUserId = user.id;
-    switch (type) {
-      case 'INITIAL_PURCHASE':
-      case 'RENEWAL':
-      case 'PRODUCT_CHANGE': {
-        const plan = this.RC_PRODUCT_TO_PLAN[productId] || 'pro';
-        const billingPeriod = this.extractBillingPeriod(productId);
-        const previousPlan = user.plan;
-        user.plan = plan;
-        user.billingPeriod = billingPeriod;
-        user.billingSource = 'revenuecat';
-        // Reset cancellation flags — purchase/renewal supersedes cancellation
-        user.cancelAtPeriodEnd = false;
-        user.currentPeriodEnd = null;
-        user.gracePeriodEnd = null;
-        user.gracePeriodReason = null;
-        user.billingIssueAt = null;
-        await this.usersService.save(user);
-        const ownedWs = await this.workspaceRepo.findOne({ where: { ownerId: user.id } });
-        if (ownedWs && ownedWs.expiredAt) {
-          ownedWs.expiredAt = null;
-          await this.workspaceRepo.save(ownedWs);
-        }
-        this.logger.log(`RevenueCat: ${type} — user ${appUserId} → plan ${plan} (${billingPeriod})`);
-        await this.audit.log({
-          userId: user.id,
-          action: 'billing.webhook.plan_change',
-          resourceType: 'user',
-          resourceId: user.id,
-          metadata: {
-            provider: 'revenuecat',
-            event: type,
-            productId,
-            previousPlan,
-            nextPlan: plan,
-            billingPeriod,
-          },
-        });
-        break;
-      }
-      case 'CANCELLATION': {
-        // Mark as cancelled but keep plan active until period end
-        const expiresAtRaw = event.expiration_at_ms || event.expiration_at;
-        const expiresAt = expiresAtRaw
-          ? new Date(typeof expiresAtRaw === 'number' ? expiresAtRaw : Number(expiresAtRaw))
-          : null;
-        user.cancelAtPeriodEnd = true;
-        if (expiresAt && !isNaN(expiresAt.getTime())) {
-          user.currentPeriodEnd = expiresAt;
-        }
-        await this.usersService.save(user);
-        this.logger.log(`RevenueCat: CANCELLATION — user ${appUserId}, access until ${expiresAt?.toISOString() ?? 'unknown'}`);
-        break;
-      }
-      case 'EXPIRATION': {
-        const previousPlan = user.plan;
-        user.plan = 'free';
-        user.billingPeriod = null;
-        user.downgradedAt = new Date();
-        user.billingSource = null as any;
-        user.cancelAtPeriodEnd = false;
-        user.currentPeriodEnd = null as any;
-        user.billingIssueAt = null;
-        user.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-        user.gracePeriodReason = 'pro_expired';
-        await this.usersService.save(user);
-        this.logger.log(`RevenueCat: EXPIRATION — user ${appUserId} → free, grace 7d`);
-        await this.audit.log({
-          userId: user.id,
-          action: 'billing.webhook.plan_change',
-          resourceType: 'user',
-          resourceId: user.id,
-          metadata: {
-            provider: 'revenuecat',
-            event: 'EXPIRATION',
-            previousPlan,
-            nextPlan: 'free',
-            gracePeriodReason: 'pro_expired',
-          },
-        });
-        await this.handleTeamOwnerExpiration(user.id);
-        break;
-      }
-      case 'UNCANCELLATION': {
-        user.cancelAtPeriodEnd = false;
-        user.currentPeriodEnd = null;
-        user.gracePeriodEnd = null;
-        user.gracePeriodReason = null;
-        user.billingIssueAt = null;
-        await this.usersService.save(user);
-        const ownedWs = await this.workspaceRepo.findOne({ where: { ownerId: user.id } });
-        if (ownedWs && ownedWs.expiredAt) {
-          ownedWs.expiredAt = null;
-          await this.workspaceRepo.save(ownedWs);
-        }
-        this.logger.log(`RevenueCat: UNCANCELLATION — user ${appUserId}, subscription restored`);
-        break;
-      }
-      case 'BILLING_ISSUE': {
-        // Apple grace period — payment failed but subscription still active
-        // for X days while Apple retries. User needs to update payment method.
-        user.billingIssueAt = new Date();
-        await this.usersService.save(user);
-        this.logger.warn(`RevenueCat: BILLING_ISSUE — user ${appUserId}, billing grace started`);
-        break;
-      }
-      default:
-        this.logger.log(`RevenueCat: unhandled event ${type}`);
+    const updates: Partial<User> = {
+      plan: next.plan,
+      billingStatus: next.state,
+      billingSource: next.billingSource as any,
+      billingPeriod: next.billingPeriod,
+      currentPeriodStart: next.currentPeriodStart,
+      currentPeriodEnd: next.currentPeriodEnd,
+      cancelAtPeriodEnd: next.cancelAtPeriodEnd,
+      gracePeriodEnd: next.graceExpiresAt,
+      gracePeriodReason: next.graceReason,
+      billingIssueAt: next.billingIssueAt,
+    };
+    await m.update(User, user.id, updates);
+    Object.assign(user, updates);
+  }
+
+  private amplitudeEventForRC(rcType: string): string {
+    const map: Record<string, string> = {
+      INITIAL_PURCHASE: 'billing.subscription_purchased',
+      RENEWAL: 'billing.subscription_renewed',
+      NON_RENEWING_PURCHASE: 'billing.subscription_renewed',
+      PRODUCT_CHANGE: 'billing.product_changed',
+      CANCELLATION: 'billing.subscription_cancelled',
+      UNCANCELLATION: 'billing.subscription_uncancelled',
+      EXPIRATION: 'billing.subscription_expired',
+      BILLING_ISSUE: 'billing.billing_issue_started',
+    };
+    return map[rcType] ?? 'billing.event';
+  }
+
+  private amplitudeEventForLS(eventName: string): string {
+    const map: Record<string, string> = {
+      subscription_created: 'billing.subscription_purchased',
+      subscription_updated: 'billing.subscription_updated',
+      subscription_cancelled: 'billing.subscription_cancelled',
+    };
+    return map[eventName] ?? 'billing.event';
+  }
+
+  /**
+   * Process a single RevenueCat webhook event through the billing state
+   * machine. All side effects (DB update, audit row, amplitude outbox
+   * enqueue, team-owner cascade, workspace reactivation, trial record)
+   * commit in one transaction so we never leak "half-applied" state.
+   *
+   * Trial activation is a deliberate exception: it runs in its own inner
+   * transaction (via TrialsService.activate) which is allowed to fail
+   * (trial already consumed) without blocking the parent webhook. That's
+   * why we wrap it in try/catch.
+   */
+  private async processRevenueCatEvent(
+    event: RCRawEvent,
+    user: User,
+  ): Promise<void> {
+    const billingEvent = mapRCEventToBillingEvent(event);
+    if (!billingEvent) {
+      this.logger.log(
+        `RevenueCat: ${event.type} skipped (no state-machine mapping)`,
+      );
+      return;
     }
+
+    await this.dataSource.transaction(async (m) => {
+      const current = this.snapshotFromUser(user);
+      let next: UserBillingSnapshot;
+      try {
+        next = transition(current, billingEvent);
+      } catch (err) {
+        // Invalid transitions for RC are usually duplicate/late deliveries
+        // (e.g. CANCELLATION after EXPIRATION). Log + audit but don't fail
+        // the webhook — RC would keep retrying forever otherwise.
+        this.logger.warn(
+          `RC ${event.type} invalid transition from ${current.state} for user ${user.id}: ${(err as Error).message}`,
+        );
+        await this.audit.log({
+          userId: user.id,
+          action: 'billing.webhook.invalid_transition',
+          resourceType: 'user',
+          resourceId: user.id,
+          metadata: {
+            provider: 'revenuecat',
+            event: event.type,
+            from: current.state,
+            productId: event.product_id ?? null,
+            error: (err as Error).message,
+          },
+        });
+        return;
+      }
+
+      await this.applySnapshot(m, user, next);
+
+      // Reactivate owner's workspace on purchase / renewal / uncancellation —
+      // a previous EXPIRATION may have marked it expired.
+      if (
+        billingEvent.type === 'RC_INITIAL_PURCHASE' ||
+        billingEvent.type === 'RC_RENEWAL' ||
+        billingEvent.type === 'RC_UNCANCELLATION' ||
+        billingEvent.type === 'RC_PRODUCT_CHANGE'
+      ) {
+        const ownedWs = await m.findOne(Workspace, { where: { ownerId: user.id } });
+        if (ownedWs && ownedWs.expiredAt) {
+          ownedWs.expiredAt = null;
+          await m.save(ownedWs);
+        }
+      }
+
+      // Expiration cascades to team members if the user is an organization owner.
+      if (billingEvent.type === 'RC_EXPIRATION' && current.plan === 'organization') {
+        await this.handleTeamOwnerExpiration(m, user);
+      }
+
+      // Mark downgradedAt on EXPIRATION for downstream analytics.
+      if (billingEvent.type === 'RC_EXPIRATION') {
+        await m.update(User, user.id, { downgradedAt: new Date() });
+        user.downgradedAt = new Date();
+      }
+
+      await this.audit.log({
+        userId: user.id,
+        action: 'billing.webhook.state_transition',
+        resourceType: 'user',
+        resourceId: user.id,
+        metadata: {
+          provider: 'revenuecat',
+          event: event.type,
+          from: current.state,
+          to: next.state,
+          previousPlan: current.plan,
+          nextPlan: next.plan,
+          productId: event.product_id ?? null,
+        },
+      });
+
+      if (
+        next.state !== current.state ||
+        next.plan !== current.plan ||
+        next.cancelAtPeriodEnd !== current.cancelAtPeriodEnd
+      ) {
+        await this.outbox.enqueue(
+          'amplitude.track',
+          {
+            event: this.amplitudeEventForRC(event.type),
+            userId: user.id,
+            properties: {
+              planBefore: current.plan,
+              planAfter: next.plan,
+              stateBefore: current.state,
+              stateAfter: next.state,
+              source: 'revenuecat',
+              productId: event.product_id ?? null,
+            },
+          },
+          m,
+        );
+      }
+    });
+
+    // Trial activation for RC intro/trial offers — runs OUTSIDE the main
+    // transaction because TrialsService manages its own tx (with a
+    // pessimistic lock on the user_trials row) and a ConflictException
+    // from a duplicate trial must not roll back the state-machine write
+    // that already committed above.
+    if (
+      event.type === 'INITIAL_PURCHASE' &&
+      (event.period_type === 'TRIAL' || event.period_type === 'INTRO')
+    ) {
+      const plan = RC_PRODUCT_TO_PLAN_MAP[event.product_id ?? ''];
+      if (plan) {
+        try {
+          await this.trialsService.activate(user.id, 'revenuecat_intro', plan);
+        } catch (err) {
+          this.logger.log(
+            `RC trial activation skipped for ${user.id}: ${(err as Error).message}`,
+          );
+        }
+      }
+    }
+
+    this.logger.log(
+      `RevenueCat: ${event.type} processed for user ${user.id} (product=${event.product_id ?? 'n/a'})`,
+    );
   }
 
   resolveVariantId(planIdOrVariantId: string, billing: 'monthly' | 'yearly' = 'monthly'): string {
