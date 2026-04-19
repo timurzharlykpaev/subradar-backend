@@ -16,6 +16,10 @@ import { PlanGuard } from './plan.guard';
 @Module({
   imports: [EffectiveAccessModule],
   providers: [PlanGuard],
-  exports: [PlanGuard],
+  // Re-export EffectiveAccessModule so PlanGuard's EffectiveAccessResolver
+  // dependency resolves in consumer modules (e.g. WorkspaceModule). Without
+  // the re-export the guard is visible but its dependency isn't, causing
+  // UnknownDependenciesException at boot.
+  exports: [PlanGuard, EffectiveAccessModule],
 })
 export class GuardsModule {}
