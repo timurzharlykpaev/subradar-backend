@@ -8,12 +8,14 @@ import { InviteCode } from './entities/invite-code.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { AnalysisModule } from '../analysis/analysis.module';
 import { UsersModule } from '../users/users.module';
+import { GuardsModule } from '../common/guards/guards.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Workspace, WorkspaceMember, InviteCode, Subscription]),
     forwardRef(() => AnalysisModule),
     UsersModule,
+    GuardsModule,
   ],
   controllers: [WorkspaceController],
   providers: [WorkspaceService],

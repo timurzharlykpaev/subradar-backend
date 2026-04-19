@@ -19,6 +19,7 @@ describe('WorkspaceController', () => {
       ],
     })
       .overrideGuard(require('../auth/guards/jwt-auth.guard').JwtAuthGuard).useValue({ canActivate: () => true })
+      .overrideGuard(require('../common/guards/plan.guard').PlanGuard).useValue({ canActivate: () => true })
       .compile();
     controller = module.get<WorkspaceController>(WorkspaceController);
     jest.clearAllMocks();

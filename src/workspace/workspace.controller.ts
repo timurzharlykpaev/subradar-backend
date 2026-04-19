@@ -13,6 +13,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PlanGuard } from '../common/guards/plan.guard';
+import { RequirePlanCapability } from '../common/decorators/require-plan-capability.decorator';
 import { WorkspaceService } from './workspace.service';
 import { AnalysisService } from '../analysis/analysis.service';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
@@ -28,7 +30,13 @@ export class WorkspaceController {
     private readonly analysisService: AnalysisService,
   ) {}
 
+  // Creating a workspace is an Organization-plan capability. We repeat
+  // JwtAuthGuard here because method-level @UseGuards replaces the
+  // class-level decorator in NestJS — skipping it would silently drop
+  // authentication on this endpoint.
   @Post()
+  @UseGuards(JwtAuthGuard, PlanGuard)
+  @RequirePlanCapability('canCreateOrg')
   create(@Request() req, @Body() dto: CreateWorkspaceDto) {
     return this.service.create(req.user.id, dto);
   }
@@ -57,7 +65,12 @@ export class WorkspaceController {
     return workspace;
   }
 
+  // Inviting teammates requires the Pro or Organization plan. Plan
+  // gating here prevents free users from DoS-ing the invite email
+  // sender and aligns with the billing/me.limits.canInvite flag.
   @Post(':id/invite')
+  @UseGuards(JwtAuthGuard, PlanGuard)
+  @RequirePlanCapability('canInvite')
   invite(
     @Param('id') id: string,
     @Request() req,
