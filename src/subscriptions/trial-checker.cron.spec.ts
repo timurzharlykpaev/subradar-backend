@@ -96,6 +96,7 @@ describe('TrialCheckerCron', () => {
       'user@test.com',
       expect.stringContaining('Netflix'),
       expect.stringContaining('Netflix'),
+      expect.objectContaining({ userId: 'u1', unsubType: 'email_notifications' }),
     );
   });
 
@@ -124,6 +125,7 @@ describe('TrialCheckerCron', () => {
       'user@test.com',
       expect.any(String),
       expect.stringContaining('tomorrow'),
+      expect.objectContaining({ userId: 'u1', unsubType: 'email_notifications' }),
     );
     expect(mockNotifications.sendPushNotification).not.toHaveBeenCalled();
   });
