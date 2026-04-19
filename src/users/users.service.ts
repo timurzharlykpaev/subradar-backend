@@ -137,17 +137,37 @@ export class UsersService {
       : null;
 
     // Order matters: delete children before parents (workspaces own workspace_members
-    // via FK; delete members first, then workspaces). No silent try/catch — if any
-    // delete fails (FK violation, missing table), let it bubble up: a partial
-    // cleanup is worse than a clear error that surfaces the underlying issue.
-    await em.query(`DELETE FROM analysis_jobs WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM analysis_results WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM analysis_usage WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM workspace_members WHERE "userId" = $1`, [id]);
-    await em.query(`DELETE FROM workspaces WHERE "ownerId" = $1`, [id]);
-    await em.query(`DELETE FROM invite_codes WHERE "createdBy" = $1`, [id]);
-    await em.query(`DELETE FROM invite_codes WHERE "usedBy" = $1`, [id]);
-    await em.query(`DELETE FROM push_tokens WHERE "userId" = $1`, [id]);
+    // via FK; delete members first, then workspaces). FK-constrained deletes must
+    // stay strict, but a few tables (push_tokens, older analysis tables) may not
+    // exist on every environment (dev DB was bootstrapped later than prod). For
+    // those we tolerate a missing-table error and log, so delete-account doesn't
+    // 500 on dev while still surfacing any other failure.
+    const strictDelete = async (sql: string) => em.query(sql, [id]);
+    const tolerantDelete = async (sql: string, table: string) => {
+      try {
+        await em.query(sql, [id]);
+      } catch (err: any) {
+        if (/does not exist/i.test(err?.message ?? '')) {
+          this.logger.warn(
+            `deleteAccount: table "${table}" absent — skipping (id=${id})`,
+          );
+          return;
+        }
+        throw err;
+      }
+    };
+
+    await strictDelete(`DELETE FROM analysis_jobs WHERE "userId" = $1`);
+    await strictDelete(`DELETE FROM analysis_results WHERE "userId" = $1`);
+    await strictDelete(`DELETE FROM analysis_usage WHERE "userId" = $1`);
+    await strictDelete(`DELETE FROM workspace_members WHERE "userId" = $1`);
+    await strictDelete(`DELETE FROM workspaces WHERE "ownerId" = $1`);
+    await strictDelete(`DELETE FROM invite_codes WHERE "createdBy" = $1`);
+    await strictDelete(`DELETE FROM invite_codes WHERE "usedBy" = $1`);
+    await tolerantDelete(
+      `DELETE FROM push_tokens WHERE "userId" = $1`,
+      'push_tokens',
+    );
 
     // subscriptions, payment_cards, receipts, reports, refresh_tokens → CASCADE
     await this.repo.delete(id);
