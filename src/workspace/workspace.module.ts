@@ -9,6 +9,7 @@ import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { AnalysisModule } from '../analysis/analysis.module';
 import { UsersModule } from '../users/users.module';
 import { GuardsModule } from '../common/guards/guards.module';
+import { OutboxModule } from '../billing/outbox/outbox.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { GuardsModule } from '../common/guards/guards.module';
     forwardRef(() => AnalysisModule),
     UsersModule,
     GuardsModule,
+    OutboxModule,
   ],
   controllers: [WorkspaceController],
   providers: [WorkspaceService],

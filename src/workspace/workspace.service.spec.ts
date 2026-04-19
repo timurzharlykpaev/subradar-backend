@@ -7,6 +7,8 @@ import { WorkspaceMember, WorkspaceMemberRole, WorkspaceMemberStatus } from './e
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { InviteCode } from './entities/invite-code.entity';
 import { UsersService } from '../users/users.service';
+import { AuditService } from '../common/audit/audit.service';
+import { OutboxService } from '../billing/outbox/outbox.service';
 
 const mockWorkspaceRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn() };
 const mockMemberRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn(), count: jest.fn(), delete: jest.fn() };
@@ -48,6 +50,14 @@ describe('WorkspaceService', () => {
             create: jest.fn().mockResolvedValue({ id: 'new-user', email: 'new@example.com' }),
             update: jest.fn().mockResolvedValue(undefined),
           },
+        },
+        {
+          provide: AuditService,
+          useValue: { log: jest.fn().mockResolvedValue(undefined) },
+        },
+        {
+          provide: OutboxService,
+          useValue: { enqueue: jest.fn().mockResolvedValue(undefined) },
         },
       ],
     }).compile();

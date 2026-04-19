@@ -22,6 +22,8 @@ import {
   BillingPeriod,
 } from '../subscriptions/entities/subscription.entity';
 import { UsersService } from '../users/users.service';
+import { AuditService } from '../common/audit/audit.service';
+import { OutboxService } from '../billing/outbox/outbox.service';
 
 @Injectable()
 export class WorkspaceService {
@@ -38,6 +40,8 @@ export class WorkspaceService {
     @InjectRepository(InviteCode)
     private readonly inviteCodeRepo: Repository<InviteCode>,
     private readonly usersService: UsersService,
+    private readonly audit: AuditService,
+    private readonly outbox: OutboxService,
   ) {}
 
   async create(ownerId: string, dto: CreateWorkspaceDto): Promise<Workspace> {
@@ -52,6 +56,19 @@ export class WorkspaceService {
       status: WorkspaceMemberStatus.ACTIVE,
     });
     await this.memberRepo.save(member);
+
+    await this.audit.log({
+      userId: ownerId,
+      action: 'workspace.created',
+      resourceType: 'workspace',
+      resourceId: saved.id,
+      metadata: { name: saved.name, maxMembers: saved.maxMembers },
+    });
+    await this.outbox.enqueue('amplitude.track', {
+      event: 'workspace.created',
+      userId: ownerId,
+      properties: { workspaceId: saved.id, name: saved.name },
+    });
 
     // Return with members relation loaded
     return this.findById(saved.id);
@@ -98,7 +115,31 @@ export class WorkspaceService {
       role: dto.role || WorkspaceMemberRole.MEMBER,
       status: WorkspaceMemberStatus.PENDING,
     });
-    return this.memberRepo.save(member);
+    const savedMember = await this.memberRepo.save(member);
+
+    await this.audit.log({
+      userId: requesterId,
+      action: 'workspace.member_invited',
+      resourceType: 'workspace_member',
+      resourceId: savedMember.id,
+      metadata: {
+        workspaceId,
+        email: dto.email,
+        role: savedMember.role,
+      },
+    });
+    await this.outbox.enqueue('amplitude.track', {
+      event: 'workspace.member_invited',
+      userId: requesterId,
+      properties: {
+        workspaceId,
+        memberId: savedMember.id,
+        email: dto.email,
+        role: savedMember.role,
+      },
+    });
+
+    return savedMember;
   }
 
   async removeMember(
@@ -122,6 +163,28 @@ export class WorkspaceService {
         await this.usersService.save(leavingUser);
       }
     }
+
+    await this.audit.log({
+      userId: requesterId,
+      action: 'workspace.member_removed',
+      resourceType: 'workspace_member',
+      resourceId: memberId,
+      metadata: {
+        workspaceId,
+        removedUserId: member?.userId ?? null,
+        removedEmail: member?.inviteEmail ?? null,
+        role: member?.role ?? null,
+      },
+    });
+    await this.outbox.enqueue('amplitude.track', {
+      event: 'workspace.member_removed',
+      userId: requesterId,
+      properties: {
+        workspaceId,
+        memberId,
+        removedUserId: member?.userId ?? null,
+      },
+    });
   }
 
   async generateInviteCode(workspaceId: string, requesterId: string) {
@@ -179,9 +242,28 @@ export class WorkspaceService {
       createdBy: requesterId,
       expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
     });
-    await this.inviteCodeRepo.save(inviteCode);
+    const savedCode = await this.inviteCodeRepo.save(inviteCode);
 
-    return { code: inviteCode.code, expiresAt: inviteCode.expiresAt };
+    await this.audit.log({
+      userId: requesterId,
+      action: 'workspace.invite_code_generated',
+      resourceType: 'invite_code',
+      resourceId: savedCode.id,
+      metadata: {
+        workspaceId,
+        expiresAt: savedCode.expiresAt,
+      },
+    });
+    await this.outbox.enqueue('amplitude.track', {
+      event: 'workspace.invite_code_generated',
+      userId: requesterId,
+      properties: {
+        workspaceId,
+        inviteCodeId: savedCode.id,
+      },
+    });
+
+    return { code: savedCode.code, expiresAt: savedCode.expiresAt };
   }
 
   async joinByCode(code: string, userId: string) {
@@ -231,9 +313,30 @@ export class WorkspaceService {
       role: WorkspaceMemberRole.MEMBER,
       status: WorkspaceMemberStatus.ACTIVE,
     });
-    await this.memberRepo.save(member);
+    const savedMember = await this.memberRepo.save(member);
 
     this.logger.log(`Member joined workspace: userId=${userId} workspaceId=${workspace.id} via invite code`);
+
+    await this.audit.log({
+      userId,
+      action: 'workspace.member_joined',
+      resourceType: 'workspace_member',
+      resourceId: savedMember.id,
+      metadata: {
+        workspaceId: workspace.id,
+        inviteCodeId: inviteCode.id,
+      },
+    });
+    await this.outbox.enqueue('amplitude.track', {
+      event: 'workspace.member_joined',
+      userId,
+      properties: {
+        workspaceId: workspace.id,
+        memberId: savedMember.id,
+        via: 'invite_code',
+      },
+    });
+
     return this.findById(workspace.id);
   }
 
@@ -305,10 +408,25 @@ export class WorkspaceService {
       throw new ForbiddenException('Only owner can delete workspace');
     }
 
+    const workspaceName = workspace.name;
+
     await this.inviteCodeRepo.delete({ workspaceId });
     await this.memberRepo.delete({ workspaceId });
     await this.workspaceRepo.remove(workspace);
     this.logger.log(`Workspace deleted: ${workspaceId} by owner ${requesterId}`);
+
+    await this.audit.log({
+      userId: requesterId,
+      action: 'workspace.deleted',
+      resourceType: 'workspace',
+      resourceId: workspaceId,
+      metadata: { name: workspaceName },
+    });
+    await this.outbox.enqueue('amplitude.track', {
+      event: 'workspace.deleted',
+      userId: requesterId,
+      properties: { workspaceId, name: workspaceName },
+    });
   }
 
   async renameWorkspace(
