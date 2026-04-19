@@ -11,6 +11,7 @@ import { WebhookEvent } from './entities/webhook-event.entity';
 import { GracePeriodCron } from './grace-period.cron';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { EffectiveAccessModule } from './effective-access/effective-access.module';
+import { OutboxModule } from './outbox/outbox.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { EffectiveAccessModule } from './effective-access/effective-access.modul
     UsersModule,
     forwardRef(() => SubscriptionsModule),
     EffectiveAccessModule,
+    OutboxModule,
   ],
   // TelegramAlertService is declared globally in AppModule but we re-provide
   // it here so the billing module can run in isolation (tests, migrations).
