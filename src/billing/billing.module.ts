@@ -13,6 +13,7 @@ import { TelegramAlertService } from '../common/telegram-alert.service';
 import { EffectiveAccessModule } from './effective-access/effective-access.module';
 import { OutboxModule } from './outbox/outbox.module';
 import { TrialsModule } from './trials/trials.module';
+import { ReconciliationModule } from './reconciliation/reconciliation.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { TrialsModule } from './trials/trials.module';
     EffectiveAccessModule,
     OutboxModule,
     TrialsModule,
+    ReconciliationModule,
   ],
   // TelegramAlertService is declared globally in AppModule but we re-provide
   // it here so the billing module can run in isolation (tests, migrations).
