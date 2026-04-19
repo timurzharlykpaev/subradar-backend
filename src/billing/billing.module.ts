@@ -10,12 +10,14 @@ import { User } from '../users/entities/user.entity';
 import { WebhookEvent } from './entities/webhook-event.entity';
 import { GracePeriodCron } from './grace-period.cron';
 import { TelegramAlertService } from '../common/telegram-alert.service';
+import { EffectiveAccessModule } from './effective-access/effective-access.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Workspace, WorkspaceMember, User, WebhookEvent]),
     UsersModule,
     forwardRef(() => SubscriptionsModule),
+    EffectiveAccessModule,
   ],
   // TelegramAlertService is declared globally in AppModule but we re-provide
   // it here so the billing module can run in isolation (tests, migrations).
