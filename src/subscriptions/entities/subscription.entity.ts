@@ -145,6 +145,15 @@ export class Subscription {
   @Column({ nullable: true, default: true })
   reminderEnabled: boolean;
 
+  /**
+   * Day on which the most recent payment-reminder email was sent for this
+   * subscription (UTC date, no time). Used by the reminders cron to avoid
+   * sending the same notice twice if the cron retries or if cron drift
+   * lands two runs on the same day.
+   */
+  @Column({ type: 'date', nullable: true, default: null })
+  lastReminderSentDate: Date | null;
+
   @Column({ default: false })
   isBusinessExpense: boolean;
 
