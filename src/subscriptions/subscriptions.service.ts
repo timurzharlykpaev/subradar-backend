@@ -33,6 +33,7 @@ import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { FilterSubscriptionsDto } from './dto/filter-subscriptions.dto';
 import { UsersService } from '../users/users.service';
 import { PLANS } from '../billing/plans.config';
+import { BillingService } from '../billing/billing.service';
 import { AnalysisService } from '../analysis/analysis.service';
 import Decimal from 'decimal.js';
 import { FxService } from '../fx/fx.service';
@@ -119,6 +120,8 @@ export class SubscriptionsService implements OnModuleInit {
     private readonly fx: FxService,
     private readonly dataSource: DataSource,
     private readonly tg: TelegramAlertService,
+    @Inject(forwardRef(() => BillingService))
+    private readonly billingService: BillingService,
   ) {}
 
   /**
@@ -171,7 +174,11 @@ export class SubscriptionsService implements OnModuleInit {
     dto: CreateSubscriptionDto,
   ): Promise<Subscription> {
     const user = await this.usersService.findById(userId);
-    const planConfig = PLANS[user.plan] ?? PLANS.free;
+    // Use effective plan (resolves team membership, trial, grace) instead of
+    // raw user.plan — a team member with user.plan='free' is effectively
+    // 'organization' through team access and should get unlimited subs.
+    const effective = await this.billingService.getEffectiveAccess(user);
+    const planConfig = PLANS[effective.plan] ?? PLANS.free;
 
     let catalogServiceId: string | null = null;
     let catalogPlanId: string | null = null;
