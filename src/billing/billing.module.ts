@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingService } from './billing.service';
 import { BillingController } from './billing.controller';
+import { BillingHealthController } from './health/billing-health.controller';
 import { UsersModule } from '../users/users.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { Workspace } from '../workspace/entities/workspace.entity';
@@ -28,7 +29,7 @@ import { ReconciliationModule } from './reconciliation/reconciliation.module';
   // TelegramAlertService is declared globally in AppModule but we re-provide
   // it here so the billing module can run in isolation (tests, migrations).
   providers: [BillingService, GracePeriodCron, TelegramAlertService],
-  controllers: [BillingController],
+  controllers: [BillingController, BillingHealthController],
   exports: [BillingService],
 })
 export class BillingModule {}
