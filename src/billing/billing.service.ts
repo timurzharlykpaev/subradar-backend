@@ -1262,60 +1262,6 @@ export class BillingService {
     );
   }
 
-  async getBillingInfo(userId: string, subscriptionCount: number) {
-    const user = await this.usersService.findById(userId);
-    const effective = await this.getEffectiveAccess(user);
-    const effectivePlan = effective.plan;
-    const planConfig = PLANS[effectivePlan] ?? PLANS.free;
-    const currentMonth = this.getCurrentMonth();
-
-    const aiRequestsUsed =
-      user.aiRequestsMonth === currentMonth ? user.aiRequestsUsed : 0;
-
-    let trialDaysLeft: number | null = null;
-    let status: 'active' | 'cancelled' | 'trialing' = 'active';
-
-    if (user.cancelAtPeriodEnd) {
-      status = 'cancelled';
-    }
-
-    if (!user.cancelAtPeriodEnd && user.billingSource !== 'revenuecat' && user.trialEndDate) {
-      const now = Date.now();
-      const end = new Date(user.trialEndDate).getTime();
-      if (end > now) {
-        status = 'trialing';
-        trialDaysLeft = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
-      }
-    }
-
-    const periodEnd = user.currentPeriodEnd ?? user.trialEndDate ?? null;
-
-    return {
-      plan: effectivePlan,
-      source: effective.source,
-      isTeamOwner: effective.isTeamOwner,
-      isTeamMember: effective.isTeamMember,
-      hasOwnPro: effective.hasOwnPro,
-      graceUntil: effective.graceUntil?.toISOString() ?? null,
-      graceDaysLeft: effective.graceDaysLeft ?? null,
-      workspaceExpiringAt: effective.workspaceExpiringAt?.toISOString() ?? null,
-      hasBillingIssue: !!user.billingIssueAt,
-      billingIssueAt: user.billingIssueAt?.toISOString() ?? null,
-      billingPeriod: user.billingPeriod ?? 'monthly',
-      status,
-      currentPeriodEnd: periodEnd?.toISOString() ?? null,
-      cancelAtPeriodEnd: user.cancelAtPeriodEnd ?? false,
-      trialUsed: user.trialUsed,
-      trialDaysLeft,
-      subscriptionCount,
-      subscriptionLimit: planConfig.subscriptionLimit,
-      aiRequestsUsed,
-      aiRequestsLimit: planConfig.aiRequestsLimit,
-      proInviteeEmail: user.proInviteeEmail ?? null,
-      downgradedAt: user.downgradedAt?.toISOString() ?? null,
-    };
-  }
-
   async cancelSubscription(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
 

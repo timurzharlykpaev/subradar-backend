@@ -94,20 +94,9 @@ describe('BillingService', () => {
     });
   });
 
-  describe('getBillingInfo', () => {
-    it('returns plan and limits', async () => {
-      mockUsersService.findById.mockResolvedValue({ ...mockUser, plan: 'free' });
-      const result = await service.getBillingInfo('user-1', 2);
-      expect(result.plan).toBe('free');
-      expect(result.subscriptionCount).toBe(2);
-    });
-    it('returns trialing status when in trial', async () => {
-      const futureDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-      mockUsersService.findById.mockResolvedValue({ ...mockUser, plan: 'pro', trialEndDate: futureDate });
-      const result = await service.getBillingInfo('user-1', 0);
-      expect(result.status).toBe('trialing');
-    });
-  });
+  // NOTE: getBillingInfo was removed from BillingService in Phase 10 of the
+  // subscription refactor. /billing/me now delegates to
+  // EffectiveAccessResolver — see its dedicated spec and the controller spec.
 
   describe('handleWebhook', () => {
     it('upgrades user to pro on subscription_created (via state machine)', async () => {

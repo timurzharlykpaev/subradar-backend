@@ -17,8 +17,9 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
-import { PLAN_DETAILS } from './plans.config';
 import { SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
+import { EffectiveAccessResolver } from './effective-access/effective-access.service';
+import { BillingMeResponse } from './effective-access/billing-me.types';
 
 class CreateCheckoutDto {
   @IsOptional() @IsString() variantId?: string;
@@ -43,6 +44,7 @@ export class BillingController {
     private readonly billingService: BillingService,
     private readonly usersService: UsersService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly effective: EffectiveAccessResolver,
   ) {}
 
   @Post('revenuecat-webhook')
@@ -147,15 +149,21 @@ export class BillingController {
     ];
   }
 
+  /**
+   * Unified billing snapshot consumed by the mobile + web clients.
+   *
+   * Thin controller on purpose: all plan/state/banner/limits math lives
+   * in {@link EffectiveAccessResolver} so this surface and any future
+   * caller (admin console, internal scripts) stay perfectly in sync.
+   *
+   * TODO: Redis cache — wrap resolver call with a short-lived (30–60 s)
+   * per-user cache once we have real traffic data to size it by.
+   */
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  async getBillingMe(@Request() req) {
-    const subs = await this.subscriptionsService.findAll(req.user.id);
-    const activeCount = subs.filter(
-      (s) => s.status === SubscriptionStatus.ACTIVE || s.status === SubscriptionStatus.TRIAL,
-    ).length;
-    return this.billingService.getBillingInfo(req.user.id, activeCount);
+  async getBillingMe(@Request() req): Promise<BillingMeResponse> {
+    return this.effective.resolve(req.user.id);
   }
 
   @ApiBearerAuth()

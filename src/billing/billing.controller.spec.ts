@@ -5,6 +5,7 @@ import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
+import { EffectiveAccessResolver } from './effective-access/effective-access.service';
 
 describe('BillingController', () => {
   let controller: BillingController;
@@ -14,7 +15,6 @@ describe('BillingController', () => {
     handleWebhook: jest.fn().mockResolvedValue(undefined),
     handleLemonSqueezyWebhook: jest.fn().mockResolvedValue(undefined),
     createCheckout: jest.fn().mockResolvedValue({ checkoutUrl: 'https://checkout.url' }),
-    getBillingInfo: jest.fn().mockResolvedValue({ plan: 'free', aiRequestsLeft: 10 }),
     startTrial: jest.fn().mockResolvedValue(undefined),
     activateProInvite: jest.fn().mockResolvedValue(undefined),
     removeProInvite: jest.fn().mockResolvedValue(undefined),
@@ -35,6 +35,14 @@ describe('BillingController', () => {
     ]),
   };
 
+  // BillingMeResponse-shaped stub — only the fields we assert on matter here.
+  // Full resolver behaviour is covered in effective-access.service.spec.ts.
+  const mockEffective = {
+    resolve: jest.fn().mockResolvedValue({
+      effective: { plan: 'free', source: 'free', state: 'free', billingPeriod: null },
+    }),
+  };
+
   const req = { user: { id: 'user-1' } } as any;
 
   beforeEach(async () => {
@@ -44,6 +52,7 @@ describe('BillingController', () => {
         { provide: BillingService, useValue: mockBillingService },
         { provide: UsersService, useValue: mockUsersService },
         { provide: SubscriptionsService, useValue: mockSubscriptionsService },
+        { provide: EffectiveAccessResolver, useValue: mockEffective },
       ],
     }).compile();
 
@@ -102,11 +111,10 @@ describe('BillingController', () => {
     expect(ids).toContain('organization');
   });
 
-  it('getBillingMe → counts active+trial subs and calls getBillingInfo', async () => {
+  it('getBillingMe → delegates to EffectiveAccessResolver', async () => {
     const result = await controller.getBillingMe(req);
-    expect(mockSubscriptionsService.findAll).toHaveBeenCalledWith('user-1');
-    expect(mockBillingService.getBillingInfo).toHaveBeenCalledWith('user-1', 2);
-    expect(result).toHaveProperty('plan');
+    expect(mockEffective.resolve).toHaveBeenCalledWith('user-1');
+    expect(result.effective.plan).toBe('free');
   });
 
   it('startTrial → calls billingService.startTrial', async () => {
