@@ -11,6 +11,7 @@ import { AnalysisService } from '../analysis/analysis.service';
 import { FxService } from '../fx/fx.service';
 import { DataSource } from 'typeorm';
 import { TelegramAlertService } from '../common/telegram-alert.service';
+import { BillingService } from '../billing/billing.service';
 
 // Allows tests to control count returned by transactional em.count
 let _mockActiveCount = 0;
@@ -115,6 +116,21 @@ describe('SubscriptionsService', () => {
           },
         },
         { provide: TelegramAlertService, useValue: { send: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: BillingService,
+          useValue: {
+            // Default: free plan (matches the old raw-user.plan behavior so
+            // existing assertions still fire). Individual tests override via
+            // jest.spyOn/mockImplementation when exercising team-member paths.
+            getEffectiveAccess: jest.fn().mockResolvedValue({
+              plan: 'free',
+              source: 'free',
+              isTeamOwner: false,
+              isTeamMember: false,
+              hasOwnPro: false,
+            }),
+          },
+        },
       ],
     }).compile();
 
