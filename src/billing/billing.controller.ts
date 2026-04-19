@@ -10,7 +10,7 @@ import {
   Request,
   BadRequestException,
 } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'crypto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
@@ -47,6 +47,7 @@ export class BillingController {
     private readonly trials: TrialsService,
   ) {}
 
+  @SkipThrottle()
   @Post('revenuecat-webhook')
   async revenuecatWebhook(
     @Headers('authorization') authorization: string,
@@ -70,6 +71,7 @@ export class BillingController {
     return { received: true };
   }
 
+  @SkipThrottle()
   @Post('webhook')
   async webhook(
     @Req() req: any,
@@ -95,6 +97,7 @@ export class BillingController {
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('checkout')
   async createCheckout(@Request() req, @Body() dto: CreateCheckoutDto) {
     const user = await this.usersService.findById(req.user.id);
@@ -202,6 +205,7 @@ export class BillingController {
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('invite')
   async invite(@Request() req, @Body() dto: InviteDto) {
     await this.billingService.activateProInvite(req.user.id, dto.email);
@@ -210,6 +214,7 @@ export class BillingController {
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Delete('invite')
   async removeInvite(@Request() req) {
     await this.billingService.removeProInvite(req.user.id);
@@ -218,6 +223,7 @@ export class BillingController {
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('sync-revenuecat')
   async syncRevenueCat(@Request() req, @Body() dto: SyncRevenueCatDto) {
     await this.billingService.syncRevenueCat(req.user.id, dto.productId);
@@ -226,6 +232,7 @@ export class BillingController {
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @Post('cancel')
   async cancelBilling(@Request() req) {
     await this.billingService.cancelSubscription(req.user.id);
