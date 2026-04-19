@@ -16,6 +16,19 @@ export enum AuthProvider {
   APPLE = 'apple',
 }
 
+/**
+ * Canonical billing state for a user, written by the BillingStateMachine.
+ * Replaces the ad-hoc combination of `plan + cancelAtPeriodEnd +
+ * gracePeriodEnd + billingIssueAt` flags for access-control decisions.
+ */
+export type BillingStatus =
+  | 'active'
+  | 'cancel_at_period_end'
+  | 'billing_issue'
+  | 'grace_pro'
+  | 'grace_team'
+  | 'free';
+
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn('uuid')
@@ -158,6 +171,43 @@ export class User {
 
   @Column({ type: 'timestamp', nullable: true })
   billingIssueAt: Date | null;
+
+  // --- Billing refactor (state machine) ---
+
+  /**
+   * Canonical billing state. Backfilled from existing flags in
+   * BackfillBillingStatus migration and maintained by the billing
+   * state machine going forward.
+   */
+  @Column({
+    type: 'enum',
+    enum: [
+      'active',
+      'cancel_at_period_end',
+      'billing_issue',
+      'grace_pro',
+      'grace_team',
+      'free',
+    ],
+    default: 'free',
+  })
+  billingStatus: BillingStatus;
+
+  /**
+   * Start of the active paid period. Needed alongside currentPeriodEnd
+   * for RC_RENEWAL transitions + accurate period-over-period analytics.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  currentPeriodStart: Date | null;
+
+  /**
+   * Pro-invite seat graph: NULL for plan owners; set to the inviter's
+   * user id for members granted access through a Pro invite. FK is
+   * ON DELETE SET NULL so deleting an inviter does not cascade-delete
+   * their invitees (they lose access via a separate downgrade flow).
+   */
+  @Column({ type: 'uuid', nullable: true })
+  invitedByUserId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;
