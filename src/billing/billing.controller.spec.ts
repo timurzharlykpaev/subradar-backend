@@ -3,9 +3,8 @@ import { BadRequestException } from '@nestjs/common';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
-import { SubscriptionsService } from '../subscriptions/subscriptions.service';
-import { SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { EffectiveAccessResolver } from './effective-access/effective-access.service';
+import { TrialsService } from './trials/trials.service';
 
 describe('BillingController', () => {
   let controller: BillingController;
@@ -15,7 +14,6 @@ describe('BillingController', () => {
     handleWebhook: jest.fn().mockResolvedValue(undefined),
     handleLemonSqueezyWebhook: jest.fn().mockResolvedValue(undefined),
     createCheckout: jest.fn().mockResolvedValue({ checkoutUrl: 'https://checkout.url' }),
-    startTrial: jest.fn().mockResolvedValue(undefined),
     activateProInvite: jest.fn().mockResolvedValue(undefined),
     removeProInvite: jest.fn().mockResolvedValue(undefined),
     cancelSubscription: jest.fn().mockResolvedValue(undefined),
@@ -27,20 +25,25 @@ describe('BillingController', () => {
     findById: jest.fn().mockResolvedValue({ id: 'user-1', email: 'test@test.com' }),
   };
 
-  const mockSubscriptionsService = {
-    findAll: jest.fn().mockResolvedValue([
-      { status: SubscriptionStatus.ACTIVE },
-      { status: SubscriptionStatus.TRIAL },
-      { status: 'cancelled' },
-    ]),
-  };
-
   // BillingMeResponse-shaped stub — only the fields we assert on matter here.
   // Full resolver behaviour is covered in effective-access.service.spec.ts.
   const mockEffective = {
     resolve: jest.fn().mockResolvedValue({
       effective: { plan: 'free', source: 'free', state: 'free', billingPeriod: null },
     }),
+  };
+
+  const futureTrialEnd = new Date(Date.now() + 7 * 86_400_000);
+  const mockTrials = {
+    activate: jest.fn().mockResolvedValue({
+      id: 'trial-1',
+      userId: 'user-1',
+      plan: 'pro',
+      source: 'backend',
+      endsAt: futureTrialEnd,
+      consumed: true,
+    }),
+    status: jest.fn().mockResolvedValue(null),
   };
 
   const req = { user: { id: 'user-1' } } as any;
@@ -51,8 +54,8 @@ describe('BillingController', () => {
       providers: [
         { provide: BillingService, useValue: mockBillingService },
         { provide: UsersService, useValue: mockUsersService },
-        { provide: SubscriptionsService, useValue: mockSubscriptionsService },
         { provide: EffectiveAccessResolver, useValue: mockEffective },
+        { provide: TrialsService, useValue: mockTrials },
       ],
     }).compile();
 
@@ -117,10 +120,29 @@ describe('BillingController', () => {
     expect(result.effective.plan).toBe('free');
   });
 
-  it('startTrial → calls billingService.startTrial', async () => {
+  it('startTrial → delegates to TrialsService.activate with (userId, backend, pro)', async () => {
     const result = await controller.startTrial(req);
-    expect(mockBillingService.startTrial).toHaveBeenCalledWith('user-1');
-    expect(result).toHaveProperty('success', true);
+    expect(mockTrials.activate).toHaveBeenCalledWith('user-1', 'backend', 'pro');
+    expect(result).toEqual({ success: true, endsAt: futureTrialEnd });
+  });
+
+  it('trialStatus → returns { trial: null } when user has no trial', async () => {
+    mockTrials.status.mockResolvedValueOnce(null);
+    const result = await controller.trialStatus(req);
+    expect(mockTrials.status).toHaveBeenCalledWith('user-1');
+    expect(result).toEqual({ trial: null });
+  });
+
+  it('trialStatus → returns the trial snapshot when present', async () => {
+    const trial = {
+      endsAt: futureTrialEnd,
+      plan: 'pro',
+      source: 'backend',
+      consumed: true,
+    };
+    mockTrials.status.mockResolvedValueOnce(trial as any);
+    const result = await controller.trialStatus(req);
+    expect(result).toEqual({ trial });
   });
 
   it('invite → calls billingService.activateProInvite', async () => {

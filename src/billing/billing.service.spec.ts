@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { ForbiddenException } from '@nestjs/common';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
@@ -81,22 +81,11 @@ describe('BillingService', () => {
 
   it('should be defined', () => { expect(service).toBeDefined(); });
 
-  describe('startTrial', () => {
-    it('sets pro plan and trialEndDate', async () => {
-      mockUsersService.findById.mockResolvedValue({ ...mockUser, trialUsed: false });
-      mockUsersService.update.mockResolvedValue(undefined);
-      await service.startTrial('user-1');
-      expect(mockUsersService.update).toHaveBeenCalledWith('user-1', expect.objectContaining({ plan: 'pro', trialUsed: true }));
-    });
-    it('throws BadRequestException if trial already used', async () => {
-      mockUsersService.findById.mockResolvedValue({ ...mockUser, trialUsed: true });
-      await expect(service.startTrial('user-1')).rejects.toThrow(BadRequestException);
-    });
-  });
-
-  // NOTE: getBillingInfo was removed from BillingService in Phase 10 of the
-  // subscription refactor. /billing/me now delegates to
-  // EffectiveAccessResolver — see its dedicated spec and the controller spec.
+  // NOTE: startTrial + getBillingInfo were removed from BillingService in
+  // Phase 10 of the subscription refactor. /billing/me → EffectiveAccessResolver,
+  // /billing/trial → TrialsService.activate. Controller-level coverage lives
+  // in billing.controller.spec.ts; service-level coverage for trials lives
+  // in trials/__tests__/trials.service.spec.ts.
 
   describe('handleWebhook', () => {
     it('upgrades user to pro on subscription_created (via state machine)', async () => {

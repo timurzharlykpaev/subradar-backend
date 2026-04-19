@@ -10,16 +10,16 @@ import {
   Request,
   BadRequestException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'crypto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
-import { SubscriptionsService } from '../subscriptions/subscriptions.service';
-import { SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { EffectiveAccessResolver } from './effective-access/effective-access.service';
 import { BillingMeResponse } from './effective-access/billing-me.types';
+import { TrialsService } from './trials/trials.service';
 
 class CreateCheckoutDto {
   @IsOptional() @IsString() variantId?: string;
@@ -43,8 +43,8 @@ export class BillingController {
   constructor(
     private readonly billingService: BillingService,
     private readonly usersService: UsersService,
-    private readonly subscriptionsService: SubscriptionsService,
     private readonly effective: EffectiveAccessResolver,
+    private readonly trials: TrialsService,
   ) {}
 
   @Post('revenuecat-webhook')
@@ -166,12 +166,38 @@ export class BillingController {
     return this.effective.resolve(req.user.id);
   }
 
+  /**
+   * Grant the caller their (one) backend trial. Delegates to
+   * {@link TrialsService.activate} which handles the uniqueness lock,
+   * audit log and transactional outbox enqueue.
+   *
+   * Rate-limited to 1 call / minute per account — the global
+   * ThrottlerGuard runs per-IP so a second layer here is cheap
+   * insurance against a compromised token.
+   */
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 1, ttl: 60_000 } })
   @Post('trial')
   async startTrial(@Request() req) {
-    await this.billingService.startTrial(req.user.id);
-    return { success: true, message: 'Trial started. Enjoy 7 days of Pro!' };
+    const trial = await this.trials.activate(req.user.id, 'backend', 'pro');
+    return { success: true, endsAt: trial.endsAt };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('trial')
+  async trialStatus(@Request() req) {
+    const t = await this.trials.status(req.user.id);
+    if (!t) return { trial: null };
+    return {
+      trial: {
+        endsAt: t.endsAt,
+        plan: t.plan,
+        source: t.source,
+        consumed: t.consumed,
+      },
+    };
   }
 
   @ApiBearerAuth()

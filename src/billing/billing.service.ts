@@ -957,26 +957,6 @@ export class BillingService {
   }
 
   /**
-   * @deprecated Trial is now managed by Apple/RevenueCat via Introductory Offers.
-   * Kept for backward compatibility with older app versions.
-   * New clients should use purchasePackage with trial-eligible RC product instead.
-   */
-  async startTrial(userId: string): Promise<void> {
-    const user = await this.usersService.findById(userId);
-    if (user.trialUsed) {
-      throw new BadRequestException('Trial has already been used for this account');
-    }
-    const now = new Date();
-    const trialEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    await this.usersService.update(userId, {
-      plan: 'pro',
-      trialUsed: true,
-      trialStartDate: now,
-      trialEndDate: trialEnd,
-    });
-  }
-
-  /**
    * Activate a Pro-invite seat for `inviteeEmail` granted by `ownerId`.
    *
    * Wrapped in a single DB transaction with `pessimistic_write` locks on
