@@ -1233,9 +1233,18 @@ export class BillingService {
     user.plan = plan;
     user.billingPeriod = billingPeriod;
     user.billingSource = 'revenuecat';
+    // Verified purchase → state must be 'active'. Without this EffectiveAccess
+    // keeps returning free because the resolver requires billingStatus in
+    // ('active','cancel_at_period_end','billing_issue') before treating the
+    // user as paid. This was missed when billingStatus was introduced in the
+    // refactor because syncRevenueCat predates the state machine.
+    user.billingStatus = 'active';
     // Reset cancellation flags — verified purchase supersedes any previous cancellation
     user.cancelAtPeriodEnd = false;
     user.currentPeriodEnd = null;
+    user.billingIssueAt = null;
+    user.gracePeriodEnd = null;
+    user.gracePeriodReason = null;
     await this.usersService.save(user);
     this.logger.log(
       `syncRevenueCat: verified via RC — user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId})`,
