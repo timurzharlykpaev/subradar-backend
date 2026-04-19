@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bull';
 import { NotificationsService } from './notifications.service';
+import { SuppressionService } from './suppression.service';
 
 jest.mock('firebase-admin', () => ({
   apps: [], initializeApp: jest.fn(),
@@ -32,6 +33,10 @@ describe('NotificationsService', () => {
         NotificationsService,
         { provide: getQueueToken('notifications'), useValue: mockQueue },
         { provide: ConfigService, useValue: mockConfigService },
+        {
+          provide: SuppressionService,
+          useValue: { isSuppressed: jest.fn().mockResolvedValue(false) },
+        },
       ],
     }).compile();
     service = module.get<NotificationsService>(NotificationsService);

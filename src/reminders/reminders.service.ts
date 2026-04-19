@@ -91,6 +91,20 @@ export class RemindersService {
         const reminderDays: number[] = (sub as any).reminderDaysBefore ?? [1, 3];
         if (!reminderDays.includes(daysLeft)) continue;
 
+        // Idempotency: skip if we already sent a reminder for this subscription
+        // today (cron retry / two-pod race). lastReminderSentDate stores the
+        // UTC calendar date of the most recent send.
+        const todayKey = utcToday.toISOString().split('T')[0];
+        const lastSent = (sub as any).lastReminderSentDate
+          ? new Date((sub as any).lastReminderSentDate)
+              .toISOString()
+              .split('T')[0]
+          : null;
+        if (lastSent === todayKey) {
+          this.logger.debug(`Skipping ${sub.id} — reminder already sent today`);
+          continue;
+        }
+
         // Send email (check emailNotifications preference)
         const emailEnabled = (user as any).emailNotifications !== false;
         if (emailEnabled) {
@@ -103,7 +117,13 @@ export class RemindersService {
             dateStr,
             'https://app.subradar.ai',
             (user as any).locale ?? 'ru',
+            user.id,
           );
+          // Mark sent — done after the email call so a Resend failure leaves
+          // the row unsent and we'll retry tomorrow rather than silently miss.
+          await this.subscriptionRepo.update(sub.id, {
+            lastReminderSentDate: utcToday,
+          } as any);
         }
 
         // Send push if fcmToken exists
@@ -273,7 +293,12 @@ export class RemindersService {
               <p><a href="https://app.subradar.ai">Renew your subscription</a> to keep your Pro benefits.</p>
               <p>— SubRadar Team</p>
             `;
-            await this.notificationsService.sendEmail(user.email, subject, html);
+            await this.notificationsService.sendEmail(
+              user.email,
+              subject,
+              html,
+              { userId: user.id, unsubType: 'email_notifications' },
+            );
           }
         }
 

@@ -8,6 +8,10 @@ const APP_URL = 'https://app.subradar.ai';
 // Mobile deep link (hardcoded until dynamic branch links are set up)
 const MOBILE_URL = 'https://app.subradar.ai';
 
+// CAN-SPAM compliance: physical postal address required in every commercial
+// email. Goalin LLP is the legal entity behind SubRadar.
+const COMPANY_FOOTER_ADDRESS = 'Goalin LLP · Astana, Kazakhstan';
+
 // ─── i18n strings ────────────────────────────────────────────────────────────
 
 interface I18nStrings {
@@ -84,7 +88,26 @@ function t(locale: string): I18nStrings {
 
 // ─── Shared layout wrappers ───────────────────────────────────────────────────
 
-function wrap(content: string): string {
+/**
+ * Wrap arbitrary inner content in the SubRadar email shell.
+ *
+ * @param content   Raw `<tr>...</tr>` rows that go between header and footer.
+ * @param opts.unsubscribeUrl   HMAC-signed one-click unsub URL (preferred). When omitted
+ *                              we fall back to a deep-link to in-app settings — safe for
+ *                              transactional mail (magic links etc.) but NOT for any
+ *                              recurring email, which must always supply a real link.
+ * @param opts.preheader        Hidden preview text shown by Gmail/Apple Mail in the
+ *                              inbox list. Keep it under ~110 chars.
+ */
+function wrap(
+  content: string,
+  opts: { unsubscribeUrl?: string | null; preheader?: string } = {},
+): string {
+  const unsubHref =
+    opts.unsubscribeUrl || `${APP_URL}/app/settings?tab=notifications`;
+  const preheader = opts.preheader
+    ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#0a0a16;opacity:0;">${opts.preheader}</div>`
+    : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -94,6 +117,7 @@ function wrap(content: string): string {
   <!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
 </head>
 <body style="margin:0;padding:0;background-color:#0a0a16;-webkit-text-size-adjust:100%;mso-line-height-rule:exactly;">
+  ${preheader}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#0a0a16;padding:32px 0;">
     <tr>
       <td align="center" style="padding:0 16px;">
@@ -109,12 +133,18 @@ function wrap(content: string): string {
             </td>
           </tr>
           ${content}
-          <!-- FOOTER -->
+          <!-- FOOTER (CAN-SPAM compliant: address + unsubscribe) -->
           <tr>
             <td align="center" style="padding-top:24px;">
+              <p style="margin:0 0 6px;font-size:12px;color:#4b5563;line-height:1.6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+                ${COMPANY_FOOTER_ADDRESS}
+              </p>
               <p style="margin:0;font-size:12px;color:#374151;line-height:1.6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-                SubRadar AI&nbsp;·&nbsp;
-                <a href="${APP_URL}/app/settings?tab=notifications" style="color:#6D28D9;text-decoration:none;">Unsubscribe</a>
+                <a href="${unsubHref}" style="color:#6D28D9;text-decoration:underline;">Unsubscribe</a>
+                &nbsp;·&nbsp;
+                <a href="${APP_URL}/legal/privacy" style="color:#6D28D9;text-decoration:none;">Privacy</a>
+                &nbsp;·&nbsp;
+                <a href="${APP_URL}/legal/terms" style="color:#6D28D9;text-decoration:none;">Terms</a>
               </p>
             </td>
           </tr>
@@ -205,7 +235,10 @@ export function buildMonthlyReportHtml(
     </td>
   </tr>`;
 
-  return wrap(content);
+  const preheader = locale.startsWith('ru')
+    ? `Отчёт за ${month}: ${fmt(safeTotal)} на ${count} подписках`
+    : `${month} report: ${fmt(safeTotal)} across ${count} subscriptions`;
+  return wrap(content, { preheader });
 }
 
 // ─── Weekly Digest ───────────────────────────────────────────────────────────
@@ -368,7 +401,10 @@ export function buildWeeklyDigestHtml(
     </td>
   </tr>`;
 
-  return wrap(content);
+  const preheader = isRu
+    ? `Сэкономьте ${fmt(safeSavings)}/мес на ${activeCount} подписках`
+    : `Save ${fmt(safeSavings)}/mo across ${activeCount} subscriptions`;
+  return wrap(content, { unsubscribeUrl, preheader });
 }
 
 // ─── Payment Reminder ─────────────────────────────────────────────────────────
@@ -381,6 +417,7 @@ export function buildPaymentReminderHtml(
   daysLeft: number,
   date: string,
   locale = 'ru',
+  unsubscribeUrl: string | null = null,
 ): string {
   const s = t(locale);
   const safeAmount = isNaN(amount) || !isFinite(amount) ? 0 : amount;
@@ -436,5 +473,9 @@ export function buildPaymentReminderHtml(
     </td>
   </tr>`;
 
-  return wrap(content);
+  const preheader = locale.startsWith('ru')
+    ? `${subName} спишется через ${daysLeft === 1 ? '1 день' : `${daysLeft} дн.`} — ${fmtAmount}`
+    : `${subName} renews in ${daysLeft === 1 ? '1 day' : `${daysLeft} days`} — ${fmtAmount}`;
+
+  return wrap(content, { unsubscribeUrl, preheader });
 }

@@ -85,7 +85,10 @@ export class MonthlyReportService {
           ? `📊 Ваш отчёт SubRadar за ${monthName}`
           : `📊 Your SubRadar report for ${monthName}`;
 
-        await this.notifications.sendEmail(user.email, subject, html);
+        await this.notifications.sendEmail(user.email, subject, html, {
+          userId: user.id,
+          unsubType: 'email_notifications',
+        });
         sent++;
       } catch (e) {
         this.logger.error(`Failed to send report to ${user.email}: ${e}`);

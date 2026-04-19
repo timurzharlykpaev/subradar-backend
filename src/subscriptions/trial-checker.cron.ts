@@ -81,6 +81,7 @@ export class TrialCheckerCron {
             ${sub.cancelUrl ? `<p><a href="${sub.cancelUrl}">Cancel subscription</a></p>` : ''}
             <p>Log in to <a href="https://app.subradar.ai">SubRadar AI</a> to manage your subscriptions.</p>
           `,
+          { userId: user.id, unsubType: 'email_notifications' },
         );
 
         this.logger.log(
@@ -146,6 +147,8 @@ export class TrialCheckerCron {
           1,
           new Date(user.trialEndDate).toLocaleDateString('ru-RU'),
           'https://app.subradar.ai',
+          'ru',
+          user.id,
         );
 
         this.logger.log(`Sent Pro trial expiry warning to ${user.email}`);
@@ -277,6 +280,7 @@ export class TrialCheckerCron {
         user.email,
         '⏰ SubRadar: Пробный период завершён',
         html,
+        { userId: user.id, unsubType: 'email_notifications' },
       );
 
       this.logger.log(`Sent trial expired notification to ${user.email}`);
