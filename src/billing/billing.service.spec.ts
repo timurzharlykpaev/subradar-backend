@@ -9,6 +9,7 @@ import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
 import { WebhookEvent } from './entities/webhook-event.entity';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { AuditService } from '../common/audit/audit.service';
+import { OutboxService } from './outbox/outbox.service';
 
 const mockUsersService = {
   findById: jest.fn(), findByEmail: jest.fn(), update: jest.fn(), save: jest.fn(),
@@ -66,6 +67,7 @@ describe('BillingService', () => {
         { provide: getDataSourceToken(), useValue: mockDataSource },
         { provide: TelegramAlertService, useValue: mockTelegramAlert },
         { provide: AuditService, useValue: { log: jest.fn() } },
+        { provide: OutboxService, useValue: { enqueue: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
     service = module.get<BillingService>(BillingService);
@@ -151,6 +153,7 @@ describe('BillingService', () => {
         mockDataSource as any,
         mockTelegramAlert as any,
         { log: jest.fn() } as any, // AuditService stub
+        { enqueue: jest.fn() } as any, // OutboxService stub
       );
       const payload = 'test-payload';
       const sig = createHmac('sha256', secret).update(payload).digest('hex');

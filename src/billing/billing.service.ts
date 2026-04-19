@@ -19,6 +19,7 @@ import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
 import { User } from '../users/entities/user.entity';
 import { WebhookEvent } from './entities/webhook-event.entity';
 import { TelegramAlertService } from '../common/telegram-alert.service';
+import { OutboxService } from './outbox/outbox.service';
 import { maskEmail } from '../common/utils/pii';
 
 export interface EffectiveAccess {
@@ -53,6 +54,7 @@ export class BillingService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly telegramAlert: TelegramAlertService,
     private readonly audit: AuditService,
+    private readonly outbox: OutboxService,
   ) {
     this.webhookSecret = cfg.get('LEMON_SQUEEZY_WEBHOOK_SECRET', '');
     this.apiKey = cfg.get('LEMON_SQUEEZY_API_KEY', '');
@@ -752,23 +754,70 @@ export class BillingService {
     });
   }
 
+  /**
+   * Activate a Pro-invite seat for `inviteeEmail` granted by `ownerId`.
+   *
+   * Wrapped in a single DB transaction with `pessimistic_write` locks on
+   * both owner and invitee rows so concurrent webhook writes (e.g. the
+   * owner cancelling at the same moment) cannot race into a state where
+   * the invitee is upgraded after the owner has already lost Pro.
+   *
+   * Side-effects:
+   *  - audit log row (`billing.pro_invite_activated`)
+   *  - amplitude event enqueued via the transactional outbox (`manager`
+   *    passed so the enqueue commits with the plan write).
+   */
   async activateProInvite(ownerId: string, inviteeEmail: string): Promise<void> {
-    const owner = await this.usersService.findById(ownerId);
-    if (owner.plan !== 'pro' && owner.plan !== 'organization') {
-      throw new ForbiddenException('Only Pro or Organization users can send invites');
-    }
-    if (owner.plan === 'pro' && owner.proInviteeEmail) {
-      throw new BadRequestException('You already have an active invite. Remove it first.');
-    }
-    const invitee = await this.usersService.findByEmail(inviteeEmail);
-    if (!invitee) {
-      throw new NotFoundException(`User with email ${inviteeEmail} not found`);
-    }
-    if (invitee.id === ownerId) {
-      throw new BadRequestException('You cannot invite yourself');
-    }
-    await this.usersService.update(invitee.id, { plan: 'pro' });
-    await this.usersService.update(ownerId, { proInviteeEmail: inviteeEmail });
+    const email = inviteeEmail.toLowerCase().trim();
+    await this.dataSource.transaction(async (m) => {
+      const owner = await m.findOne(User, {
+        where: { id: ownerId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!owner) throw new NotFoundException('Owner not found');
+      if (owner.plan !== 'pro' && owner.plan !== 'organization') {
+        throw new ForbiddenException('Only Pro or Organization users can send invites');
+      }
+      if (owner.cancelAtPeriodEnd) {
+        throw new BadRequestException('Cannot invite while subscription is cancelled');
+      }
+      if (owner.proInviteeEmail) {
+        throw new ConflictException('You already have an active invite. Remove it first.');
+      }
+
+      const invitee = await m.findOne(User, {
+        where: { email },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!invitee) throw new NotFoundException(`User with email ${email} not found`);
+      if (invitee.id === owner.id) throw new BadRequestException('You cannot invite yourself');
+      if (invitee.plan !== 'free') {
+        throw new ConflictException('User already on a paid plan');
+      }
+
+      invitee.plan = 'pro';
+      invitee.billingSource = null as any;
+      invitee.invitedByUserId = owner.id;
+      owner.proInviteeEmail = email;
+      await m.save([owner, invitee]);
+
+      await this.audit.log({
+        userId: owner.id,
+        action: 'billing.pro_invite_activated',
+        resourceType: 'user',
+        resourceId: invitee.id,
+        metadata: { email: maskEmail(email) },
+      });
+      await this.outbox.enqueue(
+        'amplitude.track',
+        {
+          event: 'billing.pro_invite_sent',
+          userId: owner.id,
+          properties: { inviteeId: invitee.id },
+        },
+        m,
+      );
+    });
   }
 
   async removeProInvite(ownerId: string): Promise<void> {
@@ -785,19 +834,46 @@ export class BillingService {
    * subscription. Uses a pessimistic lock so concurrent writes (e.g. owner
    * cancels while invitee is mid-checkout) can't race into an inconsistent
    * state where we clobber a freshly-purchased billingSource.
+   *
+   * Emits an audit entry + amplitude event through the outbox so membership
+   * graph churn is observable alongside the plan change.
    */
   private async downgradeInviteeIfEligible(inviteeEmail: string): Promise<void> {
-    await this.dataSource.transaction(async (em) => {
-      const freshInvitee = await em.findOne(User, {
-        where: { email: inviteeEmail },
+    const email = inviteeEmail.toLowerCase().trim();
+    await this.dataSource.transaction(async (m) => {
+      const invitee = await m.findOne(User, {
+        where: { email },
         lock: { mode: 'pessimistic_write' },
       });
-      if (!freshInvitee) return;
+      if (!invitee) return;
       // If the invitee now has their own paid subscription we must NOT
       // reset them to free — their plan is theirs.
-      if (freshInvitee.billingSource) return;
-      if (freshInvitee.plan === 'free') return;
-      await em.update(User, freshInvitee.id, { plan: 'free' });
+      if (invitee.billingSource) return;
+      if (invitee.plan === 'free') return;
+
+      const previousPlan = invitee.plan;
+      const inviterId = invitee.invitedByUserId;
+      invitee.plan = 'free';
+      invitee.billingSource = null as any;
+      invitee.invitedByUserId = null;
+      await m.save(invitee);
+
+      await this.audit.log({
+        userId: inviterId ?? invitee.id,
+        action: 'billing.pro_invite_deactivated',
+        resourceType: 'user',
+        resourceId: invitee.id,
+        metadata: { email: maskEmail(email), previousPlan },
+      });
+      await this.outbox.enqueue(
+        'amplitude.track',
+        {
+          event: 'billing.pro_invite_revoked',
+          userId: inviterId ?? invitee.id,
+          properties: { inviteeId: invitee.id, previousPlan },
+        },
+        m,
+      );
     });
   }
 
