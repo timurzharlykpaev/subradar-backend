@@ -351,6 +351,37 @@ export class BillingService {
    * UNIQUE-constraint violation the INSERT fails and we know someone else
    * (or an earlier retry) has already handled this event.
    */
+  /**
+   * Enrich the already-claimed webhook_events row with the resolved user
+   * id, provider event type, and final error text. Called after a handler
+   * completes (success -> error=null) or fails (error=err.message) so
+   * the reconciliation cron can find unprocessed events via the
+   * partial index `idx_webhook_events_user_error`.
+   *
+   * Best-effort — never throws. The billing write has already committed
+   * (or rolled back) by the time we reach here; a missed enrichment is
+   * preferable to failing the webhook response.
+   */
+  async updateWebhookEventMeta(
+    provider: string,
+    eventId: string,
+    userId: string | null,
+    eventType: string | null,
+    error: string | null,
+  ): Promise<void> {
+    if (!eventId) return;
+    try {
+      await this.webhookEventRepo.update(
+        { provider, eventId },
+        { userId, eventType, error: error ? error.slice(0, 2000) : null },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `updateWebhookEventMeta failed (${provider}/${eventId}): ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   async claimWebhookEvent(provider: string, eventId: string): Promise<boolean> {
     if (!eventId) {
       // Without a stable event_id we can't dedupe — just let it through
@@ -420,11 +451,29 @@ export class BillingService {
     const claimed = await this.claimWebhookEvent('lemon_squeezy', eventId);
     if (!claimed) return;
 
+    // Resolve local user id from LS customer email — best effort; the
+    // handler itself tolerates missing users, but for the reconciliation
+    // cron we want webhook_events.user_id populated whenever possible.
+    let resolvedUserId: string | null = null;
+    if (email) {
+      const u = await this.usersService.findByEmail(email).catch(() => null);
+      resolvedUserId = u?.id ?? null;
+    }
+
     try {
       await this.handleWebhook(event, data);
+      await this.updateWebhookEventMeta('lemon_squeezy', eventId, resolvedUserId, event, null);
     } catch (err) {
       this.logger.error(
         `Lemon Squeezy webhook ${event} failed: ${err instanceof Error ? err.stack : err}`,
+      );
+      const msg = err instanceof Error ? err.message : String(err);
+      await this.updateWebhookEventMeta(
+        'lemon_squeezy',
+        eventId,
+        resolvedUserId,
+        event,
+        msg,
       );
       // Roll back the idempotency record so LS retries on the next delivery.
       await this.webhookEventRepo
@@ -600,10 +649,13 @@ export class BillingService {
 
     try {
       await this.processRevenueCatEvent(event as RCRawEvent, user);
+      await this.updateWebhookEventMeta('revenuecat', eventId, user.id, type, null);
     } catch (err) {
       this.logger.error(
         `RevenueCat webhook ${type} failed: ${err instanceof Error ? err.stack : err}`,
       );
+      const msg = err instanceof Error ? err.message : String(err);
+      await this.updateWebhookEventMeta('revenuecat', eventId, user.id, type, msg);
       // Roll back idempotency record so RC retries on the next delivery.
       await this.webhookEventRepo
         .delete({ provider: 'revenuecat', eventId })

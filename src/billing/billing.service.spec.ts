@@ -33,6 +33,7 @@ const mockWorkspaceMemberRepo = {
 const mockWebhookEventRepo = {
   insert: jest.fn().mockResolvedValue(undefined),
   delete: jest.fn().mockResolvedValue(undefined),
+  update: jest.fn().mockResolvedValue(undefined),
 };
 
 const mockManager = {
