@@ -12,6 +12,7 @@ import { GracePeriodCron } from './grace-period.cron';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { EffectiveAccessModule } from './effective-access/effective-access.module';
 import { OutboxModule } from './outbox/outbox.module';
+import { TrialsModule } from './trials/trials.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { OutboxModule } from './outbox/outbox.module';
     forwardRef(() => SubscriptionsModule),
     EffectiveAccessModule,
     OutboxModule,
+    TrialsModule,
   ],
   // TelegramAlertService is declared globally in AppModule but we re-provide
   // it here so the billing module can run in isolation (tests, migrations).
