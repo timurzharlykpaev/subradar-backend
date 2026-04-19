@@ -37,6 +37,7 @@ import {
   PRODUCT_TO_PLAN as RC_PRODUCT_TO_PLAN_MAP,
   RCRawEvent,
 } from './revenuecat/event-mapper';
+import { mapLSEventToBillingEvent } from './lemon-squeezy/event-mapper';
 
 export interface EffectiveAccess {
   plan: 'free' | 'pro' | 'organization';
@@ -434,92 +435,139 @@ export class BillingService {
     }
   }
 
+  /**
+   * Entry point invoked for every Lemon Squeezy event after idempotency
+   * dedupe. Runs the event through the billing state machine so:
+   *   - we write plan/state/billingSource atomically with the audit row
+   *     and the amplitude outbox enqueue;
+   *   - unmapped statuses (`on_trial`, refunded) fall through without
+   *     touching the user plan — exactly like the old handler;
+   *   - `order_created` stays a no-op (logged).
+   *
+   * Pro-invite seat cleanup on cancellation runs AFTER the main tx to
+   * avoid re-nesting `downgradeInviteeIfEligible`'s own pessimistic-lock
+   * transaction.
+   */
   async handleWebhook(event: string, data: any) {
     this.logger.log(`Lemon Squeezy webhook: ${event}`);
 
-    switch (event) {
-      case 'subscription_created':
-      case 'subscription_updated': {
-        const customerId = data?.attributes?.customer_id;
-        const email = data?.attributes?.user_email;
-        const status = data?.attributes?.status;
-        const variantId = String(data?.attributes?.variant_id ?? '');
-        const teamVariants = [
-          process.env.LEMON_SQUEEZY_TEAM_MONTHLY_VARIANT_ID,
-          process.env.LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID,
-          '1377279', '1377285',
-        ].filter(Boolean);
-        const isTeam = teamVariants.includes(variantId);
+    if (event === 'order_created') {
+      this.logger.log('Order created:', data?.id);
+      return;
+    }
 
-        if (email) {
-          const user = await this.usersService.findByEmail(email);
-          if (user) {
-            const isActive = status === 'active' || status === 'on_trial';
-            const yearlyVariants = [
-              process.env.LEMON_SQUEEZY_PRO_YEARLY_VARIANT_ID,
-              process.env.LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID,
-              '1377285',
-            ].filter(Boolean);
-            const isYearly = yearlyVariants.includes(variantId);
-            const updates: any = {
-              plan: isActive ? (isTeam ? 'organization' : 'pro') : 'free',
-              billingPeriod: isActive ? (isYearly ? 'yearly' : 'monthly') : null,
-              lemonSqueezyCustomerId: String(customerId),
-              billingSource: 'lemon_squeezy',
-            };
-            this.logger.log(`Webhook upgrade: email=${maskEmail(email)} variantId=${variantId} isTeam=${isTeam} plan=${updates.plan} period=${updates.billingPeriod} status=${status}`);
-            const previousPlan = user.plan;
-            await this.usersService.update(user.id, updates);
-            await this.audit.log({
-              userId: user.id,
-              action: 'billing.webhook.plan_change',
-              resourceType: 'user',
-              resourceId: user.id,
-              metadata: {
-                provider: 'lemon_squeezy',
-                event,
-                previousPlan,
-                nextPlan: updates.plan,
-                billingPeriod: updates.billingPeriod,
-                variantId,
-                lemonSqueezyStatus: status,
-              },
-            });
-          }
-        }
-        break;
+    const email: string | undefined = data?.attributes?.user_email;
+    const customerId = data?.attributes?.customer_id;
+    const variantId = String(data?.attributes?.variant_id ?? '');
+    const status = data?.attributes?.status;
+
+    if (!email) return;
+    const user = await this.usersService.findByEmail(email);
+    if (!user) {
+      this.logger.warn(`LS ${event}: user ${maskEmail(email)} not found`);
+      return;
+    }
+
+    const billingEvent = mapLSEventToBillingEvent(event, data);
+    if (!billingEvent) {
+      this.logger.log(`LS ${event} skipped (no state-machine mapping, status=${status})`);
+      return;
+    }
+
+    let previousPlan: string | null = null;
+    let nextPlan: string | null = null;
+    let inviteeEmailToRevoke: string | null = null;
+
+    await this.dataSource.transaction(async (m) => {
+      const current = this.snapshotFromUser(user);
+      let next: UserBillingSnapshot;
+      try {
+        next = transition(current, billingEvent);
+      } catch (err) {
+        this.logger.warn(
+          `LS ${event} invalid transition from ${current.state} for user ${user.id}: ${(err as Error).message}`,
+        );
+        await this.audit.log({
+          userId: user.id,
+          action: 'billing.webhook.invalid_transition',
+          resourceType: 'user',
+          resourceId: user.id,
+          metadata: {
+            provider: 'lemon_squeezy',
+            event,
+            from: current.state,
+            variantId,
+            error: (err as Error).message,
+          },
+        });
+        return;
       }
-      case 'subscription_cancelled': {
-        const email = data?.attributes?.user_email;
-        if (email) {
-          const user = await this.usersService.findByEmail(email);
-          if (user) {
-            const previousPlan = user.plan;
-            await this.usersService.update(user.id, { plan: 'free' });
-            await this.audit.log({
-              userId: user.id,
-              action: 'billing.webhook.plan_change',
-              resourceType: 'user',
-              resourceId: user.id,
-              metadata: {
-                provider: 'lemon_squeezy',
-                event,
-                previousPlan,
-                nextPlan: 'free',
-              },
-            });
-            if (user.proInviteeEmail) {
-              await this.downgradeInviteeIfEligible(user.proInviteeEmail);
-              await this.usersService.update(user.id, { proInviteeEmail: undefined as any });
-            }
-          }
-        }
-        break;
+
+      await this.applySnapshot(m, user, next);
+      previousPlan = current.plan;
+      nextPlan = next.plan;
+
+      // Persist the LS customer id so we can cross-reference in future
+      // deliveries — the state machine doesn't own this column.
+      if (customerId && !user.lemonSqueezyCustomerId) {
+        await m.update(User, user.id, { lemonSqueezyCustomerId: String(customerId) });
+        user.lemonSqueezyCustomerId = String(customerId);
       }
-      case 'order_created': {
-        this.logger.log('Order created:', data?.id);
-        break;
+
+      await this.audit.log({
+        userId: user.id,
+        action: 'billing.webhook.state_transition',
+        resourceType: 'user',
+        resourceId: user.id,
+        metadata: {
+          provider: 'lemon_squeezy',
+          event,
+          from: current.state,
+          to: next.state,
+          previousPlan: current.plan,
+          nextPlan: next.plan,
+          variantId,
+          lemonSqueezyStatus: status,
+        },
+      });
+
+      if (
+        next.state !== current.state ||
+        next.plan !== current.plan ||
+        next.billingSource !== current.billingSource
+      ) {
+        await this.outbox.enqueue(
+          'amplitude.track',
+          {
+            event: this.amplitudeEventForLS(event),
+            userId: user.id,
+            properties: {
+              planBefore: current.plan,
+              planAfter: next.plan,
+              stateBefore: current.state,
+              stateAfter: next.state,
+              source: 'lemon_squeezy',
+              variantId,
+            },
+          },
+          m,
+        );
       }
+
+      // Queue invitee revocation for AFTER the tx commits.
+      if (billingEvent.type === 'LS_SUBSCRIPTION_CANCELLED' && user.proInviteeEmail) {
+        inviteeEmailToRevoke = user.proInviteeEmail;
+        await m.update(User, user.id, { proInviteeEmail: null as any });
+        user.proInviteeEmail = null as any;
+      }
+    });
+
+    this.logger.log(
+      `LS ${event}: user ${user.id} ${previousPlan ?? '?'} → ${nextPlan ?? '?'} (variant=${variantId})`,
+    );
+
+    if (inviteeEmailToRevoke) {
+      await this.downgradeInviteeIfEligible(inviteeEmailToRevoke);
     }
   }
 

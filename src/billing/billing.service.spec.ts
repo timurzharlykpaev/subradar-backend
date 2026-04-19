@@ -35,13 +35,15 @@ const mockWebhookEventRepo = {
   delete: jest.fn().mockResolvedValue(undefined),
 };
 
+const mockManager = {
+  findOne: jest.fn().mockResolvedValue(null),
+  update: jest.fn().mockResolvedValue(undefined),
+  find: jest.fn().mockResolvedValue([]),
+  save: jest.fn().mockResolvedValue(undefined),
+};
+
 const mockDataSource = {
-  transaction: jest.fn(async (cb: any) =>
-    cb({
-      findOne: jest.fn().mockResolvedValue(null),
-      update: jest.fn().mockResolvedValue(undefined),
-    }),
-  ),
+  transaction: jest.fn(async (cb: any) => cb(mockManager)),
 };
 
 const mockTelegramAlert = {
@@ -107,17 +109,43 @@ describe('BillingService', () => {
   });
 
   describe('handleWebhook', () => {
-    it('upgrades user to pro on subscription_created', async () => {
-      mockUsersService.findByEmail.mockResolvedValue({ ...mockUser, plan: 'free' });
-      mockUsersService.update.mockResolvedValue(undefined);
-      await service.handleWebhook('subscription_created', { attributes: { user_email: 'test@example.com', status: 'active', variant_id: '874616', customer_id: 'cust-1' } });
-      expect(mockUsersService.update).toHaveBeenCalledWith('user-1', expect.objectContaining({ plan: 'pro' }));
+    it('upgrades user to pro on subscription_created (via state machine)', async () => {
+      mockUsersService.findByEmail.mockResolvedValue({ ...mockUser, plan: 'free', billingStatus: 'free' });
+      mockManager.update.mockClear();
+      await service.handleWebhook('subscription_created', {
+        attributes: {
+          user_email: 'test@example.com',
+          status: 'active',
+          variant_id: '874616',
+          customer_id: 'cust-1',
+        },
+      });
+      // First call is the state-machine snapshot write on the User row.
+      const userUpdate = mockManager.update.mock.calls.find(
+        (c: any[]) => c[1] === 'user-1',
+      );
+      expect(userUpdate).toBeTruthy();
+      expect(userUpdate?.[2]).toEqual(
+        expect.objectContaining({
+          plan: 'pro',
+          billingStatus: 'active',
+          billingSource: 'lemon_squeezy',
+        }),
+      );
     });
-    it('downgrades user on subscription_cancelled', async () => {
-      mockUsersService.findByEmail.mockResolvedValue({ ...mockUser, plan: 'pro' });
-      mockUsersService.update.mockResolvedValue(undefined);
-      await service.handleWebhook('subscription_cancelled', { attributes: { user_email: 'test@example.com' } });
-      expect(mockUsersService.update).toHaveBeenCalledWith('user-1', { plan: 'free' });
+    it('downgrades user on subscription_cancelled (via state machine)', async () => {
+      mockUsersService.findByEmail.mockResolvedValue({ ...mockUser, plan: 'pro', billingStatus: 'active' });
+      mockManager.update.mockClear();
+      await service.handleWebhook('subscription_cancelled', {
+        attributes: { user_email: 'test@example.com' },
+      });
+      const userUpdate = mockManager.update.mock.calls.find(
+        (c: any[]) => c[1] === 'user-1',
+      );
+      expect(userUpdate).toBeTruthy();
+      expect(userUpdate?.[2]).toEqual(
+        expect.objectContaining({ plan: 'free', billingStatus: 'free' }),
+      );
     });
     it('handles order_created without error', async () => {
       await expect(service.handleWebhook('order_created', { id: 'order-1' })).resolves.toBeUndefined();
