@@ -322,7 +322,11 @@ jobs:
             fi
 
             echo "✅ $CONTAINER healthy"
-            docker image prune -f
+            # Best-effort image cleanup — never fail the deploy on it. When
+            # main and dev pipelines run in parallel, one prune can already
+            # be in flight ("a prune operation is already running"); the
+            # other run will clean up next time.
+            docker image prune -f || echo "image prune skipped (race with another deploy)"
             rm -f "$LOCK"
         env:
           TARGET: ${{ steps.env.outputs.target }}
