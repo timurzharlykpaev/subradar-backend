@@ -52,15 +52,21 @@ class LookupServiceDto {
   @IsString() query: string;
   @IsOptional() @IsString() locale?: string;
   @IsOptional() @IsString() country?: string;
+  @IsOptional() @IsString() currency?: string;
 }
 
 class ParseScreenshotDto {
   @IsOptional() @IsString() imageBase64?: string;
+  @IsOptional() @IsString() locale?: string;
+  @IsOptional() @IsString() currency?: string;
+  @IsOptional() @IsString() country?: string;
 }
 
 class VoiceDto {
   @IsOptional() @IsString() audioBase64?: string;
   @IsOptional() @IsString() locale?: string;
+  @IsOptional() @IsString() currency?: string;
+  @IsOptional() @IsString() country?: string;
 }
 
 class SuggestCancelDto {
@@ -72,6 +78,23 @@ class ParseTextDto {
   @IsOptional() @IsString() locale?: string;
   @IsOptional() @IsString() currency?: string;
   @IsOptional() @IsString() country?: string;
+}
+
+/**
+ * Resolve locale/currency/country from request DTO with fallback to authenticated
+ * user's profile. Guarantees AI prompts always have these signals even if the
+ * frontend forgets to forward them.
+ */
+function resolveLocaleContext(
+  req: any,
+  dto: { locale?: string; currency?: string; country?: string } = {},
+): { locale: string; currency: string; country: string } {
+  const u = req?.user || {};
+  return {
+    locale: dto.locale || u.locale || 'en',
+    currency: dto.currency || u.displayCurrency || u.defaultCurrency || 'USD',
+    country: dto.country || u.region || u.country || 'US',
+  };
 }
 
 @ApiTags('ai')
@@ -89,19 +112,22 @@ export class AiController {
   @Post('lookup')
   async lookup(@Request() req, @Body() dto: LookupServiceDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.lookupService(dto.query, dto.locale, dto.country);
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.lookupService(dto.query, ctx);
   }
 
   @Post('lookup-service')
   async lookupServiceAlias(@Request() req, @Body() dto: LookupServiceDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.lookupService(dto.query, dto.locale, dto.country);
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.lookupService(dto.query, ctx);
   }
 
   @Post('search')
   async search(@Request() req, @Body() dto: LookupServiceDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.lookupService(dto.query, dto.locale, dto.country);
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.lookupService(dto.query, ctx);
   }
 
   @Post('parse-screenshot')
@@ -125,13 +151,15 @@ export class AiController {
     if (!imageBase64 && file) {
       imageBase64 = file.buffer.toString('base64');
     }
-    return this.aiService.parseScreenshot(imageBase64 || '');
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.parseScreenshot(imageBase64 || '', ctx);
   }
 
   @Post('voice')
   async voice(@Request() req, @Body() dto: VoiceDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.voiceToSubscription(dto.audioBase64 || '', dto.locale);
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.voiceToSubscription(dto.audioBase64 || '', ctx);
   }
 
   @Post('voice-to-subscription')
@@ -155,7 +183,8 @@ export class AiController {
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
     }
-    return this.aiService.voiceToSubscription(audioBase64 || '', dto.locale);
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.voiceToSubscription(audioBase64 || '', ctx);
   }
 
   @Post('parse-audio')
@@ -182,13 +211,15 @@ export class AiController {
     if (!audioBase64) {
       return { text: '' };
     }
-    return this.aiService.transcribeAudio(audioBase64, dto.locale);
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.transcribeAudio(audioBase64, ctx.locale);
   }
 
   @Post('parse-text')
   async parseText(@Request() req, @Body() dto: ParseTextDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.lookupService(dto.text);
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.lookupService(dto.text, ctx);
   }
 
   @Post('match-service')
@@ -223,7 +254,8 @@ export class AiController {
   @Post('parse-bulk')
   async parseBulk(@Request() req, @Body() dto: ParseTextDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    const subscriptions = await this.aiService.parseBulkSubscriptions(dto.text, dto.locale ?? 'ru', dto.currency, dto.country);
+    const ctx = resolveLocaleContext(req, dto);
+    const subscriptions = await this.aiService.parseBulkSubscriptions(dto.text, ctx.locale, ctx.currency, ctx.country);
     return { subscriptions, text: dto.text };
   }
 
@@ -253,7 +285,8 @@ export class AiController {
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
     }
-    return this.aiService.voiceToBulkSubscriptions(audioBase64 || '', dto.locale ?? 'ru');
+    const ctx = resolveLocaleContext(req, dto);
+    return this.aiService.voiceToBulkSubscriptions(audioBase64 || '', ctx.locale, ctx.currency, ctx.country);
   }
 
   /**
@@ -264,7 +297,19 @@ export class AiController {
   @Post('wizard')
   async wizard(@Request() req, @Body() dto: WizardDto) {
     await this.billingService.consumeAiRequest(req.user.id);
-    return this.aiService.wizard(dto.message, dto.context ?? {}, dto.locale ?? 'en', (dto.history ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>);
+    const ctx = resolveLocaleContext(req, { locale: dto.locale });
+    // Server-side guarantee: even if the frontend forgets to pass currency/country
+    // through `context`, derive them from the authenticated user's profile so the
+    // wizard prompt always knows the user's monetary frame.
+    const userCtx = req?.user || {};
+    const fallbackCurrency = userCtx.displayCurrency || userCtx.defaultCurrency || 'USD';
+    const fallbackCountry = userCtx.region || userCtx.country || 'US';
+    const mergedContext = {
+      ...(dto.context ?? {}),
+      preferredCurrency: (dto.context as any)?.preferredCurrency || fallbackCurrency,
+      userCountry: (dto.context as any)?.userCountry || fallbackCountry,
+    };
+    return this.aiService.wizard(dto.message, mergedContext, ctx.locale, (dto.history ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>);
   }
 
   /**

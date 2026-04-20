@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { Repository, In } from 'typeorm';
 import type { Job } from 'bull';
 import OpenAI from 'openai';
+import Decimal from 'decimal.js';
 
 import { ANALYSIS_QUEUE, ANALYSIS_JOB, ANALYSIS_LIMITS, AnalysisPlan } from './analysis.constants';
 import { AnalysisJob, AnalysisJobStatus } from './entities/analysis-job.entity';
@@ -15,6 +16,7 @@ import { MarketDataService } from './market-data.service';
 import { AnalysisService } from './analysis.service';
 import { WorkspaceService } from '../workspace/workspace.service';
 import { ServiceCatalog } from './entities/service-catalog.entity';
+import { FxService } from '../fx/fx.service';
 
 interface AnalysisJobData {
   jobId: string;
@@ -75,6 +77,7 @@ export class AnalysisProcessor {
     private readonly analysisService: AnalysisService,
     private readonly workspaceService: WorkspaceService,
     private readonly config: ConfigService,
+    private readonly fx: FxService,
   ) {
     this.openai = new OpenAI({ apiKey: this.config.get('OPENAI_API_KEY') });
   }
@@ -125,14 +128,41 @@ export class AnalysisProcessor {
       // Truncate to plan limit
       subscriptions = subscriptions.slice(0, limits.maxSubscriptionsPerAnalysis);
 
-      // Deterministic analytics
-      const totalMonthly = subscriptions.reduce((sum, s) => sum + toMonthly(s), 0);
+      // Resolve user's preferred display currency upfront — drives FX conversion
+      // so totals, byCategory and amounts shipped to the LLM are all coherent.
+      const displayCurrency = (user.displayCurrency || user.defaultCurrency || 'USD').toUpperCase();
+      const userRegion = (user.region || user.country || 'US').toUpperCase();
+      const userLocale = job.data.locale || user.locale || 'en';
+
+      let fxRates: Record<string, number> = {};
+      try {
+        const snapshot = await this.fx.getRates();
+        fxRates = snapshot.rates;
+      } catch (e: any) {
+        this.logger.warn(`FX rates unavailable, falling back to raw amounts: ${e?.message}`);
+      }
+
+      const monthlyInDisplay = (sub: Subscription): number => {
+        const raw = toMonthly(sub);
+        const from = (sub.currency || displayCurrency).toUpperCase();
+        if (from === displayCurrency || !fxRates[from] && from !== 'USD') {
+          return raw;
+        }
+        try {
+          return this.fx.convert(new Decimal(raw), from, displayCurrency, fxRates).toNumber();
+        } catch {
+          return raw;
+        }
+      };
+
+      // Deterministic analytics in display currency
+      const totalMonthly = subscriptions.reduce((sum, s) => sum + monthlyInDisplay(s), 0);
 
       const byCategoryMap = new Map<string, { total: number; count: number }>();
       for (const sub of subscriptions) {
         const cat = sub.category || 'OTHER';
         const existing = byCategoryMap.get(cat) || { total: 0, count: 0 };
-        existing.total += toMonthly(sub);
+        existing.total += monthlyInDisplay(sub);
         existing.count += 1;
         byCategoryMap.set(cat, existing);
       }
@@ -140,7 +170,7 @@ export class AnalysisProcessor {
         ([category, data]) => ({ category, totalMonthly: Math.round(data.total * 100) / 100, count: data.count }),
       );
 
-      this.logger.log(`Collected ${subscriptions.length} subscriptions, total monthly: ${totalMonthly.toFixed(2)}`);
+      this.logger.log(`Collected ${subscriptions.length} subscriptions, total monthly: ${totalMonthly.toFixed(2)} ${displayCurrency}`);
 
       // ── Stage 2: NORMALIZE ────────────────────────────────────────────
       await this.updateStage(analysisJob, 'normalize', AnalysisJobStatus.NORMALIZING);
@@ -179,14 +209,19 @@ export class AnalysisProcessor {
       const subscriptionsInput = subscriptions.map((sub) => {
         const normalized = normalizedNames.get(sub.id)!;
         const market = marketDataMap.get(normalized);
+        const monthlyDisp = Math.round(monthlyInDisplay(sub) * 100) / 100;
         return {
           id: sub.id,
           name: sub.name,
           normalizedName: normalized,
+          // Original amount + currency as the user entered it
           amount: Number(sub.amount),
           currency: sub.currency,
           billingPeriod: sub.billingPeriod,
+          // Monthly amount converted to user's display currency (for cross-sub aggregation)
           monthlyEquivalent: Math.round(toMonthly(sub) * 100) / 100,
+          monthlyEquivalentInDisplayCurrency: monthlyDisp,
+          displayCurrency,
           category: sub.category,
           currentPlan: sub.currentPlan || null,
           status: sub.status,
@@ -205,7 +240,8 @@ export class AnalysisProcessor {
           subscriptions: subscriptionsInput,
           deterministicData: {
             totalMonthly: Math.round(totalMonthly * 100) / 100,
-            currency: user.defaultCurrency || 'USD',
+            currency: displayCurrency,
+            region: userRegion,
             byCategory,
             duplicatesByName,
           },
@@ -214,7 +250,7 @@ export class AnalysisProcessor {
         2,
       );
 
-      const systemPrompt = this.buildSystemPrompt(job.data.locale || user.locale || 'en');
+      const systemPrompt = this.buildSystemPrompt(userLocale, displayCurrency, userRegion);
 
       const responseSchema = `{
   "summary": "string (2-3 sentences)",
@@ -291,7 +327,7 @@ export class AnalysisProcessor {
         inputHash: analysisJob.inputHash,
         summary: parsed.summary || '',
         totalMonthlySavings: parsed.totalMonthlySavings || 0,
-        currency: user.defaultCurrency || 'USD',
+        currency: displayCurrency,
         recommendations: parsed.recommendations || [],
         duplicates: parsed.duplicates || [],
         subscriptionCount: subscriptions.length,
@@ -354,13 +390,26 @@ export class AnalysisProcessor {
   }
 
   /** Build the system prompt for GPT-4o analysis. */
-  private buildSystemPrompt(locale: string): string {
+  private buildSystemPrompt(locale: string, displayCurrency: string, region: string): string {
     return `You are a subscription optimization advisor. You receive a user's subscriptions with normalized market data. Your job:
 1. Identify savings opportunities (duplicates, downgrades, plan switches, alternatives)
 2. Rank recommendations by estimated monthly savings (highest first)
 3. Generate a concise human-readable summary (2-3 sentences)
 4. Be specific — reference actual prices and plans from market data
 5. If user has overlapping services in same category, suggest keeping the best value
+
+USER CONTEXT (authoritative):
+- Display currency: ${displayCurrency}
+- Region: ${region}
+- Locale: ${locale}
+
+CURRENCY RULES (CRITICAL — the user is in ${region} and reads totals in ${displayCurrency}):
+- The "deterministicData.totalMonthly" value is already expressed in ${displayCurrency}. Do NOT relabel it as USD.
+- "totalMonthlySavings" in your output MUST be a number expressed in ${displayCurrency}.
+- "estimatedSavingsMonthly" / "alternativePrice" in each recommendation MUST be expressed in ${displayCurrency}.
+- Each subscription input includes its own "currency" field — that is the original currency the user entered. Many subscriptions in different currencies may be present; respect each one when reasoning, but report aggregate savings in ${displayCurrency}.
+- All free-text output (summary, title, description, suggestion, reason) MUST be written in "${locale}".
+- Mention currency symbol/code naturally in the language: e.g. "1500 ₸" for Russian/Kazakh users in KZ, "$15" for US users.
 
 Rules:
 - Do NOT calculate totals or build charts — that's already done
@@ -369,7 +418,6 @@ Rules:
 - Confidence: 0.9+ if based on market data, 0.5-0.8 if reasoning only
 - Consider yearly vs monthly savings: if user pays monthly but yearly is cheaper, recommend switching
 - Group related services (e.g. multiple streaming services) and suggest bundles if applicable
-- Response language: ${locale}
 - Return valid JSON matching the schema`;
   }
 }

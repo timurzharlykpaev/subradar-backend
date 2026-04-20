@@ -17,6 +17,7 @@ import { ANALYSIS_QUEUE } from './analysis.constants';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { WorkspaceModule } from '../workspace/workspace.module';
 import { BillingModule } from '../billing/billing.module';
+import { FxModule } from '../fx/fx.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { BillingModule } from '../billing/billing.module';
       },
     }),
     NotificationsModule,
+    FxModule,
     forwardRef(() => WorkspaceModule),
     forwardRef(() => BillingModule),
   ],

@@ -5,6 +5,42 @@ import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../common/redis.module';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 
+export interface LocaleContext {
+  /** BCP-47 locale, e.g. "ru", "en", "kk". Drives output language and Whisper. */
+  locale?: string;
+  /** ISO-4217 user's preferred display currency, e.g. "KZT", "USD". */
+  currency?: string;
+  /** ISO-3166 alpha-2 user's region, e.g. "KZ", "US". Drives regional pricing. */
+  country?: string;
+}
+
+/** Resolve a context with sensible defaults so prompts always have signals. */
+function resolveCtx(opts?: LocaleContext): Required<LocaleContext> {
+  return {
+    locale: opts?.locale || 'en',
+    currency: (opts?.currency || 'USD').toUpperCase(),
+    country: (opts?.country || 'US').toUpperCase(),
+  };
+}
+
+/**
+ * Build a uniform localization preamble shared across every prompt.
+ * Centralizing this prevents drift where one prompt knows the user's currency
+ * and another silently defaults to USD.
+ */
+function buildLocaleBlock(ctx: Required<LocaleContext>): string {
+  return `USER CONTEXT (authoritative — respect strictly):
+- Preferred display currency: ${ctx.currency} (ISO-4217)
+- Region/country: ${ctx.country} (ISO-3166 alpha-2)
+- Locale/language: ${ctx.locale}
+
+CURRENCY RULES:
+- When the source explicitly states a currency (e.g. "1500 тенге", "$10", "€20", "₽500"), KEEP that currency in the output. Do NOT auto-convert.
+- When no currency is stated, default to ${ctx.currency} (the user's preferred display currency) — NOT USD.
+- For regional services, prefer pricing as actually charged in ${ctx.country}.
+- All free-text output (questions, summaries, notes) MUST be written in "${ctx.locale}".`;
+}
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -105,15 +141,18 @@ export class AiService {
     }
   }
 
-  async lookupService(query: string, locale = 'en', country = 'US') {
-    const cacheKey = `ai:lookup:${query}:${locale}:${country}`;
+  async lookupService(query: string, opts?: LocaleContext) {
+    const ctx = resolveCtx(opts);
+    const cacheKey = `ai:lookup:${query}:${ctx.locale}:${ctx.country}:${ctx.currency}`;
     const cached = await this.redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
     const result = await this.chat([
       {
         role: 'system',
-        content: `You are a subscription service lookup assistant with deep knowledge of SaaS pricing.
+        content: `You are a subscription service lookup assistant with deep knowledge of SaaS pricing across regions.
+
+${buildLocaleBlock(ctx)}
 
 Return JSON with fields:
 - name: official service name
@@ -121,21 +160,20 @@ Return JSON with fields:
 - cancelUrl: direct cancellation URL (not generic help page)
 - category: one of STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
 - plans: array of { name, price (number), currency (3-letter ISO), period (MONTHLY/YEARLY) }
-  Include ALL known plans (free tier excluded). Use the most current pricing you know.
-- priceNote: string — if you are confident the price is current (within last 6 months), say "Current as of [date]". If uncertain, say "Price may have changed — verify at [serviceUrl]".
+  Include ALL known paid plans. Prefer the price as actually charged in ${ctx.country} in ${ctx.currency} when you know it; if you only know USD pricing, return USD and add a note in priceNote.
+- priceNote: string — if you are confident the price is current for ${ctx.country} (within last 6 months), say "Current ${ctx.country} pricing". If you only know USD/global pricing, say "USD reference price — verify local price at [serviceUrl]". All notes in "${ctx.locale}".
 
 Category guidance:
 - PlayStation Plus, Xbox Game Pass, Nintendo Switch Online, EA Play → GAMING
-- Netflix, Disney+, YouTube Premium, Hulu, HBO Max → STREAMING
-- Spotify, Apple Music, Tidal, Deezer → MUSIC
+- Netflix, Disney+, YouTube Premium, Hulu, HBO Max, KinoPoisk, Okko, IVI → STREAMING
+- Spotify, Apple Music, Tidal, Deezer, Yandex Music → MUSIC
 - GitHub, JetBrains, Linear → DEVELOPER
-- AWS, GCP, DigitalOcean, Vercel, iCloud, Google One → INFRASTRUCTURE
+- AWS, GCP, DigitalOcean, Vercel, iCloud, Google One, Yandex 360 → INFRASTRUCTURE
 - Strava, Peloton, MyFitnessPal → SPORT
 - ChatGPT, Claude, Midjourney → AI_SERVICES
 - 1Password, NordVPN, ExpressVPN → SECURITY
 - If unsure, use OTHER
 
-Locale: ${locale}, Country: ${country}.
 IMPORTANT: Always return at least one plan with a non-zero price for paid services.`,
       },
       {
@@ -159,7 +197,8 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
     return result;
   }
 
-  async parseScreenshot(imageBase64: string) {
+  async parseScreenshot(imageBase64: string, opts?: LocaleContext) {
+    const ctx = resolveCtx(opts);
     await this.acquireSlot();
     try {
       const response = await this.openai.chat.completions.create({
@@ -169,16 +208,18 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
             role: 'system',
             content: `You are a receipt/subscription screenshot parser. Extract subscription details from the image.
 
+${buildLocaleBlock(ctx)}
+
 Return JSON with:
 - name: service name
-- amount: number (price)
-- currency: 3-letter ISO code (USD, EUR, etc.)
+- amount: number (price exactly as printed; do NOT convert)
+- currency: 3-letter ISO code matching the symbol/text on the screenshot (₸=KZT, ₽=RUB, ₸=KZT, $=USD, €=EUR, £=GBP, ¥=JPY/CNY by context). If the screenshot shows no currency at all, default to ${ctx.currency}.
 - billingPeriod: MONTHLY|YEARLY|WEEKLY|QUARTERLY|LIFETIME|ONE_TIME
 - date: ISO string (payment/invoice date)
 - planName: plan tier if visible
 - category: STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
 
-Category guidance: PlayStation/Xbox/Nintendo → GAMING, Netflix/Disney+ → STREAMING, Spotify → MUSIC, GitHub/JetBrains → DEVELOPER, ChatGPT/Claude → AI_SERVICES, NordVPN/1Password → SECURITY, Strava/Peloton → SPORT.
+Category guidance: PlayStation/Xbox/Nintendo → GAMING, Netflix/Disney+/Kinopoisk/Okko/IVI → STREAMING, Spotify/Apple Music/Yandex Music → MUSIC, GitHub/JetBrains → DEVELOPER, ChatGPT/Claude → AI_SERVICES, NordVPN/1Password → SECURITY, Strava/Peloton → SPORT.
 If unsure about category, use OTHER. If cannot extract data, return {}.`,
           },
           {
@@ -204,7 +245,8 @@ If unsure about category, use OTHER. If cannot extract data, return {}.`,
     }
   }
 
-  async voiceToSubscription(audioBase64: string, locale = 'en') {
+  async voiceToSubscription(audioBase64: string, opts?: LocaleContext) {
+    const ctx = resolveCtx(opts);
     // First transcribe audio (counts as one OpenAI slot)
     await this.acquireSlot();
     let text: string;
@@ -224,7 +266,7 @@ If unsure about category, use OTHER. If cannot extract data, return {}.`,
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioFile,
         model: 'whisper-1',
-        language: locale.split('-')[0],
+        language: ctx.locale.split('-')[0],
       }, { timeout: 30000 });
       text = transcription.text;
     } catch (err: any) {
@@ -240,16 +282,18 @@ If unsure about category, use OTHER. If cannot extract data, return {}.`,
         role: 'system',
         content: `You are a subscription data extractor. From the voice transcript, extract subscription fields.
 
+${buildLocaleBlock(ctx)}
+
 Return JSON with:
 - name: service name
-- amount: number (price). Use REAL current price if user didn't specify.
-- currency: 3-letter ISO code (default USD)
+- amount: number (price). If the user mentioned an explicit number+currency (e.g. "1500 тенге", "20 долларов", "five euros") use exactly that. Otherwise use the REAL current price for the user's region (${ctx.country}) in ${ctx.currency}.
+- currency: 3-letter ISO code. Match what the user spoke (тенге=KZT, рубли=RUB, доллары=USD, евро=EUR, фунты=GBP, иены=JPY, юани=CNY, тг/₸=KZT). If no currency was mentioned at all, default to ${ctx.currency} (NOT USD).
 - billingPeriod: MONTHLY|YEARLY|WEEKLY|QUARTERLY|LIFETIME|ONE_TIME (default MONTHLY)
 - category: STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
-- notes: any extra details from transcript
+- notes: any extra details from transcript (write in "${ctx.locale}")
 - startDate: ISO string or null
 
-Category guidance: PlayStation/Xbox → GAMING, Netflix/Disney+ → STREAMING, Spotify → MUSIC, GitHub/JetBrains → DEVELOPER, ChatGPT/Claude → AI_SERVICES, NordVPN → SECURITY, Strava → SPORT.
+Category guidance: PlayStation/Xbox → GAMING, Netflix/Disney+/Kinopoisk → STREAMING, Spotify/Yandex Music → MUSIC, GitHub/JetBrains → DEVELOPER, ChatGPT/Claude → AI_SERVICES, NordVPN → SECURITY, Strava → SPORT.
 If unsure about category, use OTHER.`,
       },
       { role: 'user', content: `Voice transcript: "${text}"` },
@@ -298,14 +342,14 @@ If unsure about category, use OTHER.`,
    * E.g. "У меня Netflix за 15 долларов, Spotify 10 евро в месяц и iCloud 3 доллара"
    */
   async parseBulkSubscriptions(text: string, locale = 'en', currency?: string, country?: string) {
-    const currencyHint = currency ? `User's preferred currency: ${currency}. Use this currency for all amounts unless the user explicitly states a different currency.` : '';
-    const countryHint = country ? `User's country: ${country}. Use real regional pricing for this country when the user doesn't specify a price.` : '';
-    const localeHint = `Locale: ${locale}.`;
+    const ctx = resolveCtx({ locale, currency, country });
 
     const result = await this.chat([
       {
         role: 'system',
         content: `You are a bulk subscription extractor. The user describes one or more subscriptions in free text or voice transcription. Extract ALL subscriptions mentioned.
+
+${buildLocaleBlock(ctx)}
 
 Return JSON object with "subscriptions" key containing an array:
 {
@@ -313,7 +357,7 @@ Return JSON object with "subscriptions" key containing an array:
     {
       "name": string,
       "amount": number,
-      "currency": "${currency || 'USD'}",
+      "currency": "${ctx.currency}",
       "billingPeriod": "MONTHLY"|"YEARLY"|"WEEKLY"|"QUARTERLY",
       "category": "STREAMING"|"AI_SERVICES"|"INFRASTRUCTURE"|"PRODUCTIVITY"|"MUSIC"|"GAMING"|"NEWS"|"HEALTH"|"DEVELOPER"|"EDUCATION"|"FINANCE"|"DESIGN"|"SECURITY"|"SPORT"|"BUSINESS"|"OTHER",
       "serviceUrl": string|null,
@@ -327,15 +371,12 @@ Rules:
 1) ALWAYS return {"subscriptions": [...]}, even for 1 item.
 2) Extract EVERY service mentioned. If user says "Netflix, Spotify, iCloud" — return 3 items.
 3) Include iconUrl using icon.horse with the real service domain (e.g. netflix.com, spotify.com).
-4) Use REAL current prices for the user's region. If the user says a price — use that price.
-5) If no price mentioned — use the REAL price for the most popular plan in the user's country/currency.
+4) Currency: if the user explicitly says one (тенге/KZT, рубли/RUB, доллары/USD, евро/EUR, etc.) → use it. If silent → use ${ctx.currency}.
+5) If no price mentioned — use the REAL current local price for ${ctx.country} in ${ctx.currency}. For region-restricted services (Kinopoisk, Yandex.Plus, Okko, IVI), use the actual ₽/₸ price; never invent USD equivalents.
 6) If the user mentions yearly/annual — set billingPeriod to YEARLY. If monthly — MONTHLY. Default: MONTHLY.
 7) Include cancelUrl if you know it (e.g. https://www.netflix.com/cancelplan).
 8) Include serviceUrl (e.g. https://www.netflix.com).
-9) Map category accurately. AI tools = AI_SERVICES, dev tools = DEVELOPER, cloud/hosting = INFRASTRUCTURE.
-${currencyHint}
-${countryHint}
-${localeHint}`,
+9) Map category accurately. AI tools = AI_SERVICES, dev tools = DEVELOPER, cloud/hosting = INFRASTRUCTURE.`,
       },
       {
         role: 'user',
@@ -382,13 +423,18 @@ ${localeHint}`,
   }
 
   /** Parse subscription details from email/receipt text */
-  async parseEmailText(text: string) {
+  async parseEmailText(text: string, opts?: LocaleContext) {
+    const ctx = resolveCtx(opts);
     return this.chat([
       {
         role: 'system',
         content: `You are a subscription parser. Extract subscription info from the given email/receipt text.
 
+${buildLocaleBlock(ctx)}
+
 Return JSON: { name, amount (number), currency, billingPeriod (MONTHLY/YEARLY/WEEKLY/QUARTERLY/LIFETIME/ONE_TIME), category, nextPaymentDate (ISO string or null) }.
+
+The currency field MUST match the symbol/text actually present in the email (₸=KZT, ₽=RUB, $=USD, €=EUR). If the email is silent on currency, default to ${ctx.currency}.
 
 Valid categories: STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|EDUCATION|FINANCE|DESIGN|SECURITY|DEVELOPER|SPORT|BUSINESS|OTHER
 
@@ -412,12 +458,12 @@ If not a subscription email, return {}.`,
     locale = 'en',
     history: Array<{ role: 'user' | 'assistant'; content: string }> = [],
   ) {
-    const preferredCurrency = context.preferredCurrency as string | undefined;
-    const currencyNote = preferredCurrency && preferredCurrency !== 'USD'
-      ? `\nUser's preferred currency: ${preferredCurrency}. If you know the price in ${preferredCurrency}, use it. Otherwise use USD and note the currency.`
-      : '';
+    const preferredCurrency = (context.preferredCurrency as string | undefined)?.toUpperCase() || 'USD';
+    const userCountry = (context.userCountry as string | undefined)?.toUpperCase() || 'US';
+    const ctx = resolveCtx({ locale, currency: preferredCurrency, country: userCountry });
     const cleanContext = { ...context };
     delete cleanContext.preferredCurrency;
+    delete cleanContext.userCountry;
     const contextStr = Object.keys(cleanContext).length
       ? `\nAccumulated context so far: ${JSON.stringify(cleanContext)}`
       : '';
@@ -426,7 +472,15 @@ If not a subscription email, return {}.`,
       role: 'system' as const,
       content: `You are a precise subscription tracking assistant. Extract subscription details accurately.
 
-PRICING DATABASE (use EXACT prices, do not invent):
+${buildLocaleBlock(ctx)}
+
+PRICING DATABASE BELOW IS USD GLOBAL REFERENCE. Apply the following rules ON TOP of it:
+- If the service has a known LOCAL price for ${ctx.country} (e.g. Netflix charges different amounts in KZ/RU/EU/US — ₸/₽/€/$), USE THE LOCAL PRICE in ${ctx.currency} instead of the USD value below.
+- If you only know the USD reference price, return it in USD and note this in any clarifying question.
+- For region-restricted services (Yandex Plus, Kinopoisk, Okko, IVI, Yandex Music) — ALWAYS use the actual local currency (₽/₸), never USD.
+- Spotify, Netflix, YouTube Premium, Apple Music, Disney+ all have well-known local pricing in major markets — prefer that over USD reference.
+
+PRICING DATABASE (USD reference — adjust to ${ctx.currency} when local pricing is known):
 
 🎬 STREAMING & MEDIA:
 - YouTube Premium: $13.99/mo (individual), $22.99/mo (family) | youtube.com | STREAMING
@@ -592,7 +646,12 @@ A) Single plan: { "done": true, "subscription": { "name": string, "amount": numb
 B) Multiple plans: { "done": true, "plans": [{ "name": string, "amount": number, "billingPeriod": "MONTHLY"|"YEARLY", "currency": "USD" }], "serviceName": string, "iconUrl": string, "serviceUrl": string, "cancelUrl": string|null, "category": string }
 C) Need info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": {} }
 
-LANGUAGE: Always write the "question" field in the user's language. User locale is "${locale}". If locale starts with "ru" → write question in Russian. If "de" → German. If "es" → Spanish. Otherwise English.${currencyNote}${contextStr}`,
+LANGUAGE: Always write the "question" field in "${ctx.locale}" (russian if locale starts with "ru", kazakh if "kk", german if "de", spanish if "es", french if "fr", portuguese if "pt", chinese if "zh", japanese if "ja", korean if "ko", english otherwise).
+
+CURRENCY (REPEAT, CRITICAL):
+- User's preferred currency is ${ctx.currency}, region ${ctx.country}.
+- Output the "currency" field in ALL subscription/plan objects as the ACTUAL local currency for that user, not always USD.
+- If the user spoke an explicit price+currency, mirror it exactly.${contextStr}`,
     };
 
     // Build messages: system + history + current user message
