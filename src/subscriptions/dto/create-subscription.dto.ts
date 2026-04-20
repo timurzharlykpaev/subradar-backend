@@ -32,6 +32,7 @@ export class CreateSubscriptionDto {
   billingPeriod?: BillingPeriod;
   @ApiPropertyOptional() @IsOptional() @IsNumber() billingDay?: number;
   @ApiPropertyOptional() @IsOptional() @IsDateString() startDate?: string;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() nextPaymentDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() currentPlan?: string;
   @ApiPropertyOptional() @IsOptional() availablePlans?: object[];
   @ApiPropertyOptional({ enum: SubscriptionStatus })
