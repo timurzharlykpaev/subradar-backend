@@ -23,6 +23,7 @@
     "migration:revert": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:revert -d src/data-source.ts",
     "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/data-source.ts",
     "seed:prices": "ts-node -r tsconfig-paths/register src/catalog/run-seed.ts",
+    "seed:test-users": "ts-node -r tsconfig-paths/register scripts/seed-test-users.ts",
     "test:unit": "jest --passWithNoTests",
     "test:all": "bash scripts/test-all.sh"
   },
