@@ -55,7 +55,12 @@ describe('AiController', () => {
     const dto = { query: 'Netflix' } as any;
     const result = await controller.lookup(req, dto);
     expect(mockBillingService.consumeAiRequest).toHaveBeenCalledWith('user-1');
-    expect(mockAiService.lookupService).toHaveBeenCalledWith('Netflix', undefined, undefined);
+    // Controller resolves locale/currency/country from req.user with defaults.
+    expect(mockAiService.lookupService).toHaveBeenCalledWith('Netflix', {
+      locale: 'en',
+      currency: 'USD',
+      country: 'US',
+    });
     expect(result).toHaveProperty('name');
   });
 
@@ -63,19 +68,31 @@ describe('AiController', () => {
     const dto = { query: 'Spotify', locale: 'en', country: 'US' } as any;
     await controller.lookupServiceAlias(req, dto);
     expect(mockBillingService.consumeAiRequest).toHaveBeenCalledWith('user-1');
-    expect(mockAiService.lookupService).toHaveBeenCalledWith('Spotify', 'en', 'US');
+    expect(mockAiService.lookupService).toHaveBeenCalledWith('Spotify', {
+      locale: 'en',
+      currency: 'USD',
+      country: 'US',
+    });
   });
 
   it('search → delegates to lookupService', async () => {
     const dto = { query: 'Hulu' } as any;
     await controller.search(req, dto);
-    expect(mockAiService.lookupService).toHaveBeenCalledWith('Hulu', undefined, undefined);
+    expect(mockAiService.lookupService).toHaveBeenCalledWith('Hulu', {
+      locale: 'en',
+      currency: 'USD',
+      country: 'US',
+    });
   });
 
   it('parseScreenshot with imageBase64 in body', async () => {
     const dto = { imageBase64: 'base64data' } as any;
     const result = await controller.parseScreenshot(req, dto, undefined);
-    expect(mockAiService.parseScreenshot).toHaveBeenCalledWith('base64data');
+    expect(mockAiService.parseScreenshot).toHaveBeenCalledWith('base64data', {
+      locale: 'en',
+      currency: 'USD',
+      country: 'US',
+    });
     expect(result).toHaveProperty('name');
   });
 
@@ -83,48 +100,74 @@ describe('AiController', () => {
     const dto = {} as any;
     const file = { buffer: validImageBuffer } as any;
     await controller.parseScreenshot(req, dto, file);
-    expect(mockAiService.parseScreenshot).toHaveBeenCalledWith(validImageBuffer.toString('base64'));
+    expect(mockAiService.parseScreenshot).toHaveBeenCalledWith(
+      validImageBuffer.toString('base64'),
+      { locale: 'en', currency: 'USD', country: 'US' },
+    );
   });
 
   it('parseScreenshot falls back to empty string', async () => {
     await controller.parseScreenshot(req, {} as any, undefined);
-    expect(mockAiService.parseScreenshot).toHaveBeenCalledWith('');
+    expect(mockAiService.parseScreenshot).toHaveBeenCalledWith('', {
+      locale: 'en',
+      currency: 'USD',
+      country: 'US',
+    });
   });
 
   it('voice → calls voiceToSubscription', async () => {
     const dto = { audioBase64: 'audio', locale: 'en' } as any;
     const result = await controller.voice(req, dto);
-    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('audio', 'en');
+    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('audio', {
+      locale: 'en',
+      currency: 'USD',
+      country: 'US',
+    });
     expect(result).toHaveProperty('name');
   });
 
   it('voice → uses empty string when no audioBase64', async () => {
     await controller.voice(req, {} as any);
-    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('', undefined);
+    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('', {
+      locale: 'en',
+      currency: 'USD',
+      country: 'US',
+    });
   });
 
   it('voiceToSubscriptionAlias with file upload', async () => {
     const file = { buffer: validAudioBuffer } as any;
     await controller.voiceToSubscriptionAlias(req, {} as any, file);
-    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith(validAudioBuffer.toString('base64'), undefined);
+    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith(
+      validAudioBuffer.toString('base64'),
+      { locale: 'en', currency: 'USD', country: 'US' },
+    );
   });
 
   it('voiceToSubscriptionAlias with body audio', async () => {
     const dto = { audioBase64: 'bodyaudio', locale: 'ru' } as any;
     await controller.voiceToSubscriptionAlias(req, dto, undefined);
-    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('bodyaudio', 'ru');
+    expect(mockAiService.voiceToSubscription).toHaveBeenCalledWith('bodyaudio', {
+      locale: 'ru',
+      currency: 'USD',
+      country: 'US',
+    });
   });
 
-  it('parseAudio → delegates to transcribeAudio', async () => {
+  it('parseAudio → delegates to transcribeAudio with resolved locale', async () => {
     const dto = { audioBase64: 'aud' } as any;
     await controller.parseAudio(req, dto, undefined);
-    expect(mockAiService.transcribeAudio).toHaveBeenCalledWith('aud', undefined);
+    expect(mockAiService.transcribeAudio).toHaveBeenCalledWith('aud', 'en');
   });
 
-  it('parseText → calls lookupService with text', async () => {
+  it('parseText → calls lookupService with text and resolved context', async () => {
     const dto = { text: 'Netflix monthly', locale: 'en' } as any;
     await controller.parseText(req, dto);
-    expect(mockAiService.lookupService).toHaveBeenCalledWith('Netflix monthly');
+    expect(mockAiService.lookupService).toHaveBeenCalledWith('Netflix monthly', {
+      locale: 'en',
+      currency: 'USD',
+      country: 'US',
+    });
   });
 
   it('suggestCancel → calls suggestCancelUrl', async () => {
@@ -156,16 +199,21 @@ describe('AiController', () => {
     expect(result.subscriptions).toBeNull();
   });
 
-  it('voiceBulk → calls voiceToBulkSubscriptions', async () => {
+  it('voiceBulk → calls voiceToBulkSubscriptions with locale + currency + country', async () => {
     const dto = { audioBase64: 'bulk', locale: 'ru' } as any;
     const result = await controller.voiceBulk(req, dto, undefined);
-    expect(mockAiService.voiceToBulkSubscriptions).toHaveBeenCalledWith('bulk', 'ru');
+    expect(mockAiService.voiceToBulkSubscriptions).toHaveBeenCalledWith('bulk', 'ru', 'USD', 'US');
     expect(result).toHaveProperty('subscriptions');
   });
 
-  it('voiceBulk with file upload', async () => {
+  it('voiceBulk with file upload forwards resolved context', async () => {
     const file = { buffer: validAudioBuffer2 } as any;
     await controller.voiceBulk(req, { locale: 'ru' } as any, file);
-    expect(mockAiService.voiceToBulkSubscriptions).toHaveBeenCalledWith(validAudioBuffer2.toString('base64'), 'ru');
+    expect(mockAiService.voiceToBulkSubscriptions).toHaveBeenCalledWith(
+      validAudioBuffer2.toString('base64'),
+      'ru',
+      'USD',
+      'US',
+    );
   });
 });
