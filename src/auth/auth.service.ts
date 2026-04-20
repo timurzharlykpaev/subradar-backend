@@ -443,13 +443,28 @@ export class AuthService {
     // environment — in production we only flip ENABLE_REVIEW_ACCOUNT=true while
     // Apple is actively reviewing the build.
     const isReviewAccount = dto.email === 'review@subradar.ai';
+    // Maestro E2E seed users share the same `000000` bypass but only on
+    // non-prod environments — the `qa-*@subradar.test` domain never exists
+    // in reality, so this is a safe channel for the test harness.
+    const isE2ESeed =
+      !!dto.email &&
+      dto.email.startsWith('qa-') &&
+      dto.email.endsWith('@subradar.test') &&
+      process.env.NODE_ENV !== 'production';
+    const isBypass = isReviewAccount || isE2ESeed;
     if (isReviewAccount && process.env.ENABLE_REVIEW_ACCOUNT !== 'true') {
       this.logger.warn(
         `Review account OTP attempted while disabled: ${maskEmail(dto.email)}`,
       );
       throw new ForbiddenException('Review account is disabled');
     }
-    const code = isReviewAccount
+    if (isE2ESeed && process.env.ENABLE_REVIEW_ACCOUNT !== 'true') {
+      this.logger.warn(
+        `E2E seed OTP attempted while disabled: ${maskEmail(dto.email)}`,
+      );
+      throw new ForbiddenException('E2E seed accounts disabled');
+    }
+    const code = isBypass
       ? '000000'
       : Math.floor(100000 + Math.random() * 900000).toString();
     await this.redis.set(`otp:${dto.email}`, code, 'EX', 900);
