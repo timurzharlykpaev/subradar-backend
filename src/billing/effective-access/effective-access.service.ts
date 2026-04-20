@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
@@ -58,6 +58,8 @@ type EffectiveSource = BillingMeResponse['effective']['source'];
  */
 @Injectable()
 export class EffectiveAccessResolver {
+  private readonly logger = new Logger(EffectiveAccessResolver.name);
+
   constructor(
     @InjectRepository(User)
     private readonly users: Repository<User>,
@@ -125,6 +127,24 @@ export class EffectiveAccessResolver {
     } else if (hasOwnPaidPlan && PAID_STATES.has(billingStatus)) {
       effectivePlan = (user.plan as EffectivePlan) ?? 'free';
       source = 'own';
+    } else if (
+      hasOwnPaidPlan &&
+      user.plan &&
+      user.plan !== 'free' &&
+      !PAID_STATES.has(billingStatus)
+    ) {
+      // Defensive self-heal: billingSource is set and `user.plan` reflects the
+      // purchased tier, but `billingStatus` lags behind (e.g. sync-revenuecat
+      // succeeded but a late/failed webhook left status as 'free', or the RC
+      // webhook arrived before sync in Sandbox). Without this branch the user
+      // appears as free right after a verified purchase, which is never
+      // correct when we hold a valid RC entitlement. An actual lapse will be
+      // corrected by the next RC webhook (BILLING_ISSUE/EXPIRATION).
+      this.logger.warn(
+        `EffectiveAccess self-heal: user ${userId} billingSource=${billingSource} plan=${user.plan} but billingStatus=${billingStatus}; treating as paid`,
+      );
+      effectivePlan = user.plan as EffectivePlan;
+      source = 'own';
     } else if (trialActive) {
       effectivePlan = trial!.plan;
       source = 'trial';
@@ -178,11 +198,19 @@ export class EffectiveAccessResolver {
     const workspaceId =
       ownedWorkspace?.id ?? membership?.workspaceId ?? null;
 
+    // When self-heal kicks in (source='own' but billingStatus is 'free'),
+    // surface 'active' so the client's state-driven UI (banners, CTA labels,
+    // retry modals) doesn't treat a just-purchased user as free.
+    const effectiveState: BillingState =
+      source === 'own' && effectivePlan !== 'free' && !PAID_STATES.has(billingStatus)
+        ? 'active'
+        : billingStatus;
+
     return {
       effective: {
         plan: effectivePlan,
         source,
-        state: billingStatus,
+        state: effectiveState,
         billingPeriod,
       },
       ownership: {

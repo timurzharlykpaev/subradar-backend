@@ -135,6 +135,32 @@ describe('EffectiveAccessResolver.resolve', () => {
     );
   });
 
+  it('self-heal: billingSource=revenuecat + plan=pro + billingStatus=free → pro / own with state=active', async () => {
+    // Sandbox/webhook race: sync-revenuecat set plan+source+period but a
+    // concurrent event (or a partial save) left billingStatus as "free".
+    // Without self-heal, the user would be downgraded to free immediately
+    // after a verified purchase.
+    users.findOne.mockResolvedValue(
+      userFixture({
+        plan: 'pro',
+        billingStatus: 'free',
+        billingSource: 'revenuecat',
+        billingPeriod: 'yearly',
+      }),
+    );
+    trials.findOne.mockResolvedValue(null);
+    workspaces.findOne.mockResolvedValue(null);
+    members.findOne.mockResolvedValue(null);
+
+    const r = await svc.resolve('u1');
+
+    expect(r.effective.plan).toBe('pro');
+    expect(r.effective.source).toBe('own');
+    expect(r.effective.state).toBe('active');
+    expect(r.ownership.hasOwnPaidPlan).toBe(true);
+    expect(r.actions.canCancel).toBe(true);
+  });
+
   it('grace_pro → pro via grace with daysLeft populated', async () => {
     const graceExpiresAt = new Date(Date.now() + 3 * 86_400_000);
     users.findOne.mockResolvedValue(

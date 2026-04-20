@@ -1209,9 +1209,24 @@ export class BillingService {
       return entProductId === productId.toLowerCase();
     };
 
+    let matchingExpiresMs: number | null = null;
     const matchingActive = Object.entries(entitlements).some(
-      ([name, value]: [string, any]) =>
-        matchesPlanTier(name, value) && isEntitlementActive(value),
+      ([name, value]: [string, any]) => {
+        if (!matchesPlanTier(name, value) || !isEntitlementActive(value)) {
+          return false;
+        }
+        const raw = (value as any)?.expires_date;
+        const ts =
+          typeof raw === 'number'
+            ? raw
+            : raw != null
+              ? Date.parse(String(raw))
+              : NaN;
+        if (!isNaN(ts) && (matchingExpiresMs === null || ts > matchingExpiresMs)) {
+          matchingExpiresMs = ts;
+        }
+        return true;
+      },
     );
 
     if (!matchingActive) {
@@ -1224,30 +1239,24 @@ export class BillingService {
       );
     }
 
-    const user = await this.usersService.findById(userId);
-    // Team membership takes precedence: if user is part of a team workspace,
-    // we keep plan='organization' via effective access but record the independent
-    // Pro purchase in hasOwnPro so it survives leaving the team. The `plan`
-    // column is a simple "own subscription" marker; team access is computed
-    // elsewhere via getEffectiveAccess().
-    user.plan = plan;
-    user.billingPeriod = billingPeriod;
-    user.billingSource = 'revenuecat';
-    // Verified purchase → state must be 'active'. Without this EffectiveAccess
-    // keeps returning free because the resolver requires billingStatus in
-    // ('active','cancel_at_period_end','billing_issue') before treating the
-    // user as paid. This was missed when billingStatus was introduced in the
-    // refactor because syncRevenueCat predates the state machine.
-    user.billingStatus = 'active';
-    // Reset cancellation flags — verified purchase supersedes any previous cancellation
-    user.cancelAtPeriodEnd = false;
-    user.currentPeriodEnd = null;
-    user.billingIssueAt = null;
-    user.gracePeriodEnd = null;
-    user.gracePeriodReason = null;
-    await this.usersService.save(user);
+    // Single atomic UPDATE — avoids partial-save anomalies and concurrent
+    // webhook writes clobbering freshly-set billingStatus. Team membership
+    // takes precedence via effective access; `plan` here is just the "own
+    // subscription" marker.
+    const periodEnd = matchingExpiresMs ? new Date(matchingExpiresMs) : null;
+    await this.usersService.update(userId, {
+      plan,
+      billingPeriod,
+      billingSource: 'revenuecat',
+      billingStatus: 'active',
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: periodEnd,
+      billingIssueAt: null,
+      gracePeriodEnd: null,
+      gracePeriodReason: null,
+    });
     this.logger.log(
-      `syncRevenueCat: verified via RC — user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId})`,
+      `syncRevenueCat: verified via RC — user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId}, periodEnd: ${periodEnd?.toISOString() ?? 'n/a'})`,
     );
   }
 
