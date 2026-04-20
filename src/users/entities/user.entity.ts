@@ -85,10 +85,10 @@ export class User {
   trialUsed: boolean;
 
   @Column({ nullable: true, type: 'timestamp' })
-  trialStartDate: Date;
+  trialStartDate: Date | null;
 
   @Column({ nullable: true, type: 'timestamp' })
-  trialEndDate: Date;
+  trialEndDate: Date | null;
 
   @Column({ default: 0 })
   aiRequestsUsed: number;

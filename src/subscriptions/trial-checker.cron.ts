@@ -126,6 +126,7 @@ export class TrialCheckerCron {
       .getMany();
 
     for (const user of expiringUsers) {
+      if (!user.trialEndDate) continue;
       try {
         const title = '⏰ Your SubRadar trial ends tomorrow';
         const body = 'Subscribe now to keep unlimited access to all features.';

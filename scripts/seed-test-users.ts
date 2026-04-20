@@ -306,22 +306,23 @@ async function upsertUser(ds: typeof AppDataSource, seed: SeedUser): Promise<Use
 
 async function replaceSubs(ds: typeof AppDataSource, user: User, subs: SeedSub[]) {
   const repo = ds.getRepository(Subscription);
-  await repo.createQueryBuilder().delete().where('userId = :id', { id: user.id }).execute();
+  await repo.createQueryBuilder().delete().where('"userId" = :id', { id: user.id }).execute();
   if (subs.length === 0) return;
-  const rows = subs.map((s) =>
-    repo.create({
-      user,
+  const rows = subs.map((s) => {
+    const row: Partial<Subscription> = {
       userId: user.id,
       name: s.name,
       amount: s.amount,
       currency: s.currency ?? 'USD',
+      originalCurrency: s.currency ?? 'USD',
       category: s.category,
       billingPeriod: s.billingPeriod,
       status: s.status ?? SubscriptionStatus.ACTIVE,
-      nextPaymentDate: s.nextPaymentDate ?? null,
       addedVia: AddedVia.MANUAL,
-    }),
-  );
+    };
+    if (s.nextPaymentDate) row.nextPaymentDate = s.nextPaymentDate;
+    return repo.create(row);
+  });
   await repo.save(rows);
 }
 
