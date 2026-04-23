@@ -105,6 +105,13 @@ export class AnalysisProcessor {
 
       let subscriptions: Subscription[];
 
+      // Apply the plan's per-analysis cap at the SQL layer so we never pull
+      // every active subscription into memory when a heavy Team/Pro account
+      // has thousands of rows. Order by amount so the truncation keeps the
+      // most impactful subscriptions (same ranking as before, now enforced
+      // in the DB instead of JS).
+      const perAnalysisCap = limits.maxSubscriptionsPerAnalysis;
+
       if (workspaceId) {
         // Team analysis: collect all members' subscriptions
         const workspace = await this.workspaceService.getMyWorkspace(userId);
@@ -116,6 +123,7 @@ export class AnalysisProcessor {
           subscriptions = await this.subscriptionRepo.find({
             where: { userId: In(memberIds), status: In(['ACTIVE', 'TRIAL'] as any) },
             order: { amount: 'DESC' },
+            take: perAnalysisCap,
           });
         } else {
           subscriptions = [];
@@ -124,11 +132,9 @@ export class AnalysisProcessor {
         subscriptions = await this.subscriptionRepo.find({
           where: { userId, status: In(['ACTIVE', 'TRIAL'] as any) },
           order: { amount: 'DESC' },
+          take: perAnalysisCap,
         });
       }
-
-      // Truncate to plan limit
-      subscriptions = subscriptions.slice(0, limits.maxSubscriptionsPerAnalysis);
 
       // Resolve effective locale/currency/region: per-request override from
       // job.data > user profile > default. Drives FX conversion and the LLM

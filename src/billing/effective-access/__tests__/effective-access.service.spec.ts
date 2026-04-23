@@ -123,7 +123,7 @@ describe('EffectiveAccessResolver.resolve', () => {
     expect(r.effective.billingPeriod).toBe('monthly');
     expect(r.ownership.hasOwnPaidPlan).toBe(true);
     expect(r.banner.priority).toBe('annual_upgrade');
-    expect(r.limits.subscriptions.limit).toBeNull();
+    expect(r.limits.subscriptions.limit).toBe(500);
     expect(r.limits.subscriptions.used).toBe(12);
     expect(r.actions.canCancel).toBe(true);
     expect(r.actions.canUpgradeToYearly).toBe(true);

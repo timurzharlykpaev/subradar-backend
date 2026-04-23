@@ -210,8 +210,16 @@ export class SubscriptionsService implements OnModuleInit {
           ],
         });
         if (activeCount >= planConfig.subscriptionLimit) {
+          // Every plan now has a numeric cap (Free: 3, Pro: 500, Team: 2000).
+          // Suggest the next tier rather than hard-coding "Free".
+          const effectivePlan = effective.plan;
+          const upgradeHint = effectivePlan === 'free'
+            ? 'Upgrade to Pro for up to 500 subscriptions.'
+            : effectivePlan === 'pro'
+              ? 'Upgrade to Team/Organization for up to 2000 subscriptions.'
+              : 'Contact support to raise the limit.';
           throw new ForbiddenException(
-            `Subscription limit reached (${planConfig.subscriptionLimit} on Free plan). Upgrade to Pro for unlimited subscriptions.`,
+            `Subscription limit reached (${planConfig.subscriptionLimit} on ${effectivePlan} plan). ${upgradeHint}`,
           );
         }
       }

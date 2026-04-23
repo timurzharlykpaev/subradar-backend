@@ -19,7 +19,9 @@ export const PLANS: Record<string, PlanConfig> = {
     maxWebSearchesPerAnalysis: 0,
   },
   pro: {
-    subscriptionLimit: null,
+    // Hard cap to keep analytics/LLM prompts bounded and protect
+    // mobile/web clients from OOM. No real user tracks >500 subscriptions.
+    subscriptionLimit: 500,
     aiRequestsLimit: 200,
     hasInvite: true,
     canCreateOrg: false,
@@ -28,7 +30,9 @@ export const PLANS: Record<string, PlanConfig> = {
     maxWebSearchesPerAnalysis: 5,
   },
   organization: {
-    subscriptionLimit: null,
+    // 2000 covers even unusually large teams while still bounding the AI
+    // collect stage and the list payload size.
+    subscriptionLimit: 2000,
     aiRequestsLimit: 1000,
     hasInvite: true,
     canCreateOrg: true,

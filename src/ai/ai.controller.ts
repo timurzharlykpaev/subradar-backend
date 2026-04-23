@@ -15,7 +15,7 @@ import {
 import { forwardRef } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional, MaxLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AiService } from './ai.service';
 import { BillingService } from '../billing/billing.service';
@@ -48,36 +48,41 @@ function isValidAudio(buffer: Buffer): boolean {
   return false;
 }
 
+// Hard caps keep AI prompt size bounded. Base64 limits are generous
+// (~13 MB image, ~34 MB audio) and match the file interceptor limits.
+const IMAGE_B64_MAX = 20_000_000;
+const AUDIO_B64_MAX = 40_000_000;
+
 class LookupServiceDto {
-  @IsString() query: string;
-  @IsOptional() @IsString() locale?: string;
-  @IsOptional() @IsString() country?: string;
-  @IsOptional() @IsString() currency?: string;
+  @IsString() @MaxLength(500) query: string;
+  @IsOptional() @IsString() @MaxLength(10) locale?: string;
+  @IsOptional() @IsString() @MaxLength(10) country?: string;
+  @IsOptional() @IsString() @MaxLength(10) currency?: string;
 }
 
 class ParseScreenshotDto {
-  @IsOptional() @IsString() imageBase64?: string;
-  @IsOptional() @IsString() locale?: string;
-  @IsOptional() @IsString() currency?: string;
-  @IsOptional() @IsString() country?: string;
+  @IsOptional() @IsString() @MaxLength(IMAGE_B64_MAX) imageBase64?: string;
+  @IsOptional() @IsString() @MaxLength(10) locale?: string;
+  @IsOptional() @IsString() @MaxLength(10) currency?: string;
+  @IsOptional() @IsString() @MaxLength(10) country?: string;
 }
 
 class VoiceDto {
-  @IsOptional() @IsString() audioBase64?: string;
-  @IsOptional() @IsString() locale?: string;
-  @IsOptional() @IsString() currency?: string;
-  @IsOptional() @IsString() country?: string;
+  @IsOptional() @IsString() @MaxLength(AUDIO_B64_MAX) audioBase64?: string;
+  @IsOptional() @IsString() @MaxLength(10) locale?: string;
+  @IsOptional() @IsString() @MaxLength(10) currency?: string;
+  @IsOptional() @IsString() @MaxLength(10) country?: string;
 }
 
 class SuggestCancelDto {
-  @IsString() serviceName: string;
+  @IsString() @MaxLength(200) serviceName: string;
 }
 
 class ParseTextDto {
-  @IsString() text: string;
-  @IsOptional() @IsString() locale?: string;
-  @IsOptional() @IsString() currency?: string;
-  @IsOptional() @IsString() country?: string;
+  @IsString() @MaxLength(4000) text: string;
+  @IsOptional() @IsString() @MaxLength(10) locale?: string;
+  @IsOptional() @IsString() @MaxLength(10) currency?: string;
+  @IsOptional() @IsString() @MaxLength(10) country?: string;
 }
 
 /**

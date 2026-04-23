@@ -13,6 +13,7 @@ import {
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -63,8 +64,12 @@ export class SubscriptionsController {
     };
   }
 
+  // Cap bursty create traffic per IP/user on top of the plan-level limit
+  // so no one can script-create thousands of subscriptions and blow up the
+  // analysis/LLM pipeline or our mobile client memory.
   @Post()
   @UseGuards(SubscriptionLimitGuard)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   create(@Request() req, @Body() dto: CreateSubscriptionDto) {
     return this.service.create(req.user.id, dto);
   }
