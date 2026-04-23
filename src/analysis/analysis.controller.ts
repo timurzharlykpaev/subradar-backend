@@ -49,8 +49,18 @@ export class AnalysisController {
   @Post('run')
   @UseGuards(AnalysisPlanGuard)
   @HttpCode(HttpStatus.OK)
-  async run(@Request() req: any, @Body() body?: { locale?: string }) {
-    const result = await this.analysisService.run(req.user.id, AnalysisTriggerType.MANUAL, undefined, body?.locale) as any;
+  async run(
+    @Request() req: any,
+    @Body() body?: { locale?: string; currency?: string; region?: string; country?: string },
+  ) {
+    // Mobile sends `country`, web sends `region` — accept both.
+    const region = body?.region || body?.country;
+    const result = (await this.analysisService.run(
+      req.user.id,
+      AnalysisTriggerType.MANUAL,
+      undefined,
+      { locale: body?.locale, currency: body?.currency, region },
+    )) as any;
     if (result.retryAfter !== undefined && result.retryAfter > 0) {
       return { error: 'COOLDOWN', retryAfter: result.retryAfter };
     }

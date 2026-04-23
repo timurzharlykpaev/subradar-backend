@@ -91,8 +91,19 @@ export class AnalysisService {
 
   /**
    * Main orchestration: validate limits, dedup, enqueue.
+   *
+   * `opts` overrides user-profile defaults for a single run. Mobile clients
+   * send per-request `locale`/`currency`/`region` because their UI can change
+   * those independently of the saved profile. Passing a string for back-compat
+   * is still supported (treated as `locale`).
    */
-  async run(userId: string, triggerType: AnalysisTriggerType, workspaceId?: string, locale?: string) {
+  async run(
+    userId: string,
+    triggerType: AnalysisTriggerType,
+    workspaceId?: string,
+    opts?: string | { locale?: string; currency?: string; region?: string },
+  ) {
+    const overrides = typeof opts === 'string' ? { locale: opts } : opts || {};
     const user = await this.userRepo.findOneOrFail({ where: { id: userId } });
     const plan = this.getUserPlan(user);
 
@@ -131,9 +142,17 @@ export class AnalysisService {
       }
     }
 
-    // Compute input hash for dedup (includes locale so language change triggers new analysis)
-    const effectiveLocale = locale || user.locale || 'en';
-    const inputHash = await this.computeInputHash(userId, workspaceId, effectiveLocale);
+    // Resolve effective locale/currency/region: per-request override > user profile > default.
+    // These must all be part of the dedup hash so switching any of them forces
+    // a fresh analysis (totals, suggestions and AI copy are rendered in them).
+    const effectiveLocale = (overrides.locale || user.locale || 'en').split('-')[0].toLowerCase();
+    const effectiveCurrency = (overrides.currency || user.displayCurrency || user.defaultCurrency || 'USD').toUpperCase();
+    const effectiveRegion = (overrides.region || user.region || user.country || 'US').toUpperCase();
+    const inputHash = await this.computeInputHash(userId, workspaceId, {
+      locale: effectiveLocale,
+      currency: effectiveCurrency,
+      region: effectiveRegion,
+    });
 
     // Check for fresh cached result with same hash
     const ttlDays = limits.resultTtlDays;
@@ -179,7 +198,8 @@ export class AnalysisService {
     });
     const savedJob = await this.jobRepo.save(job);
 
-    // Enqueue to Bull
+    // Enqueue to Bull — pass effective locale/currency/region so processor
+    // honours per-request overrides instead of re-reading user profile.
     await this.analysisQueue.add(
       ANALYSIS_JOB,
       {
@@ -187,7 +207,9 @@ export class AnalysisService {
         userId,
         workspaceId: workspaceId ?? null,
         plan,
-        locale: locale || user.locale || 'en',
+        locale: effectiveLocale,
+        currency: effectiveCurrency,
+        region: effectiveRegion,
       },
       {
         attempts: 2,
@@ -296,11 +318,17 @@ export class AnalysisService {
   /**
    * Compute SHA-256 hash of user's subscription data for dedup.
    *
-   * displayCurrency is included so changing preferred currency forces fresh
-   * analysis (totals, optimisation suggestions and AI explanations are rendered
-   * in that currency).
+   * locale/currency/region are included so changing any of them forces a
+   * fresh analysis (totals, optimisation suggestions and AI explanations
+   * are all rendered in them). Legacy callers can still pass a bare locale
+   * string — user profile fills the rest.
    */
-  async computeInputHash(userId: string, workspaceId?: string, locale?: string): Promise<string> {
+  async computeInputHash(
+    userId: string,
+    workspaceId?: string,
+    opts?: string | { locale?: string; currency?: string; region?: string },
+  ): Promise<string> {
+    const overrides = typeof opts === 'string' ? { locale: opts } : opts || {};
     const [subscriptions, user] = await Promise.all([
       this.subscriptionRepo.find({
         where: { userId, status: In(['ACTIVE', 'TRIAL'] as any) },
@@ -309,15 +337,20 @@ export class AnalysisService {
       }),
       this.userRepo.findOne({
         where: { id: userId },
-        select: ['id', 'displayCurrency'],
+        select: ['id', 'displayCurrency', 'defaultCurrency', 'region', 'country', 'locale'],
       }),
     ]);
+
+    const locale = (overrides.locale || user?.locale || 'en').split('-')[0].toLowerCase();
+    const displayCurrency = (overrides.currency || user?.displayCurrency || user?.defaultCurrency || 'USD').toUpperCase();
+    const region = (overrides.region || user?.region || user?.country || 'US').toUpperCase();
 
     const payload = JSON.stringify({
       userId,
       workspaceId: workspaceId ?? null,
-      locale: locale ?? 'en',
-      displayCurrency: (user?.displayCurrency || 'USD').toUpperCase(),
+      locale,
+      displayCurrency,
+      region,
       subscriptions: subscriptions.map((s) => ({
         id: s.id,
         name: s.name,

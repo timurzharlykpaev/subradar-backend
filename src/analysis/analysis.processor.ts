@@ -24,6 +24,8 @@ interface AnalysisJobData {
   workspaceId?: string;
   plan: AnalysisPlan;
   locale?: string;
+  currency?: string;
+  region?: string;
 }
 
 interface CategoryBreakdown {
@@ -128,11 +130,12 @@ export class AnalysisProcessor {
       // Truncate to plan limit
       subscriptions = subscriptions.slice(0, limits.maxSubscriptionsPerAnalysis);
 
-      // Resolve user's preferred display currency upfront — drives FX conversion
-      // so totals, byCategory and amounts shipped to the LLM are all coherent.
-      const displayCurrency = (user.displayCurrency || user.defaultCurrency || 'USD').toUpperCase();
-      const userRegion = (user.region || user.country || 'US').toUpperCase();
-      const userLocale = job.data.locale || user.locale || 'en';
+      // Resolve effective locale/currency/region: per-request override from
+      // job.data > user profile > default. Drives FX conversion and the LLM
+      // prompt so totals, byCategory and AI copy are coherent.
+      const displayCurrency = (job.data.currency || user.displayCurrency || user.defaultCurrency || 'USD').toUpperCase();
+      const userRegion = (job.data.region || user.region || user.country || 'US').toUpperCase();
+      const userLocale = (job.data.locale || user.locale || 'en').split('-')[0].toLowerCase();
 
       let fxRates: Record<string, number> = {};
       try {
