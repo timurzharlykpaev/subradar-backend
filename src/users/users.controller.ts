@@ -35,12 +35,17 @@ export class UsersController {
       region: string;
       displayCurrency: string;
       timezoneDetected: string;
+      locale: string;
     }>,
   ) {
     const payload: Record<string, any> = { ...body };
     if (typeof payload.region === 'string') payload.region = payload.region.toUpperCase();
     if (typeof payload.displayCurrency === 'string') {
       payload.displayCurrency = payload.displayCurrency.toUpperCase();
+    }
+    if (typeof payload.locale === 'string') {
+      // Normalize "ru-RU" → "ru" so cron-side resolvePushLocale stays cheap.
+      payload.locale = payload.locale.split(/[-_]/)[0].toLowerCase();
     }
     return this.usersService.update(req.user.id, payload);
   }

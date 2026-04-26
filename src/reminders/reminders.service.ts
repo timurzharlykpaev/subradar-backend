@@ -6,6 +6,7 @@ import { toZonedTime } from 'date-fns-tz';
 import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { pushT } from '../notifications/push-i18n';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
 
@@ -128,8 +129,13 @@ export class RemindersService {
 
         // Send push if fcmToken exists
         if (user.fcmToken) {
-          const title = `⏰ ${sub.name} спишется через ${daysLeft} ${daysLeft === 1 ? 'день' : 'дня'}`;
-          const body = `${sub.amount} ${sub.currency} · ${dateStr}`;
+          const { title, body } = pushT(user.locale).paymentReminder({
+            name: sub.name,
+            amount: sub.amount,
+            currency: sub.currency,
+            daysLeft,
+            dateStr,
+          });
           await this.notificationsService.sendPushNotification(
             user.fcmToken,
             title,
@@ -191,9 +197,7 @@ export class RemindersService {
         if (daysLeft !== 1 && daysLeft !== 4) continue;
         if (!user.notificationsEnabled) continue;
 
-        const title = `Your Pro trial ends in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`;
-        const body =
-          'Upgrade now to keep unlimited subscriptions and AI features';
+        const { title, body } = pushT(user.locale).trialExpiry({ daysLeft });
 
         if (user.fcmToken) {
           await this.notificationsService.sendPushNotification(
@@ -257,19 +261,7 @@ export class RemindersService {
         // Send at 7 days, 3 days, 1 day before, and on expiration day (0)
         if (![7, 3, 1, 0].includes(daysLeft)) continue;
 
-        let title: string;
-        let body: string;
-
-        if (daysLeft === 0) {
-          title = 'SubRadar Pro';
-          body = 'Your Pro benefits have ended';
-        } else if (daysLeft === 1) {
-          title = 'SubRadar Pro';
-          body = 'Last day of Pro!';
-        } else {
-          title = 'SubRadar Pro';
-          body = `Your Pro subscription ends in ${daysLeft} days`;
-        }
+        const { title, body } = pushT(user.locale).proExpiration({ daysLeft });
 
         // Send push notification
         if (user.fcmToken) {
@@ -372,11 +364,12 @@ export class RemindersService {
         });
 
         const currency = active[0]?.currency ?? 'USD';
-        const title = `📊 ${currency} ${totalMonthly.toFixed(0)}/mo on ${active.length} subscriptions`;
-        const body =
-          renewingThisWeek.length > 0
-            ? `${renewingThisWeek.length} renewing this week`
-            : 'Your weekly subscription summary';
+        const { title, body } = pushT(user.locale).weeklyDigest({
+          currency,
+          totalMonthly,
+          activeCount: active.length,
+          renewingThisWeek: renewingThisWeek.length,
+        });
 
         await this.notificationsService.sendPushNotification(
           user.fcmToken,
@@ -462,8 +455,9 @@ export class RemindersService {
 
         if (upcomingSubs === 0) continue;
 
-        const title = '👀 Don\'t miss upcoming charges';
-        const body = `${upcomingSubs} subscription${upcomingSubs > 1 ? 's' : ''} renewing this week`;
+        const { title, body } = pushT(user.locale).winBack({
+          upcomingCount: upcomingSubs,
+        });
 
         await this.notificationsService.sendPushNotification(
           user.fcmToken,

@@ -73,6 +73,8 @@ export class NotificationsService {
       currency: string;
       daysUntilBilling: number;
       billingDate: string;
+      /** User locale (en/ru/...). Drives push title/body language. */
+      locale?: string;
     },
     delayMs = 0,
   ) {

@@ -4,10 +4,20 @@ import { IsString, IsBoolean, IsNumber, IsOptional } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
 import { UsersService } from '../users/users.service';
+import { SUPPORTED_PUSH_LOCALES } from './push-i18n';
 
 class PushTokenDto {
   @IsString() token: string;
   @IsOptional() @IsString() platform?: 'ios' | 'android';
+  /**
+   * Optional BCP-47-ish locale code (en, ru, ru-RU). When provided we update
+   * user.locale so cron-driven push messages render in the right language.
+   * Unknown codes are silently ignored on save (validation is loose to keep
+   * old clients shipping unknown tags from breaking the registration).
+   */
+  @IsOptional()
+  @IsString()
+  locale?: string;
 }
 
 class NotificationSettingsDto {
@@ -33,7 +43,14 @@ export class NotificationsController {
     @Request() req,
     @Body() dto: PushTokenDto,
   ) {
-    await this.usersService.update(req.user.id, { fcmToken: dto.token } as any);
+    const update: Record<string, unknown> = { fcmToken: dto.token };
+    if (dto.locale) {
+      const lang = dto.locale.split(/[-_]/)[0].toLowerCase();
+      if ((SUPPORTED_PUSH_LOCALES as readonly string[]).includes(lang)) {
+        update.locale = lang;
+      }
+    }
+    await this.usersService.update(req.user.id, update as any);
     return { message: 'Push token registered' };
   }
 
