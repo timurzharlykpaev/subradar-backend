@@ -8,11 +8,13 @@ import { User } from '../users/entities/user.entity';
 import { ReportsService } from './reports.service';
 import { ReportsController } from './reports.controller';
 import { ReportsProcessor } from './reports.processor';
+import { FxModule } from '../fx/fx.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Report, Subscription, PaymentCard, User]),
     BullModule.registerQueue({ name: 'reports' }),
+    FxModule,
   ],
   providers: [ReportsService, ReportsProcessor],
   controllers: [ReportsController],

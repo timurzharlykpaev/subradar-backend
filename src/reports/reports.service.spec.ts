@@ -9,6 +9,7 @@ import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
 import { User } from '../users/entities/user.entity';
 import { REDIS_CLIENT } from '../common/redis.module';
+import { FxService } from '../fx/fx.service';
 
 // Mock ioredis
 jest.mock('ioredis', () => {
@@ -50,6 +51,11 @@ jest.mock('pdfkit', () => {
       undash: jest.fn().mockReturnThis(),
       save: jest.fn().mockReturnThis(),
       restore: jest.fn().mockReturnThis(),
+      registerFont: jest.fn().mockReturnThis(),
+      bufferedPageRange: jest.fn(() => ({ start: 0, count: 1 })),
+      switchToPage: jest.fn().mockReturnThis(),
+      flushPages: jest.fn().mockReturnThis(),
+      fillOpacity: jest.fn().mockReturnThis(),
       y: 100,
     };
     return doc;
@@ -101,6 +107,24 @@ describe('ReportsService', () => {
             incr: jest.fn().mockResolvedValue(1),
             expire: jest.fn().mockResolvedValue(1),
             ping: jest.fn().mockResolvedValue('PONG'),
+          },
+        },
+        {
+          provide: FxService,
+          useValue: {
+            getRates: jest.fn().mockResolvedValue({
+              base: 'USD',
+              rates: { USD: 1, EUR: 0.92, RUB: 90, KZT: 480, GBP: 0.79 },
+              fetchedAt: new Date(),
+              source: 'mock',
+            }),
+            convert: jest.fn((amount, from, to, rates) => {
+              if (from === to) return amount;
+              const fromRate = from === 'USD' ? 1 : rates[from];
+              const toRate = to === 'USD' ? 1 : rates[to];
+              const Decimal = require('decimal.js');
+              return amount.div(new Decimal(fromRate)).mul(new Decimal(toRate));
+            }),
           },
         },
       ],

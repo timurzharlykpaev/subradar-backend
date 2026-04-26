@@ -1,0 +1,930 @@
+// ─── PDF report translations ──────────────────────────────────────────────
+// Localized strings for SubRadar PDF reports (Summary / Detailed / Tax / Audit).
+// Used by reports.service.ts to generate user-facing PDFs in the user's locale.
+
+export type SupportedReportLocale =
+  | 'en'
+  | 'ru'
+  | 'es'
+  | 'de'
+  | 'fr'
+  | 'pt'
+  | 'zh'
+  | 'ja'
+  | 'ko'
+  | 'kk';
+
+export interface ReportI18n {
+  // Report titles
+  summary_report: string;
+  detailed_report: string;
+  tax_report: string;
+  audit_report: string;
+
+  // Meta
+  period: string;
+  generated: string;
+  account: string;
+  page: string;
+  page_of: (current: number, total: number) => string;
+
+  // Summary section
+  overview: string;
+  active_subs: string;
+  per_month: string;
+  per_year: string;
+  by_category: string;
+  spending_chart: string;
+  top_subs: string;
+  by_status: string;
+  insights: string;
+  insight_top_category: (cat: string, amount: string) => string;
+  insight_avg_payment: (amount: string) => string;
+  insight_yearly_forecast: (amount: string) => string;
+  insight_largest: (name: string, amount: string) => string;
+
+  // Tables — common
+  subscriptions: string;
+  total: string;
+  name: string;
+  amount: string;
+  category: string;
+  status: string;
+  plan: string;
+  card: string;
+  started: string;
+  next_payment: string;
+  cancelled: string;
+
+  // Tax
+  tax_summary: string;
+  business_expenses: string;
+  personal_expenses: string;
+  total_deductible: string;
+  service: string;
+  period_col: string;
+  by_category_breakdown: string;
+
+  // Periods
+  monthly: string;
+  yearly: string;
+  weekly: string;
+  quarterly: string;
+  lifetime: string;
+  one_time: string;
+
+  // Statuses
+  status_active: string;
+  status_trial: string;
+  status_cancelled: string;
+  status_paused: string;
+
+  // Categories
+  category_streaming: string;
+  category_music: string;
+  category_ai_services: string;
+  category_productivity: string;
+  category_gaming: string;
+  category_design: string;
+  category_education: string;
+  category_finance: string;
+  category_infrastructure: string;
+  category_security: string;
+  category_health: string;
+  category_sport: string;
+  category_developer: string;
+  category_news: string;
+  category_business: string;
+  category_other: string;
+
+  // Multi-currency note
+  converted_to: (currency: string) => string;
+
+  /** Shown in the meta strip when one or more FX rates couldn't be fetched. */
+  fx_partial_failure: string;
+
+  // Footer
+  footer: string;
+}
+
+export const PDF_LOCALES: Record<SupportedReportLocale, ReportI18n> = {
+  en: {
+    summary_report: 'Summary Report',
+    detailed_report: 'Detailed Report',
+    tax_report: 'Tax Report',
+    audit_report: 'Audit Report',
+
+    period: 'Period',
+    generated: 'Generated',
+    account: 'Account',
+    page: 'Page',
+    page_of: (c, t) => `Page ${c} of ${t}`,
+
+    overview: 'Overview',
+    active_subs: 'active subscriptions',
+    per_month: '/ month',
+    per_year: '/ year (estimated)',
+    by_category: 'By Category',
+    spending_chart: 'Spending by Category',
+    top_subs: 'Top Subscriptions',
+    by_status: 'By Status',
+    insights: 'Key Insights',
+    insight_top_category: (cat, amount) => `Top spending: ${cat} (${amount})`,
+    insight_avg_payment: (amount) => `Avg subscription: ${amount}`,
+    insight_yearly_forecast: (amount) => `Forecasted yearly: ${amount}`,
+    insight_largest: (name, amount) => `Largest: ${name} (${amount})`,
+
+    subscriptions: 'Subscriptions',
+    total: 'Total',
+    name: 'Name',
+    amount: 'Amount',
+    category: 'Category',
+    status: 'Status',
+    plan: 'Plan',
+    card: 'Card',
+    started: 'Started',
+    next_payment: 'Next payment',
+    cancelled: 'Cancelled',
+
+    tax_summary: 'Tax Summary',
+    business_expenses: 'Business Expenses',
+    personal_expenses: 'Personal Expenses',
+    total_deductible: 'Total deductible',
+    service: 'Service',
+    period_col: 'Period',
+    by_category_breakdown: 'Business expenses by category',
+
+    monthly: '/mo',
+    yearly: '/yr',
+    weekly: '/wk',
+    quarterly: '/qtr',
+    lifetime: 'lifetime',
+    one_time: 'one-time',
+
+    status_active: 'Active',
+    status_trial: 'Trial',
+    status_cancelled: 'Cancelled',
+    status_paused: 'Paused',
+
+    category_streaming: 'Streaming',
+    category_music: 'Music',
+    category_ai_services: 'AI Services',
+    category_productivity: 'Productivity',
+    category_gaming: 'Gaming',
+    category_design: 'Design',
+    category_education: 'Education',
+    category_finance: 'Finance',
+    category_infrastructure: 'Infrastructure',
+    category_security: 'Security',
+    category_health: 'Health & Wellness',
+    category_sport: 'Sport & Fitness',
+    category_developer: 'Developer Tools',
+    category_news: 'News & Reading',
+    category_business: 'Business',
+    category_other: 'Other',
+
+    converted_to: (currency) => `All amounts converted to ${currency}`,
+
+    fx_partial_failure: 'Some currencies could not be converted — totals may be partial.',
+    footer: 'Generated by SubRadar AI — subradar.ai',
+  },
+
+  ru: {
+    summary_report: 'Сводный отчёт',
+    detailed_report: 'Детальный отчёт',
+    tax_report: 'Налоговый отчёт',
+    audit_report: 'Аудит-отчёт',
+
+    period: 'Период',
+    generated: 'Сформирован',
+    account: 'Аккаунт',
+    page: 'Страница',
+    page_of: (c, t) => `Страница ${c} из ${t}`,
+
+    overview: 'Обзор',
+    active_subs: 'активных подписок',
+    per_month: '/ мес',
+    per_year: '/ год (оценка)',
+    by_category: 'По категориям',
+    spending_chart: 'Расходы по категориям',
+    top_subs: 'Топ подписки',
+    by_status: 'По статусу',
+    insights: 'Ключевые инсайты',
+    insight_top_category: (cat, amount) => `Больше всего трат: ${cat} (${amount})`,
+    insight_avg_payment: (amount) => `Средняя подписка: ${amount}`,
+    insight_yearly_forecast: (amount) => `Прогноз на год: ${amount}`,
+    insight_largest: (name, amount) => `Самая дорогая: ${name} (${amount})`,
+
+    subscriptions: 'Подписки',
+    total: 'Итого',
+    name: 'Название',
+    amount: 'Сумма',
+    category: 'Категория',
+    status: 'Статус',
+    plan: 'Тариф',
+    card: 'Карта',
+    started: 'Начало',
+    next_payment: 'Следующий платёж',
+    cancelled: 'Отменена',
+
+    tax_summary: 'Налоговая сводка',
+    business_expenses: 'Бизнес-расходы',
+    personal_expenses: 'Личные расходы',
+    total_deductible: 'Итого к вычету',
+    service: 'Сервис',
+    period_col: 'Период',
+    by_category_breakdown: 'Бизнес-расходы по категориям',
+
+    monthly: '/мес',
+    yearly: '/год',
+    weekly: '/нед',
+    quarterly: '/кв',
+    lifetime: 'навсегда',
+    one_time: 'разово',
+
+    status_active: 'Активна',
+    status_trial: 'Триал',
+    status_cancelled: 'Отменена',
+    status_paused: 'Приостановлена',
+
+    category_streaming: 'Стриминг',
+    category_music: 'Музыка',
+    category_ai_services: 'AI-сервисы',
+    category_productivity: 'Продуктивность',
+    category_gaming: 'Игры',
+    category_design: 'Дизайн',
+    category_education: 'Образование',
+    category_finance: 'Финансы',
+    category_infrastructure: 'Инфраструктура',
+    category_security: 'Безопасность',
+    category_health: 'Здоровье',
+    category_sport: 'Спорт и фитнес',
+    category_developer: 'Инструменты разработчика',
+    category_news: 'Новости и чтение',
+    category_business: 'Бизнес',
+    category_other: 'Прочее',
+
+    converted_to: (currency) => `Все суммы переведены в ${currency}`,
+
+    fx_partial_failure: 'Не удалось сконвертировать часть валют — итоги могут быть неполными.',
+    footer: 'Сформировано в SubRadar AI — subradar.ai',
+  },
+
+  es: {
+    summary_report: 'Informe resumen',
+    detailed_report: 'Informe detallado',
+    tax_report: 'Informe fiscal',
+    audit_report: 'Informe de auditoría',
+
+    period: 'Período',
+    generated: 'Generado',
+    account: 'Cuenta',
+    page: 'Página',
+    page_of: (c, t) => `Página ${c} de ${t}`,
+
+    overview: 'Resumen',
+    active_subs: 'suscripciones activas',
+    per_month: '/ mes',
+    per_year: '/ año (estimado)',
+    by_category: 'Por categoría',
+    spending_chart: 'Gastos por categoría',
+    top_subs: 'Principales suscripciones',
+    by_status: 'Por estado',
+    insights: 'Datos clave',
+    insight_top_category: (cat, amount) => `Mayor gasto: ${cat} (${amount})`,
+    insight_avg_payment: (amount) => `Suscripción promedio: ${amount}`,
+    insight_yearly_forecast: (amount) => `Previsión anual: ${amount}`,
+    insight_largest: (name, amount) => `La más cara: ${name} (${amount})`,
+
+    subscriptions: 'Suscripciones',
+    total: 'Total',
+    name: 'Nombre',
+    amount: 'Importe',
+    category: 'Categoría',
+    status: 'Estado',
+    plan: 'Plan',
+    card: 'Tarjeta',
+    started: 'Inicio',
+    next_payment: 'Próximo pago',
+    cancelled: 'Cancelada',
+
+    tax_summary: 'Resumen fiscal',
+    business_expenses: 'Gastos de empresa',
+    personal_expenses: 'Gastos personales',
+    total_deductible: 'Total deducible',
+    service: 'Servicio',
+    period_col: 'Período',
+    by_category_breakdown: 'Gastos de empresa por categoría',
+
+    monthly: '/mes',
+    yearly: '/año',
+    weekly: '/sem',
+    quarterly: '/trim',
+    lifetime: 'de por vida',
+    one_time: 'pago único',
+
+    status_active: 'Activa',
+    status_trial: 'Prueba',
+    status_cancelled: 'Cancelada',
+    status_paused: 'Pausada',
+
+    category_streaming: 'Streaming',
+    category_music: 'Música',
+    category_ai_services: 'Servicios de IA',
+    category_productivity: 'Productividad',
+    category_gaming: 'Videojuegos',
+    category_design: 'Diseño',
+    category_education: 'Educación',
+    category_finance: 'Finanzas',
+    category_infrastructure: 'Infraestructura',
+    category_security: 'Seguridad',
+    category_health: 'Salud y bienestar',
+    category_sport: 'Deporte y fitness',
+    category_developer: 'Herramientas de desarrollo',
+    category_news: 'Noticias y lectura',
+    category_business: 'Negocios',
+    category_other: 'Otros',
+
+    converted_to: (currency) => `Todos los importes convertidos a ${currency}`,
+
+    fx_partial_failure: 'No se pudieron convertir algunas monedas — los totales pueden ser parciales.',
+    footer: 'Generado por SubRadar AI — subradar.ai',
+  },
+
+  de: {
+    summary_report: 'Übersichtsbericht',
+    detailed_report: 'Detailbericht',
+    tax_report: 'Steuerbericht',
+    audit_report: 'Prüfbericht',
+
+    period: 'Zeitraum',
+    generated: 'Erstellt',
+    account: 'Konto',
+    page: 'Seite',
+    page_of: (c, t) => `Seite ${c} von ${t}`,
+
+    overview: 'Übersicht',
+    active_subs: 'aktive Abonnements',
+    per_month: '/ Monat',
+    per_year: '/ Jahr (geschätzt)',
+    by_category: 'Nach Kategorie',
+    spending_chart: 'Ausgaben nach Kategorie',
+    top_subs: 'Top-Abonnements',
+    by_status: 'Nach Status',
+    insights: 'Wichtige Erkenntnisse',
+    insight_top_category: (cat, amount) => `Höchste Ausgaben: ${cat} (${amount})`,
+    insight_avg_payment: (amount) => `Ø Abonnement: ${amount}`,
+    insight_yearly_forecast: (amount) => `Jahresprognose: ${amount}`,
+    insight_largest: (name, amount) => `Größtes: ${name} (${amount})`,
+
+    subscriptions: 'Abonnements',
+    total: 'Gesamt',
+    name: 'Name',
+    amount: 'Betrag',
+    category: 'Kategorie',
+    status: 'Status',
+    plan: 'Tarif',
+    card: 'Karte',
+    started: 'Beginn',
+    next_payment: 'Nächste Zahlung',
+    cancelled: 'Gekündigt',
+
+    tax_summary: 'Steuerübersicht',
+    business_expenses: 'Geschäftsausgaben',
+    personal_expenses: 'Private Ausgaben',
+    total_deductible: 'Gesamt absetzbar',
+    service: 'Dienst',
+    period_col: 'Zeitraum',
+    by_category_breakdown: 'Geschäftsausgaben nach Kategorie',
+
+    monthly: '/Mon',
+    yearly: '/Jahr',
+    weekly: '/Wo',
+    quarterly: '/Q',
+    lifetime: 'lebenslang',
+    one_time: 'einmalig',
+
+    status_active: 'Aktiv',
+    status_trial: 'Testphase',
+    status_cancelled: 'Gekündigt',
+    status_paused: 'Pausiert',
+
+    category_streaming: 'Streaming',
+    category_music: 'Musik',
+    category_ai_services: 'KI-Dienste',
+    category_productivity: 'Produktivität',
+    category_gaming: 'Gaming',
+    category_design: 'Design',
+    category_education: 'Bildung',
+    category_finance: 'Finanzen',
+    category_infrastructure: 'Infrastruktur',
+    category_security: 'Sicherheit',
+    category_health: 'Gesundheit & Wellness',
+    category_sport: 'Sport & Fitness',
+    category_developer: 'Entwickler-Tools',
+    category_news: 'Nachrichten & Lesen',
+    category_business: 'Business',
+    category_other: 'Sonstiges',
+
+    converted_to: (currency) => `Alle Beträge umgerechnet in ${currency}`,
+
+    fx_partial_failure: 'Einige Währungen konnten nicht umgerechnet werden — Summen sind möglicherweise unvollständig.',
+    footer: 'Erstellt von SubRadar AI — subradar.ai',
+  },
+
+  fr: {
+    summary_report: 'Rapport synthèse',
+    detailed_report: 'Rapport détaillé',
+    tax_report: 'Rapport fiscal',
+    audit_report: 'Rapport d’audit',
+
+    period: 'Période',
+    generated: 'Généré',
+    account: 'Compte',
+    page: 'Page',
+    page_of: (c, t) => `Page ${c} sur ${t}`,
+
+    overview: 'Aperçu',
+    active_subs: 'abonnements actifs',
+    per_month: '/ mois',
+    per_year: '/ an (estimation)',
+    by_category: 'Par catégorie',
+    spending_chart: 'Dépenses par catégorie',
+    top_subs: 'Principaux abonnements',
+    by_status: 'Par statut',
+    insights: 'Points clés',
+    insight_top_category: (cat, amount) => `Dépense principale : ${cat} (${amount})`,
+    insight_avg_payment: (amount) => `Abonnement moyen : ${amount}`,
+    insight_yearly_forecast: (amount) => `Prévision annuelle : ${amount}`,
+    insight_largest: (name, amount) => `Le plus cher : ${name} (${amount})`,
+
+    subscriptions: 'Abonnements',
+    total: 'Total',
+    name: 'Nom',
+    amount: 'Montant',
+    category: 'Catégorie',
+    status: 'Statut',
+    plan: 'Forfait',
+    card: 'Carte',
+    started: 'Début',
+    next_payment: 'Prochain paiement',
+    cancelled: 'Résilié',
+
+    tax_summary: 'Résumé fiscal',
+    business_expenses: 'Dépenses pro',
+    personal_expenses: 'Dépenses perso',
+    total_deductible: 'Total déductible',
+    service: 'Service',
+    period_col: 'Période',
+    by_category_breakdown: 'Dépenses pro par catégorie',
+
+    monthly: '/mois',
+    yearly: '/an',
+    weekly: '/sem',
+    quarterly: '/trim',
+    lifetime: 'à vie',
+    one_time: 'paiement unique',
+
+    status_active: 'Actif',
+    status_trial: 'Essai',
+    status_cancelled: 'Résilié',
+    status_paused: 'En pause',
+
+    category_streaming: 'Streaming',
+    category_music: 'Musique',
+    category_ai_services: 'Services d’IA',
+    category_productivity: 'Productivité',
+    category_gaming: 'Jeux vidéo',
+    category_design: 'Design',
+    category_education: 'Éducation',
+    category_finance: 'Finance',
+    category_infrastructure: 'Infrastructure',
+    category_security: 'Sécurité',
+    category_health: 'Santé et bien-être',
+    category_sport: 'Sport et fitness',
+    category_developer: 'Outils développeur',
+    category_news: 'Actualités et lecture',
+    category_business: 'Business',
+    category_other: 'Autres',
+
+    converted_to: (currency) => `Tous les montants convertis en ${currency}`,
+
+    fx_partial_failure: "Certaines devises n'ont pas pu être converties — les totaux peuvent être partiels.",
+    footer: 'Généré par SubRadar AI — subradar.ai',
+  },
+
+  pt: {
+    summary_report: 'Relatório resumido',
+    detailed_report: 'Relatório detalhado',
+    tax_report: 'Relatório fiscal',
+    audit_report: 'Relatório de auditoria',
+
+    period: 'Período',
+    generated: 'Gerado',
+    account: 'Conta',
+    page: 'Página',
+    page_of: (c, t) => `Página ${c} de ${t}`,
+
+    overview: 'Visão geral',
+    active_subs: 'assinaturas ativas',
+    per_month: '/ mês',
+    per_year: '/ ano (estimado)',
+    by_category: 'Por categoria',
+    spending_chart: 'Gastos por categoria',
+    top_subs: 'Principais assinaturas',
+    by_status: 'Por status',
+    insights: 'Principais insights',
+    insight_top_category: (cat, amount) => `Maior gasto: ${cat} (${amount})`,
+    insight_avg_payment: (amount) => `Assinatura média: ${amount}`,
+    insight_yearly_forecast: (amount) => `Previsão anual: ${amount}`,
+    insight_largest: (name, amount) => `A maior: ${name} (${amount})`,
+
+    subscriptions: 'Assinaturas',
+    total: 'Total',
+    name: 'Nome',
+    amount: 'Valor',
+    category: 'Categoria',
+    status: 'Status',
+    plan: 'Plano',
+    card: 'Cartão',
+    started: 'Início',
+    next_payment: 'Próximo pagamento',
+    cancelled: 'Cancelada',
+
+    tax_summary: 'Resumo fiscal',
+    business_expenses: 'Despesas empresariais',
+    personal_expenses: 'Despesas pessoais',
+    total_deductible: 'Total dedutível',
+    service: 'Serviço',
+    period_col: 'Período',
+    by_category_breakdown: 'Despesas empresariais por categoria',
+
+    monthly: '/mês',
+    yearly: '/ano',
+    weekly: '/sem',
+    quarterly: '/trim',
+    lifetime: 'vitalícia',
+    one_time: 'pagamento único',
+
+    status_active: 'Ativa',
+    status_trial: 'Teste',
+    status_cancelled: 'Cancelada',
+    status_paused: 'Pausada',
+
+    category_streaming: 'Streaming',
+    category_music: 'Música',
+    category_ai_services: 'Serviços de IA',
+    category_productivity: 'Produtividade',
+    category_gaming: 'Jogos',
+    category_design: 'Design',
+    category_education: 'Educação',
+    category_finance: 'Finanças',
+    category_infrastructure: 'Infraestrutura',
+    category_security: 'Segurança',
+    category_health: 'Saúde e bem-estar',
+    category_sport: 'Esporte e fitness',
+    category_developer: 'Ferramentas de desenvolvimento',
+    category_news: 'Notícias e leitura',
+    category_business: 'Negócios',
+    category_other: 'Outros',
+
+    converted_to: (currency) => `Todos os valores convertidos para ${currency}`,
+
+    fx_partial_failure: 'Algumas moedas não puderam ser convertidas — os totais podem estar parciais.',
+    footer: 'Gerado pelo SubRadar AI — subradar.ai',
+  },
+
+  zh: {
+    summary_report: '汇总报告',
+    detailed_report: '明细报告',
+    tax_report: '税务报告',
+    audit_report: '审计报告',
+
+    period: '周期',
+    generated: '生成时间',
+    account: '账户',
+    page: '页',
+    page_of: (c, t) => `第 ${c} 页 / 共 ${t} 页`,
+
+    overview: '概览',
+    active_subs: '个有效订阅',
+    per_month: ' / 月',
+    per_year: ' / 年（预估）',
+    by_category: '按类别',
+    spending_chart: '各类别支出',
+    top_subs: '主要订阅',
+    by_status: '按状态',
+    insights: '关键洞察',
+    insight_top_category: (cat, amount) => `最高支出：${cat}（${amount}）`,
+    insight_avg_payment: (amount) => `平均订阅：${amount}`,
+    insight_yearly_forecast: (amount) => `年度预测：${amount}`,
+    insight_largest: (name, amount) => `最贵订阅：${name}（${amount}）`,
+
+    subscriptions: '订阅',
+    total: '合计',
+    name: '名称',
+    amount: '金额',
+    category: '类别',
+    status: '状态',
+    plan: '套餐',
+    card: '卡片',
+    started: '开始',
+    next_payment: '下次付款',
+    cancelled: '已取消',
+
+    tax_summary: '税务汇总',
+    business_expenses: '业务支出',
+    personal_expenses: '个人支出',
+    total_deductible: '可抵扣合计',
+    service: '服务',
+    period_col: '周期',
+    by_category_breakdown: '按类别的业务支出',
+
+    monthly: '/月',
+    yearly: '/年',
+    weekly: '/周',
+    quarterly: '/季',
+    lifetime: '终身',
+    one_time: '一次性',
+
+    status_active: '使用中',
+    status_trial: '试用',
+    status_cancelled: '已取消',
+    status_paused: '已暂停',
+
+    category_streaming: '影视',
+    category_music: '音乐',
+    category_ai_services: 'AI 服务',
+    category_productivity: '效率工具',
+    category_gaming: '游戏',
+    category_design: '设计',
+    category_education: '教育',
+    category_finance: '金融',
+    category_infrastructure: '基础设施',
+    category_security: '安全',
+    category_health: '健康与养生',
+    category_sport: '运动与健身',
+    category_developer: '开发工具',
+    category_news: '新闻与阅读',
+    category_business: '商务',
+    category_other: '其他',
+
+    converted_to: (currency) => `所有金额已换算为 ${currency}`,
+
+    fx_partial_failure: '部分货币无法转换 — 总额可能不完整。',
+    footer: '由 SubRadar AI 生成 — subradar.ai',
+  },
+
+  ja: {
+    summary_report: 'サマリーレポート',
+    detailed_report: '明細レポート',
+    tax_report: '税務レポート',
+    audit_report: '監査レポート',
+
+    period: '期間',
+    generated: '作成日時',
+    account: 'アカウント',
+    page: 'ページ',
+    page_of: (c, t) => `${t} ページ中 ${c} ページ`,
+
+    overview: '概要',
+    active_subs: '件のアクティブなサブスク',
+    per_month: ' / 月',
+    per_year: ' / 年（推定）',
+    by_category: 'カテゴリ別',
+    spending_chart: 'カテゴリ別支出',
+    top_subs: '主要サブスク',
+    by_status: 'ステータス別',
+    insights: '主なインサイト',
+    insight_top_category: (cat, amount) => `最大支出：${cat}（${amount}）`,
+    insight_avg_payment: (amount) => `平均サブスク：${amount}`,
+    insight_yearly_forecast: (amount) => `年間予測：${amount}`,
+    insight_largest: (name, amount) => `最も高額：${name}（${amount}）`,
+
+    subscriptions: 'サブスクリプション',
+    total: '合計',
+    name: '名称',
+    amount: '金額',
+    category: 'カテゴリ',
+    status: 'ステータス',
+    plan: 'プラン',
+    card: 'カード',
+    started: '開始',
+    next_payment: '次回支払い',
+    cancelled: '解約済み',
+
+    tax_summary: '税務サマリー',
+    business_expenses: '事業経費',
+    personal_expenses: '個人支出',
+    total_deductible: '控除合計',
+    service: 'サービス',
+    period_col: '期間',
+    by_category_breakdown: 'カテゴリ別の事業経費',
+
+    monthly: '/月',
+    yearly: '/年',
+    weekly: '/週',
+    quarterly: '/四半期',
+    lifetime: '永久',
+    one_time: '1回のみ',
+
+    status_active: '利用中',
+    status_trial: 'トライアル',
+    status_cancelled: '解約済み',
+    status_paused: '一時停止中',
+
+    category_streaming: '動画配信',
+    category_music: '音楽',
+    category_ai_services: 'AIサービス',
+    category_productivity: '生産性',
+    category_gaming: 'ゲーム',
+    category_design: 'デザイン',
+    category_education: '教育',
+    category_finance: '金融',
+    category_infrastructure: 'インフラ',
+    category_security: 'セキュリティ',
+    category_health: '健康・ウェルネス',
+    category_sport: 'スポーツ・フィットネス',
+    category_developer: '開発ツール',
+    category_news: 'ニュース・読書',
+    category_business: 'ビジネス',
+    category_other: 'その他',
+
+    converted_to: (currency) => `すべての金額は ${currency} に換算されています`,
+
+    fx_partial_failure: '一部の通貨を変換できませんでした — 合計が不完全な可能性があります。',
+    footer: 'SubRadar AI により作成 — subradar.ai',
+  },
+
+  ko: {
+    summary_report: '요약 리포트',
+    detailed_report: '상세 리포트',
+    tax_report: '세무 리포트',
+    audit_report: '감사 리포트',
+
+    period: '기간',
+    generated: '생성일',
+    account: '계정',
+    page: '페이지',
+    page_of: (c, t) => `${t} 페이지 중 ${c} 페이지`,
+
+    overview: '개요',
+    active_subs: '개의 활성 구독',
+    per_month: ' / 월',
+    per_year: ' / 년 (예상)',
+    by_category: '카테고리별',
+    spending_chart: '카테고리별 지출',
+    top_subs: '주요 구독',
+    by_status: '상태별',
+    insights: '핵심 인사이트',
+    insight_top_category: (cat, amount) => `최대 지출: ${cat} (${amount})`,
+    insight_avg_payment: (amount) => `평균 구독: ${amount}`,
+    insight_yearly_forecast: (amount) => `연간 예측: ${amount}`,
+    insight_largest: (name, amount) => `최고가: ${name} (${amount})`,
+
+    subscriptions: '구독',
+    total: '합계',
+    name: '이름',
+    amount: '금액',
+    category: '카테고리',
+    status: '상태',
+    plan: '플랜',
+    card: '카드',
+    started: '시작일',
+    next_payment: '다음 결제',
+    cancelled: '해지됨',
+
+    tax_summary: '세무 요약',
+    business_expenses: '사업 지출',
+    personal_expenses: '개인 지출',
+    total_deductible: '공제 합계',
+    service: '서비스',
+    period_col: '기간',
+    by_category_breakdown: '카테고리별 사업 지출',
+
+    monthly: '/월',
+    yearly: '/년',
+    weekly: '/주',
+    quarterly: '/분기',
+    lifetime: '평생',
+    one_time: '1회 결제',
+
+    status_active: '사용 중',
+    status_trial: '체험판',
+    status_cancelled: '해지됨',
+    status_paused: '일시 정지',
+
+    category_streaming: '스트리밍',
+    category_music: '음악',
+    category_ai_services: 'AI 서비스',
+    category_productivity: '생산성',
+    category_gaming: '게임',
+    category_design: '디자인',
+    category_education: '교육',
+    category_finance: '금융',
+    category_infrastructure: '인프라',
+    category_security: '보안',
+    category_health: '건강 및 웰빙',
+    category_sport: '스포츠 및 피트니스',
+    category_developer: '개발자 도구',
+    category_news: '뉴스 및 독서',
+    category_business: '비즈니스',
+    category_other: '기타',
+
+    converted_to: (currency) => `모든 금액은 ${currency}(으)로 환산되었습니다`,
+
+    fx_partial_failure: '일부 통화를 변환할 수 없습니다 — 합계가 부분적일 수 있습니다.',
+    footer: 'SubRadar AI에서 생성 — subradar.ai',
+  },
+
+  kk: {
+    summary_report: 'Жиынтық есеп',
+    detailed_report: 'Толық есеп',
+    tax_report: 'Салық есебі',
+    audit_report: 'Аудит-есеп',
+
+    period: 'Кезең',
+    generated: 'Жасалды',
+    account: 'Аккаунт',
+    page: 'Бет',
+    page_of: (c, t) => `${t} беттің ${c}-сі`,
+
+    overview: 'Шолу',
+    active_subs: 'белсенді жазылым',
+    per_month: '/ ай',
+    per_year: '/ жыл (болжам)',
+    by_category: 'Санат бойынша',
+    spending_chart: 'Санат бойынша шығыстар',
+    top_subs: 'Топ жазылымдар',
+    by_status: 'Мәртебе бойынша',
+    insights: 'Негізгі тұжырымдар',
+    insight_top_category: (cat, amount) => `Ең көп шығын: ${cat} (${amount})`,
+    insight_avg_payment: (amount) => `Орташа жазылым: ${amount}`,
+    insight_yearly_forecast: (amount) => `Жылдық болжам: ${amount}`,
+    insight_largest: (name, amount) => `Ең қымбаты: ${name} (${amount})`,
+
+    subscriptions: 'Жазылымдар',
+    total: 'Барлығы',
+    name: 'Атауы',
+    amount: 'Сома',
+    category: 'Санат',
+    status: 'Мәртебе',
+    plan: 'Тариф',
+    card: 'Карта',
+    started: 'Басталды',
+    next_payment: 'Келесі төлем',
+    cancelled: 'Тоқтатылды',
+
+    tax_summary: 'Салық жиынтығы',
+    business_expenses: 'Бизнес шығыстар',
+    personal_expenses: 'Жеке шығыстар',
+    total_deductible: 'Шегерімге жалпы',
+    service: 'Сервис',
+    period_col: 'Кезең',
+    by_category_breakdown: 'Санат бойынша бизнес шығыстары',
+
+    monthly: '/ай',
+    yearly: '/жыл',
+    weekly: '/апт',
+    quarterly: '/тқс',
+    lifetime: 'мәңгі',
+    one_time: 'бір рет',
+
+    status_active: 'Белсенді',
+    status_trial: 'Сынақ',
+    status_cancelled: 'Тоқтатылды',
+    status_paused: 'Кідіртілген',
+
+    category_streaming: 'Стриминг',
+    category_music: 'Музыка',
+    category_ai_services: 'AI қызметтері',
+    category_productivity: 'Өнімділік',
+    category_gaming: 'Ойындар',
+    category_design: 'Дизайн',
+    category_education: 'Білім',
+    category_finance: 'Қаржы',
+    category_infrastructure: 'Инфрақұрылым',
+    category_security: 'Қауіпсіздік',
+    category_health: 'Денсаулық',
+    category_sport: 'Спорт және фитнес',
+    category_developer: 'Әзірлеуші құралдары',
+    category_news: 'Жаңалықтар мен оқу',
+    category_business: 'Бизнес',
+    category_other: 'Басқа',
+
+    converted_to: (currency) => `Барлық сомалар ${currency} валютасына аударылды`,
+
+    fx_partial_failure: 'Кейбір валюталар түрлендірілмеді — қорытындылар толық емес болуы мүмкін.',
+    footer: 'SubRadar AI арқылы жасалды — subradar.ai',
+  },
+};
+
+/**
+ * Resolve PDF translations by locale code.
+ * Accepts BCP-47 tags ('en-US', 'pt_BR', 'zh-Hans') and falls back to English.
+ */
+export function pdfL(locale: string | null | undefined): ReportI18n {
+  if (!locale) return PDF_LOCALES.en;
+  const code = locale.split(/[-_]/)[0].toLowerCase();
+  return (PDF_LOCALES as Record<string, ReportI18n>)[code] ?? PDF_LOCALES.en;
+}
