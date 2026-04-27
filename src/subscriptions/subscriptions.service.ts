@@ -318,11 +318,39 @@ export class SubscriptionsService implements OnModuleInit {
       const user = await this.usersService.findById(userId);
       displayCurrency = (user?.displayCurrency || 'USD').toUpperCase();
     }
+
+    // Server-side feature gating. When the client opts in via
+    // `gateByPlan=true`, cap the response at the user's plan limit
+    // (oldest ACTIVE/TRIAL subs by createdAt). Without this, a Free user
+    // who saved 5 subs and downgraded could still pull the full list via
+    // a direct API call — UI obfuscation is bypassable, server cap isn't.
+    let allowedIds: Set<string> | null = null;
+    if (filters?.gateByPlan) {
+      const user = await this.usersService.findById(userId);
+      const effective = await this.billingService.getEffectiveAccess(user);
+      const planConfig = PLANS[effective.plan] ?? PLANS.free;
+      if (planConfig.subscriptionLimit !== null) {
+        const oldestActive = await this.repo.find({
+          where: [
+            { userId, status: SubscriptionStatus.ACTIVE },
+            { userId, status: SubscriptionStatus.TRIAL },
+          ],
+          order: { createdAt: 'ASC' },
+          take: planConfig.subscriptionLimit,
+          select: ['id'],
+        });
+        allowedIds = new Set(oldestActive.map((s) => s.id));
+      }
+    }
+
     const [subs, fx] = await Promise.all([
       this.findAll(userId, filters),
       this.fx.getRates(),
     ]);
-    return subs.map((sub) => {
+    const filteredSubs = allowedIds
+      ? subs.filter((s) => allowedIds!.has(s.id))
+      : subs;
+    return filteredSubs.map((sub) => {
       const origCurrency = sub.originalCurrency || sub.currency;
       let displayAmountStr: string;
       let fxRate: number;
@@ -359,6 +387,33 @@ export class SubscriptionsService implements OnModuleInit {
       relations: ['paymentCard'],
     });
     if (!sub || sub.userId !== userId) throw new NotFoundException('Subscription not found');
+
+    // Refuse to serve subscription details that are locked behind the
+    // user's plan limit. Without this guard a Free user who downgraded
+    // could still pull every cancelled-from-UI sub by guessing IDs.
+    if (sub.status === SubscriptionStatus.ACTIVE || sub.status === SubscriptionStatus.TRIAL) {
+      const user = await this.usersService.findById(userId);
+      const effective = await this.billingService.getEffectiveAccess(user);
+      const planConfig = PLANS[effective.plan] ?? PLANS.free;
+      if (planConfig.subscriptionLimit !== null) {
+        const oldestActive = await this.repo.find({
+          where: [
+            { userId, status: SubscriptionStatus.ACTIVE },
+            { userId, status: SubscriptionStatus.TRIAL },
+          ],
+          order: { createdAt: 'ASC' },
+          take: planConfig.subscriptionLimit,
+          select: ['id'],
+        });
+        const allowed = new Set(oldestActive.map((s) => s.id));
+        if (!allowed.has(id)) {
+          throw new ForbiddenException(
+            `Subscription locked on ${effective.plan} plan. Upgrade to access all of your subscriptions.`,
+          );
+        }
+      }
+    }
+
     return sub;
   }
 

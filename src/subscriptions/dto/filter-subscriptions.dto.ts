@@ -1,5 +1,5 @@
-import { IsOptional, IsEnum, IsString, IsIn, IsInt, Min, Max } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsEnum, IsString, IsIn, IsInt, Min, Max, IsBoolean } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   SubscriptionCategory,
@@ -59,4 +59,16 @@ export class FilterSubscriptionsDto {
   @IsOptional()
   @IsString()
   displayCurrency?: string;
+
+  /**
+   * When true, the server caps the result at the user's plan
+   * `subscriptionLimit` (oldest first by createdAt). Lets the mobile UI
+   * defer feature-gating to the server instead of enforcing it client-
+   * side, where it can trivially be bypassed by hitting the API directly.
+   */
+  @ApiPropertyOptional({ description: 'Cap response at plan limit (server-side gating)' })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @IsBoolean()
+  gateByPlan?: boolean;
 }

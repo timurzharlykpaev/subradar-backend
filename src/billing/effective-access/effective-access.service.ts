@@ -84,7 +84,16 @@ export class EffectiveAccessResolver {
         where: { userId, status: WorkspaceMemberStatus.ACTIVE },
         relations: ['workspace'],
       }),
-      this.subs.count({ where: { userId } }),
+      // Only ACTIVE / TRIAL subs count toward the plan limit. Mirrors what
+      // SubscriptionsService.create checks before allowing inserts —
+      // counting cancelled rows here would falsely flip subsLimitReached
+      // and surface upgrade nags to users who have nothing live.
+      this.subs.count({
+        where: [
+          { userId, status: 'ACTIVE' as any },
+          { userId, status: 'TRIAL' as any },
+        ],
+      }),
     ]);
 
     const teamOwnerId = membership?.workspace?.ownerId ?? null;
