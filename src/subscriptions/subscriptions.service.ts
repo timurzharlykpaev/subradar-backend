@@ -396,7 +396,7 @@ export class SubscriptionsService implements OnModuleInit {
       const effective = await this.billingService.getEffectiveAccess(user);
       const planConfig = PLANS[effective.plan] ?? PLANS.free;
       if (planConfig.subscriptionLimit !== null) {
-        const oldestActive = await this.repo.find({
+        const oldestActive = (await this.repo.find({
           where: [
             { userId, status: SubscriptionStatus.ACTIVE },
             { userId, status: SubscriptionStatus.TRIAL },
@@ -404,9 +404,15 @@ export class SubscriptionsService implements OnModuleInit {
           order: { createdAt: 'ASC' },
           take: planConfig.subscriptionLimit,
           select: ['id'],
-        });
+        })) ?? [];
+        // Allow the requested sub through when it's already in the oldest-N
+        // window OR when the user's total ACTIVE/TRIAL count fits inside the
+        // limit (every sub is within the cap, so nothing is locked yet).
         const allowed = new Set(oldestActive.map((s) => s.id));
-        if (!allowed.has(id)) {
+        if (
+          oldestActive.length >= planConfig.subscriptionLimit &&
+          !allowed.has(id)
+        ) {
           throw new ForbiddenException(
             `Subscription locked on ${effective.plan} plan. Upgrade to access all of your subscriptions.`,
           );
