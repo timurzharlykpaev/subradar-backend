@@ -1262,36 +1262,61 @@ export class BillingService {
 
   async cancelSubscription(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
+    const before = {
+      plan: user.plan,
+      billingSource: user.billingSource,
+      billingStatus: user.billingStatus,
+      cancelAtPeriodEnd: user.cancelAtPeriodEnd,
+      trialEndDate: user.trialEndDate,
+    };
+    this.logger.log(
+      `cancelSubscription: user ${userId} before=${JSON.stringify(before)}`,
+    );
 
     // Cancel trial: clear trial dates, reset plan to free
     // Only if not already paying via RevenueCat (trial superseded by real purchase)
     if (user.trialEndDate && new Date(user.trialEndDate) > new Date() && user.billingSource !== 'revenuecat') {
       await this.usersService.update(userId, {
         plan: 'free',
+        billingStatus: 'free' as any,
         trialEndDate: undefined as any,
         billingSource: undefined as any,
+        cancelAtPeriodEnd: false,
       });
       this.logger.log(`cancelSubscription: trial cancelled for user ${userId}`);
       return;
     }
 
-    // Cancel RC subscription: mark cancelAtPeriodEnd, RC will send EXPIRATION when period ends
+    // Cancel RC subscription: mark cancelAtPeriodEnd. The actual termination
+    // happens when Apple stops charging and RC sends EXPIRATION webhook —
+    // this only flips the UI flag so the client can show "Cancels on …".
+    // The mobile client triggers this branch only after the user confirms
+    // cancel inside RevenueCat Customer Center / Apple Settings.
     if (user.plan !== 'free' && user.billingSource === 'revenuecat') {
       await this.usersService.update(userId, {
         cancelAtPeriodEnd: true,
       });
-      this.logger.log(`cancelSubscription: RC subscription marked cancel-at-period-end for user ${userId}`);
+      this.logger.log(
+        `cancelSubscription: RC subscription marked cancel-at-period-end for user ${userId}`,
+      );
       return;
     }
 
-    // Cancel non-RC paid subscription: downgrade to free immediately
+    // Cancel non-RC paid subscription (legacy / admin grants / lemon_squeezy):
+    // downgrade to free immediately AND reset billingStatus so /billing/me
+    // reflects the change instead of keeping a stale 'active' status that
+    // makes the team-owner branch of effective-access keep returning org.
     if (user.plan !== 'free') {
       await this.usersService.update(userId, {
         plan: 'free',
+        billingStatus: 'free' as any,
         billingSource: undefined as any,
         cancelAtPeriodEnd: false,
+        currentPeriodEnd: null as any,
       });
-      this.logger.log(`cancelSubscription: plan cancelled for user ${userId}`);
+      this.logger.log(
+        `cancelSubscription: non-RC plan cancelled for user ${userId} (was ${before.plan}/${before.billingSource ?? 'null'})`,
+      );
       return;
     }
 
