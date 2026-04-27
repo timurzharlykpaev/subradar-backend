@@ -479,3 +479,49 @@ export function buildPaymentReminderHtml(
 
   return wrap(content, { unsubscribeUrl, preheader });
 }
+
+// ─── Pro Expiration (7 days before) ──────────────────────────────────────────
+
+const PRO_EXPIRATION_STRINGS: Record<
+  string,
+  { subject: string; heading: string; greeting: (n: string) => string; body: string; cta: string; signoff: string }
+> = {
+  ru: {
+    subject: 'Ваша подписка SubRadar Pro заканчивается через 7 дней',
+    heading: 'Ваша Pro-подписка скоро закончится',
+    greeting: (n: string) => `Привет${n ? `, ${n}` : ''},`,
+    body: 'Ваша подписка SubRadar Pro закончится через 7 дней. После этого вы потеряете доступ к безлимиту подписок и AI-функциям.',
+    cta: 'Продлить подписку',
+    signoff: '— Команда SubRadar',
+  },
+  en: {
+    subject: 'Your SubRadar Pro subscription ends in 7 days',
+    heading: 'Your Pro subscription is ending soon',
+    greeting: (n: string) => `Hi${n ? ` ${n}` : ''},`,
+    body: "Your SubRadar Pro subscription will end in 7 days. After that you'll lose access to unlimited subscriptions and AI features.",
+    cta: 'Renew your subscription',
+    signoff: '— SubRadar Team',
+  },
+};
+
+/**
+ * 7-day Pro expiration warning email. Localized via PRO_EXPIRATION_STRINGS;
+ * other locales currently fall back to English (parity with the rest of the
+ * email pipeline pending the full 10-locale rollout).
+ */
+export function buildProExpirationEmail(opts: {
+  locale: string;
+  name: string | null;
+}): { subject: string; html: string } {
+  const lang = (opts.locale ?? 'en').split('-')[0].toLowerCase();
+  const s = PRO_EXPIRATION_STRINGS[lang] ?? PRO_EXPIRATION_STRINGS.en;
+  const name = (opts.name ?? '').trim();
+  const html = `
+    <h2>${s.heading}</h2>
+    <p>${s.greeting(name)}</p>
+    <p>${s.body}</p>
+    <p><a href="${APP_URL}">${s.cta}</a></p>
+    <p>${s.signoff}</p>
+  `;
+  return { subject: s.subject, html };
+}

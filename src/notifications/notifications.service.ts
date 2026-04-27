@@ -63,6 +63,13 @@ export class NotificationsService {
     }
   }
 
+  /**
+   * @deprecated Unused since the reminder pipeline moved to RemindersService
+   * cron jobs (`sendDailyReminders`). Kept around so its Bull queue + Processor
+   * can be removed in a follow-up commit alongside the Module wiring; do not
+   * call it from new code — it would create a parallel reminder path with no
+   * dedupe guarantee against the cron jobs.
+   */
   async scheduleReminderNotification(
     jobData: {
       userId: string;
@@ -73,7 +80,6 @@ export class NotificationsService {
       currency: string;
       daysUntilBilling: number;
       billingDate: string;
-      /** User locale (en/ru/...). Drives push title/body language. */
       locale?: string;
     },
     delayMs = 0,

@@ -141,6 +141,29 @@ export class User {
   @Column({ type: 'timestamp', nullable: true, default: null })
   weeklyDigestSentAt: Date | null;
 
+  // Per-user idempotency markers for the notification cron jobs.
+  // Each handler compares `now() - lastXxxAt` against an interval window
+  // (24h for daily, 6 days for weekly, 28 days for monthly) so a restart
+  // or multi-pod deploy won't refire the same notification on the same
+  // calendar day. Pattern matches existing `weeklyDigestSentAt`.
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  lastTrialPushAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  lastProExpirationPushAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  lastProExpirationEmailAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  lastWeeklyPushDigestAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  lastWinBackPushAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  lastMonthlyReportSentAt: Date | null;
+
   @Column({ type: 'timestamp', nullable: true, default: null })
   @Exclude({ toPlainOnly: true })
   refreshTokenIssuedAt: Date | null;

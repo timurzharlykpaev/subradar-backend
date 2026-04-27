@@ -13,17 +13,33 @@ const ALL_NAMES_SET = 'cron:heartbeat:names';
  * Keep in sync with the `@Cron(...)` schedules. The monitor cron (below) runs
  * hourly; be conservative with the expectations (>= actual schedule).
  */
+// Names below MUST match the first arg passed to `runCronHandler(name,...)`
+// for each @Cron handler. The previous version of this map used
+// human-friendly aliases (`trialChecker`, `monthlyReport`, …) that didn't
+// match anything actually emitted by `recordSuccess()`, so the missed-cron
+// alert never fired. Keep this list in sync with the @Cron decorators.
 export const CRON_EXPECTED_INTERVAL_MS: Record<string, number> = {
-  // Daily crons
+  // Daily reminders / billing
+  sendDailyReminders: 24 * 60 * 60 * 1000,
+  sendTrialExpiryReminders: 24 * 60 * 60 * 1000,
+  sendProExpirationReminders: 24 * 60 * 60 * 1000,
+  sendWinBackPush: 24 * 60 * 60 * 1000,
+  expireTrials: 60 * 60 * 1000,
   resetExpiredGrace: 24 * 60 * 60 * 1000,
   cleanupAbandonedWorkspaces: 24 * 60 * 60 * 1000,
-  trialChecker: 24 * 60 * 60 * 1000,
-  weeklyDigest: 7 * 24 * 60 * 60 * 1000,
-  monthlyReport: 31 * 24 * 60 * 60 * 1000,
-  catalogRefresh: 24 * 60 * 60 * 1000,
-  fxRefresh: 24 * 60 * 60 * 1000,
-  analysisRefresh: 24 * 60 * 60 * 1000,
-  remindersDispatch: 24 * 60 * 60 * 1000,
+  // Weekly
+  sendWeeklyPushDigest: 7 * 24 * 60 * 60 * 1000,
+  weeklyAnalysisTrigger: 7 * 24 * 60 * 60 * 1000,
+  weeklyDigestSend: 7 * 24 * 60 * 60 * 1000,
+  catalogRefreshTopServices: 7 * 24 * 60 * 60 * 1000,
+  analysisCleanup: 7 * 24 * 60 * 60 * 1000,
+  // Monthly
+  sendMonthlyReports: 31 * 24 * 60 * 60 * 1000,
+  // Daily infra
+  fxRefreshDaily: 24 * 60 * 60 * 1000,
+  // Hourly
+  reconciliation: 60 * 60 * 1000,
+  heartbeatMonitor: 60 * 60 * 1000,
 };
 
 const GRACE_MS = 60 * 60 * 1000; // 1 hour grace

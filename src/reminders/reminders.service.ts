@@ -6,6 +6,7 @@ import { toZonedTime } from 'date-fns-tz';
 import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { buildProExpirationEmail } from '../notifications/email-templates';
 import { pushT } from '../notifications/push-i18n';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
@@ -22,6 +23,19 @@ export class RemindersService {
     private readonly notificationsService: NotificationsService,
     private readonly tg: TelegramAlertService,
   ) {}
+
+  /**
+   * True if `last` is more recent than `hours` ago. Used as the per-user
+   * dedupe gate for the notification crons — without this, a container
+   * restart or a multi-pod deploy on the same calendar day would refire
+   * the same push/email. We use 20h (not 24h) to absorb minor schedule
+   * drift while still catching genuine same-day reruns.
+   */
+  private sentWithin(last: Date | null | undefined, hours: number): boolean {
+    if (!last) return false;
+    const cutoff = Date.now() - hours * 3_600_000;
+    return new Date(last).getTime() > cutoff;
+  }
 
   @Cron('0 9 * * *')
   async sendDailyReminders() {
@@ -196,6 +210,7 @@ export class RemindersService {
 
         if (daysLeft !== 1 && daysLeft !== 4) continue;
         if (!user.notificationsEnabled) continue;
+        if (this.sentWithin(user.lastTrialPushAt, 20)) continue;
 
         const { title, body } = pushT(user.locale).trialExpiry({ daysLeft });
 
@@ -205,6 +220,7 @@ export class RemindersService {
             title,
             body,
           );
+          await this.userRepo.update(user.id, { lastTrialPushAt: new Date() });
         }
 
         sent++;
@@ -263,34 +279,38 @@ export class RemindersService {
 
         const { title, body } = pushT(user.locale).proExpiration({ daysLeft });
 
-        // Send push notification
-        if (user.fcmToken) {
+        // Push: dedupe per-day (20h window).
+        if (user.fcmToken && !this.sentWithin(user.lastProExpirationPushAt, 20)) {
           await this.notificationsService.sendPushNotification(
             user.fcmToken,
             title,
             body,
             { screen: '/paywall' },
           );
+          await this.userRepo.update(user.id, {
+            lastProExpirationPushAt: new Date(),
+          });
         }
 
-        // Send email only for 7-day reminder
+        // Email only at the 7-day mark, dedupe with a long window so the
+        // same milestone never re-fires (period is bound to a specific
+        // currentPeriodEnd; if the user reactivates we reset elsewhere).
         if (daysLeft === 7) {
           const emailEnabled = user.emailNotifications !== false;
-          if (emailEnabled) {
-            const subject = 'Your SubRadar Pro subscription ends in 7 days';
-            const html = `
-              <h2>Your Pro subscription is ending soon</h2>
-              <p>Hi${user.name ? ` ${user.name}` : ''},</p>
-              <p>Your SubRadar Pro subscription will end in 7 days. After that, you'll lose access to unlimited subscriptions and AI features.</p>
-              <p><a href="https://app.subradar.ai">Renew your subscription</a> to keep your Pro benefits.</p>
-              <p>— SubRadar Team</p>
-            `;
+          if (emailEnabled && !this.sentWithin(user.lastProExpirationEmailAt, 20)) {
+            const { subject, html } = buildProExpirationEmail({
+              locale: user.locale ?? 'en',
+              name: user.name ?? null,
+            });
             await this.notificationsService.sendEmail(
               user.email,
               subject,
               html,
               { userId: user.id, unsubType: 'email_notifications' },
             );
+            await this.userRepo.update(user.id, {
+              lastProExpirationEmailAt: new Date(),
+            });
           }
         }
 
@@ -335,6 +355,11 @@ export class RemindersService {
 
     for (const user of users) {
       try {
+        // Dedupe to one digest per ~6 days even if the cron fires twice
+        // (multi-pod, restart). The rest of the heavy aggregation below
+        // only runs for users that actually need it.
+        if (this.sentWithin(user.lastWeeklyPushDigestAt, 6 * 24)) continue;
+
         const subs = await this.subscriptionRepo.find({
           where: { userId: user.id },
         });
@@ -377,6 +402,9 @@ export class RemindersService {
           body,
           { screen: '/(tabs)' },
         );
+        await this.userRepo.update(user.id, {
+          lastWeeklyPushDigestAt: new Date(),
+        });
         sent++;
       } catch (err) {
         this.logger.error(`Weekly digest push failed for ${user.id}:`, err);
@@ -437,6 +465,10 @@ export class RemindersService {
 
     for (const user of inactiveUsers) {
       try {
+        // Don't pester the same user twice in a calendar day if the cron
+        // restarts. Win-back is meant to be a gentle nudge, not a barrage.
+        if (this.sentWithin(user.lastWinBackPushAt, 20)) continue;
+
         // Check if they have active subs with upcoming renewals
         const weekFromNow = new Date(Date.now() + 7 * 86400000);
         const upcomingSubs = await this.subscriptionRepo
@@ -465,6 +497,7 @@ export class RemindersService {
           body,
           { screen: '/(tabs)' },
         );
+        await this.userRepo.update(user.id, { lastWinBackPushAt: new Date() });
         sent++;
       } catch (err) {
         this.logger.error(`Win-back push failed for ${user.id}:`, err);
