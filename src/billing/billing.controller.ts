@@ -238,4 +238,20 @@ export class BillingController {
     await this.billingService.cancelSubscription(req.user.id);
     return { message: 'Subscription cancelled' };
   }
+
+  /**
+   * Drift recovery — verifies the user's plan against RC entitlements and
+   * resets the local copy when RC says they have nothing active. Mobile
+   * calls this when it detects RC entitlements empty but `/billing/me`
+   * still reporting a paid plan (lost EXPIRATION webhook, manual grants,
+   * stale state after sandbox testing).
+   */
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
+  @Post('reconcile')
+  async reconcile(@Request() req) {
+    const result = await this.billingService.reconcileRevenueCat(req.user.id);
+    return { success: true, ...result };
+  }
 }

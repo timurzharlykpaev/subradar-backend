@@ -1260,6 +1260,112 @@ export class BillingService {
     );
   }
 
+  /**
+   * Reconcile a user's stored billing state with RevenueCat's source-of-truth
+   * entitlements. Used when the mobile client notices a drift (RC says no
+   * active entitlements but `/billing/me` still reports a paid plan) — most
+   * commonly because an EXPIRATION webhook was lost or never delivered, or
+   * because the user was granted a plan manually before RC integration.
+   *
+   * - billingSource not 'revenuecat'                    → no-op
+   * - user already on free                              → no-op
+   * - RC has any active entitlement                     → no-op (drift was a false alarm)
+   * - RC empty + currentPeriodEnd in the future         → flag cancelAtPeriodEnd
+   *   (subscription was cancelled in Apple Settings; access stays till period ends)
+   * - RC empty + period elapsed / unknown               → wipe paid state to free
+   */
+  async reconcileRevenueCat(userId: string): Promise<{
+    action: 'noop' | 'cancel_at_period_end' | 'downgraded';
+    reason: string;
+  }> {
+    const user = await this.usersService.findById(userId);
+
+    if (user.billingSource !== 'revenuecat') {
+      return { action: 'noop', reason: `billingSource=${user.billingSource ?? 'null'}` };
+    }
+    if (user.plan === 'free') {
+      return { action: 'noop', reason: 'already free' };
+    }
+
+    const rcApiKey =
+      this.cfg.get<string>('REVENUECAT_API_KEY_SECRET', '') ||
+      this.cfg.get<string>('REVENUECAT_API_KEY', '');
+    if (!rcApiKey) {
+      this.logger.warn('reconcileRevenueCat: RC API key missing — skipping');
+      return { action: 'noop', reason: 'rc_api_key_missing' };
+    }
+
+    let rcRes: Response;
+    try {
+      rcRes = await fetch(
+        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${rcApiKey}`,
+            Accept: 'application/json',
+          },
+        },
+      );
+    } catch (e) {
+      this.logger.warn(`reconcileRevenueCat: RC fetch failed for user ${userId}: ${e}`);
+      return { action: 'noop', reason: 'rc_fetch_failed' };
+    }
+
+    if (!rcRes.ok) {
+      this.logger.warn(`reconcileRevenueCat: RC returned ${rcRes.status} for user ${userId}`);
+      return { action: 'noop', reason: `rc_${rcRes.status}` };
+    }
+
+    let rcData: any;
+    try {
+      rcData = await rcRes.json();
+    } catch {
+      return { action: 'noop', reason: 'rc_invalid_json' };
+    }
+
+    const entitlements = rcData?.subscriber?.entitlements ?? {};
+    const now = Date.now();
+    const hasActiveEntitlement = Object.values(entitlements).some((e: any) => {
+      if (!e) return false;
+      if (e.expires_date == null) return true;
+      const ts = typeof e.expires_date === 'number'
+        ? e.expires_date
+        : Date.parse(String(e.expires_date));
+      return !isNaN(ts) && ts > now;
+    });
+
+    if (hasActiveEntitlement) {
+      return { action: 'noop', reason: 'rc_has_active_entitlement' };
+    }
+
+    const periodEnd = user.currentPeriodEnd
+      ? new Date(user.currentPeriodEnd).getTime()
+      : null;
+    const periodActive = periodEnd != null && periodEnd > now;
+
+    if (periodActive) {
+      await this.usersService.update(userId, {
+        cancelAtPeriodEnd: true,
+      });
+      this.logger.log(
+        `reconcileRevenueCat: user ${userId} entitlements empty but period still valid → cancelAtPeriodEnd=true (was plan=${user.plan}, status=${user.billingStatus})`,
+      );
+      return { action: 'cancel_at_period_end', reason: 'period_active' };
+    }
+
+    await this.usersService.update(userId, {
+      plan: 'free',
+      billingStatus: 'free' as any,
+      billingSource: undefined as any,
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: null as any,
+    });
+    this.logger.log(
+      `reconcileRevenueCat: user ${userId} entitlements empty + period elapsed → free (was plan=${user.plan}, status=${user.billingStatus})`,
+    );
+    return { action: 'downgraded', reason: 'period_elapsed' };
+  }
+
   async cancelSubscription(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
     const before = {
