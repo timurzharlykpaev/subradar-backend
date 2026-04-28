@@ -8,6 +8,16 @@ export const en: PushI18n = {
     body: `${fmtAmount(amount, currency)} · ${dateStr}`,
   }),
 
+  paymentRemindersDigest: ({ count, totalAmount, currency, earliestDays, topNames }) => {
+    const when =
+      earliestDays === 0 ? 'today' : earliestDays === 1 ? 'tomorrow' : `in ${earliestDays} days`;
+    const more = count > topNames.length ? `, +${count - topNames.length} more` : '';
+    return {
+      title: `⏰ ${count} subscription${count === 1 ? '' : 's'} renewing ${when}`,
+      body: `${topNames.join(', ')}${more} · ${fmtAmount(totalAmount.toFixed(2), currency)}`,
+    };
+  },
+
   trialExpiry: ({ daysLeft }) => ({
     title: `Your Pro trial ends in ${daysLeft === 1 ? '1 day' : `${daysLeft} days`}`,
     body: 'Upgrade now to keep unlimited subscriptions and AI features',

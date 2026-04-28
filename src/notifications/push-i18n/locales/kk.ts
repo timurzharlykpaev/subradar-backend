@@ -8,6 +8,20 @@ export const kk: PushI18n = {
     body: `${fmtAmount(amount, currency)} · ${dateStr}`,
   }),
 
+  paymentRemindersDigest: ({ count, totalAmount, currency, earliestDays, topNames }) => {
+    const when =
+      earliestDays === 0
+        ? 'бүгін'
+        : earliestDays === 1
+          ? 'ертең'
+          : `${earliestDays} күннен кейін`;
+    const more = count > topNames.length ? `, тағы ${count - topNames.length}` : '';
+    return {
+      title: `⏰ ${when} ${count} жазылым жаңарады`,
+      body: `${topNames.join(', ')}${more} · ${fmtAmount(totalAmount.toFixed(2), currency)}`,
+    };
+  },
+
   trialExpiry: ({ daysLeft }) => ({
     title: `Pro сынақ мерзімі ${daysLeft} күннен кейін аяқталады`,
     body: 'Шектеусіз жазылымдар мен AI функцияларын сақтау үшін жаңартыңыз',

@@ -6,7 +6,10 @@ import { toZonedTime } from 'date-fns-tz';
 import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
-import { buildProExpirationEmail } from '../notifications/email-templates';
+import {
+  buildProExpirationEmail,
+  buildDailyDigestEmail,
+} from '../notifications/email-templates';
 import { pushT } from '../notifications/push-i18n';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
@@ -67,22 +70,34 @@ export class RemindersService {
       .andWhere('sub.reminderEnabled = true')
       .getMany();
 
-    this.logger.log(`Found ${subscriptions.length} subscriptions with reminders in next 7 days`);
+    this.logger.log(
+      `Found ${subscriptions.length} subscriptions with reminders in next 7 days`,
+    );
 
-    let sent = 0;
-    let errors = 0;
-
+    // Group subscriptions by user — the digest fires once per user per day,
+    // not once per subscription. Without this a user with 5 due subs got
+    // 5 pushes + 5 emails on the same morning (spam-trigger territory).
+    const subsByUser = new Map<string, Subscription[]>();
     for (const sub of subscriptions) {
+      const list = subsByUser.get(sub.userId) ?? [];
+      list.push(sub);
+      subsByUser.set(sub.userId, list);
+    }
+
+    let usersNotified = 0;
+    let errors = 0;
+    const todayKey = utcToday.toISOString().split('T')[0];
+
+    for (const [userId, userSubs] of subsByUser) {
       try {
-        const user = await this.userRepo.findOne({ where: { id: sub.userId } });
+        const user = await this.userRepo.findOne({ where: { id: userId } });
         if (!user) continue;
         if (!user.notificationsEnabled) continue;
 
-        const paymentDate = new Date(sub.nextPaymentDate);
-        if (isNaN(paymentDate.getTime())) continue;
+        // Per-user idempotency. Once we've fired the digest today there is
+        // nothing else to send for this user even if the cron reruns.
+        if (this.sentWithin(user.lastPaymentRemindersSentAt, 20)) continue;
 
-        // Compute daysLeft in the user's timezone so "1 day before" lines up with
-        // their local calendar, not the server's UTC day.
         const userTz = user.timezoneDetected || user.timezone || 'UTC';
         const nowInUserTz = toZonedTime(new Date(), userTz);
         const todayInUserTz = new Date(
@@ -90,81 +105,129 @@ export class RemindersService {
           nowInUserTz.getMonth(),
           nowInUserTz.getDate(),
         );
-        const paymentInUserTz = toZonedTime(paymentDate, userTz);
-        const paymentDayInUserTz = new Date(
-          paymentInUserTz.getFullYear(),
-          paymentInUserTz.getMonth(),
-          paymentInUserTz.getDate(),
-        );
-        const daysLeft = Math.floor(
-          (paymentDayInUserTz.getTime() - todayInUserTz.getTime()) / 86400000,
-        );
-        if (daysLeft < 0) continue;
-        const dateStr = paymentDate.toISOString().split('T')[0];
 
-        // Check if today matches one of the subscription's reminder days
-        const reminderDays: number[] = (sub as any).reminderDaysBefore ?? [1, 3];
-        if (!reminderDays.includes(daysLeft)) continue;
+        // Pick the subs that actually fire today inside the user's local day,
+        // matching their per-sub reminderDaysBefore window.
+        const due: Array<{
+          sub: Subscription;
+          daysLeft: number;
+          dateStr: string;
+        }> = [];
+        for (const sub of userSubs) {
+          const paymentDate = new Date(sub.nextPaymentDate);
+          if (isNaN(paymentDate.getTime())) continue;
 
-        // Idempotency: skip if we already sent a reminder for this subscription
-        // today (cron retry / two-pod race). lastReminderSentDate stores the
-        // UTC calendar date of the most recent send.
-        const todayKey = utcToday.toISOString().split('T')[0];
-        const lastSent = (sub as any).lastReminderSentDate
-          ? new Date((sub as any).lastReminderSentDate)
-              .toISOString()
-              .split('T')[0]
-          : null;
-        if (lastSent === todayKey) {
-          this.logger.debug(`Skipping ${sub.id} — reminder already sent today`);
-          continue;
-        }
-
-        // Send email (check emailNotifications preference)
-        const emailEnabled = (user as any).emailNotifications !== false;
-        if (emailEnabled) {
-          await this.notificationsService.sendUpcomingPaymentEmail(
-            user.email,
-            sub.name,
-            Number(sub.amount),
-            sub.currency,
-            daysLeft,
-            dateStr,
-            'https://app.subradar.ai',
-            (user as any).locale ?? 'ru',
-            user.id,
+          const paymentInUserTz = toZonedTime(paymentDate, userTz);
+          const paymentDayInUserTz = new Date(
+            paymentInUserTz.getFullYear(),
+            paymentInUserTz.getMonth(),
+            paymentInUserTz.getDate(),
           );
-          // Mark sent — done after the email call so a Resend failure leaves
-          // the row unsent and we'll retry tomorrow rather than silently miss.
-          await this.subscriptionRepo.update(sub.id, {
-            lastReminderSentDate: utcToday,
-          } as any);
+          const daysLeft = Math.floor(
+            (paymentDayInUserTz.getTime() - todayInUserTz.getTime()) / 86400000,
+          );
+          if (daysLeft < 0) continue;
+          const reminderDays: number[] = (sub as any).reminderDaysBefore ?? [1, 3];
+          if (!reminderDays.includes(daysLeft)) continue;
+
+          // Belt-and-braces — per-sub flag still skips items already
+          // emailed in a previous half-finished run earlier today.
+          const lastSent = (sub as any).lastReminderSentDate
+            ? new Date((sub as any).lastReminderSentDate)
+                .toISOString()
+                .split('T')[0]
+            : null;
+          if (lastSent === todayKey) continue;
+
+          due.push({
+            sub,
+            daysLeft,
+            dateStr: paymentDate.toISOString().split('T')[0],
+          });
         }
 
-        // Send push if fcmToken exists
+        if (due.length === 0) continue;
+
+        // Total in the user's display currency proxy — we use the first
+        // subscription's currency since FX conversion is not in scope here.
+        const totalAmount = due.reduce((sum, d) => {
+          const n = Number(d.sub.amount) || 0;
+          return sum + n;
+        }, 0);
+        const currency = due[0].sub.currency;
+        const earliestDays = due.reduce(
+          (min, d) => (d.daysLeft < min ? d.daysLeft : min),
+          due[0].daysLeft,
+        );
+        const topNames = due.slice(0, 2).map((d) => d.sub.name);
+
+        // ─── Email digest ──────────────────────────────────────────────
+        const emailEnabled = user.emailNotifications !== false;
+        if (emailEnabled && user.email) {
+          const html = buildDailyDigestEmail({
+            locale: user.locale ?? 'en',
+            name: user.name?.trim() || user.email.split('@')[0],
+            items: due.map((d) => ({
+              name: d.sub.name,
+              amount: Number(d.sub.amount) || 0,
+              currency: d.sub.currency,
+              daysLeft: d.daysLeft,
+              dateStr: d.dateStr,
+            })),
+            totalAmount,
+            currency,
+          });
+          const subject = (user.locale ?? 'en').toLowerCase().startsWith('ru')
+            ? `⏰ ${due.length} ${due.length === 1 ? 'подписка' : due.length < 5 ? 'подписки' : 'подписок'} спишутся скоро`
+            : `⏰ ${due.length} subscription${due.length === 1 ? '' : 's'} renewing soon`;
+          await this.notificationsService.sendEmail(user.email, subject, html, {
+            userId: user.id,
+            unsubType: 'email_notifications',
+          });
+        }
+
+        // ─── Push digest ───────────────────────────────────────────────
         if (user.fcmToken) {
-          const { title, body } = pushT(user.locale).paymentReminder({
-            name: sub.name,
-            amount: sub.amount,
-            currency: sub.currency,
-            daysLeft,
-            dateStr,
+          const { title, body } = pushT(user.locale).paymentRemindersDigest({
+            count: due.length,
+            totalAmount,
+            currency,
+            earliestDays,
+            topNames,
           });
           await this.notificationsService.sendPushNotification(
             user.fcmToken,
             title,
             body,
+            { screen: '/(tabs)' },
           );
         }
 
-        sent++;
+        // Mark per-sub flags so a half-rerun later today still skips
+        // these. We do this AFTER the channel calls so a Resend / FCM
+        // failure leaves the rows unsent and tomorrow's run can retry.
+        await this.subscriptionRepo
+          .createQueryBuilder()
+          .update()
+          .set({ lastReminderSentDate: utcToday } as any)
+          .whereInIds(due.map((d) => d.sub.id))
+          .execute();
+        await this.userRepo.update(user.id, {
+          lastPaymentRemindersSentAt: new Date(),
+        });
+        usersNotified++;
       } catch (err) {
         errors++;
-        this.logger.error(`Failed to send reminder for sub ${sub.id}:`, err);
+        this.logger.error(
+          `Failed to send reminder digest for user ${userId}:`,
+          err,
+        );
       }
     }
 
-    this.logger.log(`Reminders sent: ${sent}, errors: ${errors}`);
+    this.logger.log(
+      `Reminder digests sent to ${usersNotified} users, errors: ${errors}`,
+    );
   }
 
   /** Notify users whose trial is about to expire — runs daily at 10:00 */

@@ -18,6 +18,19 @@ export interface PushI18n {
     dateStr: string;
   }) => { title: string; body: string };
 
+  /**
+   * Daily digest replacement for paymentReminder. Fires once per user per
+   * day and bundles every same-day reminder so a user with 5 due subs gets
+   * one push instead of five.
+   */
+  paymentRemindersDigest: (params: {
+    count: number;
+    totalAmount: number;
+    currency: string;
+    earliestDays: number;
+    topNames: string[];
+  }) => { title: string; body: string };
+
   /** Trial-ending nudge (1 or 4 days before trialEndDate). */
   trialExpiry: (params: { daysLeft: number }) => {
     title: string;

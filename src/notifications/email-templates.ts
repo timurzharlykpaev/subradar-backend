@@ -525,3 +525,115 @@ export function buildProExpirationEmail(opts: {
   `;
   return { subject: s.subject, html };
 }
+
+// ─── Daily digest (multiple subs in one email) ───────────────────────────────
+
+const DIGEST_STRINGS: Record<
+  string,
+  {
+    heading: (n: number) => string;
+    intro: string;
+    totalLabel: string;
+    chargesIn: (days: number) => string;
+    todayLabel: string;
+    cta: string;
+  }
+> = {
+  ru: {
+    heading: (n) =>
+      `${n} ${n === 1 ? 'подписка спишется' : n < 5 ? 'подписки спишутся' : 'подписок спишутся'} скоро`,
+    intro: 'Вот что нужно проверить:',
+    totalLabel: 'ИТОГО',
+    chargesIn: (d) =>
+      d === 0 ? 'сегодня' : d === 1 ? 'через 1 день' : `через ${d} ${d < 5 ? 'дня' : 'дней'}`,
+    todayLabel: 'сегодня',
+    cta: 'Открыть SubRadar',
+  },
+  en: {
+    heading: (n) => `${n} subscription${n === 1 ? '' : 's'} renewing soon`,
+    intro: "Here's what to review:",
+    totalLabel: 'TOTAL',
+    chargesIn: (d) => (d === 0 ? 'today' : d === 1 ? 'in 1 day' : `in ${d} days`),
+    todayLabel: 'today',
+    cta: 'Open SubRadar',
+  },
+};
+
+export interface DigestItem {
+  name: string;
+  amount: number;
+  currency: string;
+  daysLeft: number;
+  dateStr: string;
+}
+
+/**
+ * Single email containing every subscription whose reminder fires today
+ * for one user. Replaces the old per-sub email loop that turned into
+ * inbox spam once a user crossed ~5 active subs.
+ */
+export function buildDailyDigestEmail(opts: {
+  locale: string;
+  name: string;
+  items: DigestItem[];
+  totalAmount: number;
+  currency: string;
+}): string {
+  const lang = (opts.locale ?? 'en').split('-')[0].toLowerCase();
+  const s = DIGEST_STRINGS[lang] ?? DIGEST_STRINGS.en;
+  const fmt = (a: number, c: string) =>
+    new Intl.NumberFormat(opts.locale || 'en', {
+      style: 'currency',
+      currency: c || 'USD',
+      maximumFractionDigits: 2,
+    }).format(isFinite(a) ? a : 0);
+
+  const rows = opts.items
+    .map(
+      (it) => `
+        <tr>
+          <td style="padding:12px 16px;border-bottom:1px solid rgba(139,92,246,0.15);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+            <div style="color:#ffffff;font-size:14px;font-weight:600;">${it.name}</div>
+            <div style="color:#8B5CF6;font-size:12px;margin-top:2px;">${s.chargesIn(it.daysLeft)} · ${it.dateStr}</div>
+          </td>
+          <td align="right" style="padding:12px 16px;border-bottom:1px solid rgba(139,92,246,0.15);color:#ffffff;font-size:15px;font-weight:700;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap;">
+            ${fmt(it.amount, it.currency)}
+          </td>
+        </tr>`,
+    )
+    .join('');
+
+  const content = `
+  <tr>
+    <td style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;border:1px solid rgba(139,92,246,0.3);padding:32px;">
+      <h1 style="margin:0 0 8px;font-size:22px;color:#ffffff;font-weight:800;letter-spacing:-0.3px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ⏰ ${s.heading(opts.items.length)}
+      </h1>
+      <p style="margin:0 0 24px;font-size:14px;color:#a0a0b8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${s.intro}
+      </p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;border-collapse:collapse;background:rgba(139,92,246,0.08);border-radius:12px;border:1px solid rgba(139,92,246,0.2);overflow:hidden;">
+        ${rows}
+        <tr>
+          <td style="padding:14px 16px;color:#a0a0b8;font-size:12px;font-weight:700;letter-spacing:1px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${s.totalLabel}</td>
+          <td align="right" style="padding:14px 16px;color:#8B5CF6;font-size:18px;font-weight:800;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${fmt(opts.totalAmount, opts.currency)}</td>
+        </tr>
+      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td align="center">
+            <a href="${MOBILE_URL}" style="display:inline-block;background:linear-gradient(135deg,#8B5CF6,#6D28D9);color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 36px;border-radius:12px;letter-spacing:0.3px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              ${s.cta}
+            </a>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>`;
+
+  const preheader =
+    lang === 'ru'
+      ? `${opts.items.length} подписок · ${fmt(opts.totalAmount, opts.currency)}`
+      : `${opts.items.length} subs · ${fmt(opts.totalAmount, opts.currency)}`;
+  return wrap(content, { preheader });
+}

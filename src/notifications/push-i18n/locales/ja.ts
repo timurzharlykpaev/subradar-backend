@@ -8,6 +8,16 @@ export const ja: PushI18n = {
     body: `${fmtAmount(amount, currency)} · ${dateStr}`,
   }),
 
+  paymentRemindersDigest: ({ count, totalAmount, currency, earliestDays, topNames }) => {
+    const when =
+      earliestDays === 0 ? '本日' : earliestDays === 1 ? '明日' : `${earliestDays}日後`;
+    const more = count > topNames.length ? `、他${count - topNames.length}件` : '';
+    return {
+      title: `⏰ ${when}に${count}件のサブスク更新`,
+      body: `${topNames.join('、')}${more} · ${fmtAmount(totalAmount.toFixed(2), currency)}`,
+    };
+  },
+
   trialExpiry: ({ daysLeft }) => ({
     title: `Pro トライアルは ${daysLeft} 日後に終了します`,
     body: '今すぐアップグレードして、無制限のサブスクと AI 機能を継続',

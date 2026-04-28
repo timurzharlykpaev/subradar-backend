@@ -16,6 +16,21 @@ export const ru: PushI18n = {
     body: `${fmtAmount(amount, currency)} · ${dateStr}`,
   }),
 
+  paymentRemindersDigest: ({ count, totalAmount, currency, earliestDays, topNames }) => {
+    const when =
+      earliestDays === 0
+        ? 'сегодня'
+        : earliestDays === 1
+          ? 'завтра'
+          : `через ${earliestDays} ${pluralRu(earliestDays, 'день', 'дня', 'дней')}`;
+    const subsWord = pluralRu(count, 'подписка спишется', 'подписки спишутся', 'подписок спишутся');
+    const more = count > topNames.length ? `, +${count - topNames.length} ещё` : '';
+    return {
+      title: `⏰ ${count} ${subsWord} ${when}`,
+      body: `${topNames.join(', ')}${more} · ${fmtAmount(totalAmount.toFixed(2), currency)}`,
+    };
+  },
+
   trialExpiry: ({ daysLeft }) => ({
     title: `Ваш Pro-триал заканчивается через ${daysLeft} ${pluralRu(daysLeft, 'день', 'дня', 'дней')}`,
     body: 'Оформите подписку, чтобы сохранить безлимит и AI-функции',

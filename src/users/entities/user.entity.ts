@@ -165,6 +165,9 @@ export class User {
   lastMonthlyReportSentAt: Date | null;
 
   @Column({ type: 'timestamp', nullable: true, default: null })
+  lastPaymentRemindersSentAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
   @Exclude({ toPlainOnly: true })
   refreshTokenIssuedAt: Date | null;
 

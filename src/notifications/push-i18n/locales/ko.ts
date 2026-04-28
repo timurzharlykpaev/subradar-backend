@@ -8,6 +8,16 @@ export const ko: PushI18n = {
     body: `${fmtAmount(amount, currency)} · ${dateStr}`,
   }),
 
+  paymentRemindersDigest: ({ count, totalAmount, currency, earliestDays, topNames }) => {
+    const when =
+      earliestDays === 0 ? '오늘' : earliestDays === 1 ? '내일' : `${earliestDays}일 후`;
+    const more = count > topNames.length ? `, 외 ${count - topNames.length}개` : '';
+    return {
+      title: `⏰ ${when} ${count}개 구독 갱신`,
+      body: `${topNames.join(', ')}${more} · ${fmtAmount(totalAmount.toFixed(2), currency)}`,
+    };
+  },
+
   trialExpiry: ({ daysLeft }) => ({
     title: `Pro 체험이 ${daysLeft}일 후 종료됩니다`,
     body: '지금 업그레이드하고 무제한 구독과 AI 기능을 계속 이용하세요',

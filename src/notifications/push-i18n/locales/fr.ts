@@ -8,6 +8,20 @@ export const fr: PushI18n = {
     body: `${fmtAmount(amount, currency)} · ${dateStr}`,
   }),
 
+  paymentRemindersDigest: ({ count, totalAmount, currency, earliestDays, topNames }) => {
+    const when =
+      earliestDays === 0
+        ? "aujourd'hui"
+        : earliestDays === 1
+          ? 'demain'
+          : `dans ${earliestDays} jours`;
+    const more = count > topNames.length ? `, +${count - topNames.length} de plus` : '';
+    return {
+      title: `⏰ ${count} abonnement${count === 1 ? '' : 's'} ${when}`,
+      body: `${topNames.join(', ')}${more} · ${fmtAmount(totalAmount.toFixed(2), currency)}`,
+    };
+  },
+
   trialExpiry: ({ daysLeft }) => ({
     title: `Votre essai Pro se termine dans ${daysLeft === 1 ? '1 jour' : `${daysLeft} jours`}`,
     body: 'Passez à Pro pour garder les abonnements illimités et l’AI',
