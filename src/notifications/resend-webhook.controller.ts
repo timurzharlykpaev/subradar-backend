@@ -34,6 +34,21 @@ export class ResendWebhookController {
     private readonly suppression: SuppressionService,
   ) {
     this.signingSecret = cfg.get<string>('RESEND_WEBHOOK_SECRET', '');
+    // Fail-fast in production if signing secret is missing — without it any
+    // unauthenticated POST could mark arbitrary addresses as bounced and
+    // permanently suppress them. In dev we only warn so local runs still
+    // boot with a half-configured .env.
+    const env = (cfg.get<string>('NODE_ENV', '') || '').toLowerCase();
+    if (!this.signingSecret) {
+      if (env === 'production') {
+        throw new Error(
+          'RESEND_WEBHOOK_SECRET is required in production — refusing to boot.',
+        );
+      }
+      this.logger.warn(
+        'RESEND_WEBHOOK_SECRET not configured — webhook signatures will NOT be verified (dev only)',
+      );
+    }
   }
 
   @Post()

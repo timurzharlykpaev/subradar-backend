@@ -1,7 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationsService } from './notifications.service';
 import { SuppressionService } from './suppression.service';
+import { User } from '../users/entities/user.entity';
 
 jest.mock('firebase-admin', () => ({
   apps: [], initializeApp: jest.fn(),
@@ -33,6 +35,12 @@ describe('NotificationsService', () => {
         {
           provide: SuppressionService,
           useValue: { isSuppressed: jest.fn().mockResolvedValue(false) },
+        },
+        {
+          provide: getRepositoryToken(User),
+          useValue: {
+            update: jest.fn().mockResolvedValue({ affected: 0 }),
+          },
         },
       ],
     }).compile();

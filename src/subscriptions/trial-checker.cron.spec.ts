@@ -91,6 +91,7 @@ describe('TrialCheckerCron', () => {
       'Trial Ending Soon',
       expect.stringContaining('Netflix'),
       expect.objectContaining({ subscriptionId: 'sub-1', type: 'trial_expiring' }),
+      'u1',
     );
     expect(mockNotifications.sendEmail).toHaveBeenCalledWith(
       'user@test.com',

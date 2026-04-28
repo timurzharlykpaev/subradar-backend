@@ -104,7 +104,7 @@ export class AnalysisCronService {
 
       for (const user of users) {
         try {
-          // Idempotency guard — skip if we already sent within the last 6 days.
+          // Cheap pre-check skips most users before we hit Postgres.
           if (user.weeklyDigestSentAt && user.weeklyDigestSentAt > sixDaysAgo) {
             continue;
           }
@@ -119,11 +119,25 @@ export class AnalysisCronService {
 
           if (!result) continue;
 
-          await this.notifications.sendWeeklyDigest(user, result);
+          // Atomic claim — only the worker that wins the UPDATE proceeds.
+          // The WHERE clause re-checks the 6-day window in SQL so two
+          // concurrent pods cannot both pass the in-memory check above
+          // and double-send. Stamp BEFORE the channel call: if Resend
+          // fails the user simply misses this week's digest (next Monday
+          // picks them back up).
+          const claim = await this.userRepo
+            .createQueryBuilder()
+            .update(User)
+            .set({ weeklyDigestSentAt: () => 'NOW()' } as any)
+            .where('id = :id', { id: user.id })
+            .andWhere(
+              '(weeklyDigestSentAt IS NULL OR weeklyDigestSentAt < :cutoff)',
+              { cutoff: sixDaysAgo },
+            )
+            .execute();
+          if ((claim.affected ?? 0) === 0) continue;
 
-          // Mark as sent — atomic update so a second concurrent cron instance
-          // doesn't double-send if it raced past our in-memory check.
-          await this.userRepo.update(user.id, { weeklyDigestSentAt: new Date() });
+          await this.notifications.sendWeeklyDigest(user, result);
         } catch (error) {
           this.logger.warn(
             `Weekly digest send failed for user ${user.id}: ${error.message}`,
