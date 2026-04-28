@@ -127,10 +127,13 @@ export class NotificationsController {
       daysLeft: 1,
       dateStr: new Date().toISOString().slice(0, 10),
     });
-    await this.service.sendPushNotification(user.fcmToken, title, body, {
-      type: 'test',
-      screen: '/(tabs)/settings',
-    });
+    await this.service.sendPushNotification(
+      user.fcmToken,
+      title,
+      body,
+      { type: 'test', screen: '/(tabs)/settings' },
+      user.id,
+    );
     return { message: 'Test notification sent', token: user.fcmToken.slice(0, 12) + '…' };
   }
 }

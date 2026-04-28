@@ -14,11 +14,12 @@ export class FcmHandler {
   constructor(private readonly notifications: NotificationsService) {}
 
   async handle(payload: Record<string, unknown>): Promise<void> {
-    const { token, title, body, data } = payload as {
+    const { token, title, body, data, userId } = payload as {
       token: string;
       title: string;
       body: string;
       data?: Record<string, string>;
+      userId?: string;
     };
 
     if (!token || !title || !body) {
@@ -27,6 +28,6 @@ export class FcmHandler {
       );
     }
 
-    await this.notifications.sendPushNotification(token, title, body, data);
+    await this.notifications.sendPushNotification(token, title, body, data, userId);
   }
 }

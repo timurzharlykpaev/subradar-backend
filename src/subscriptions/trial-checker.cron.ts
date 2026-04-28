@@ -68,6 +68,7 @@ export class TrialCheckerCron {
             title,
             body,
             { subscriptionId: sub.id, type: 'trial_expiring' },
+            user.id,
           );
         }
 
@@ -137,6 +138,7 @@ export class TrialCheckerCron {
             title,
             body,
             { type: 'pro_trial_expiring', screen: 'paywall' },
+            user.id,
           );
         }
 
@@ -223,6 +225,7 @@ export class TrialCheckerCron {
           title,
           body,
           { type: 'pro_trial_expired', screen: 'paywall' },
+          user.id,
         );
       }
 

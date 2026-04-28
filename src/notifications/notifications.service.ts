@@ -1,13 +1,29 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
 import { Resend } from 'resend';
 import Expo, { ExpoPushMessage } from 'expo-server-sdk';
 import { buildPaymentReminderHtml, buildWeeklyDigestHtml } from './email-templates';
 import { AnalysisResult } from '../analysis/entities/analysis-result.entity';
+import { User } from '../users/entities/user.entity';
 import { UnsubscribeController } from './unsubscribe.controller';
 import { SuppressionService } from './suppression.service';
 import { maskEmail } from '../common/utils/pii';
+
+/** FCM error codes that mean the token is dead and must be cleared. */
+const FCM_DEAD_TOKEN_CODES = new Set([
+  'messaging/registration-token-not-registered',
+  'messaging/invalid-registration-token',
+  'messaging/invalid-argument',
+]);
+
+/** Expo receipt error codes that mean the token is dead. */
+const EXPO_DEAD_TOKEN_CODES = new Set([
+  'DeviceNotRegistered',
+  'InvalidCredentials',
+]);
 
 type UnsubType = 'weekly_digest' | 'email_notifications' | 'all';
 
@@ -34,6 +50,8 @@ export class NotificationsService {
   constructor(
     private readonly cfg: ConfigService,
     private readonly suppression: SuppressionService,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
   ) {
     const apiKey = cfg.get<string>('RESEND_API_KEY', '');
     this.fromEmail = cfg.get<string>('RESEND_FROM_EMAIL', 'noreply@subradar.ai');
@@ -60,11 +78,22 @@ export class NotificationsService {
     }
   }
 
+  /**
+   * Send a push to a single token. When the device returns a "dead token"
+   * error (FCM `registration-token-not-registered`, Expo `DeviceNotRegistered`)
+   * we null the user's `fcmToken` so we stop wasting quota on uninstalled
+   * apps. Without this every cron tick keeps hitting the same dead tokens
+   * forever, eventually getting us throttled by FCM.
+   *
+   * `userId` is optional for backward compat — without it we can't clear
+   * the token but still send. Pass it from cron callsites.
+   */
   async sendPushNotification(
     token: string,
     title: string,
     body: string,
     data?: Record<string, string>,
+    userId?: string,
   ) {
     if (Expo.isExpoPushToken(token)) {
       const message: ExpoPushMessage = {
@@ -78,8 +107,17 @@ export class NotificationsService {
       const chunks = this.expo.chunkPushNotifications([message]);
       for (const chunk of chunks) {
         try {
-          const receipts = await this.expo.sendPushNotificationsAsync(chunk);
-          this.logger.log(`Expo push sent: ${JSON.stringify(receipts)}`);
+          const tickets = await this.expo.sendPushNotificationsAsync(chunk);
+          this.logger.log(`Expo push sent: ${JSON.stringify(tickets)}`);
+          for (const ticket of tickets) {
+            if (
+              ticket.status === 'error' &&
+              ticket.details?.error &&
+              EXPO_DEAD_TOKEN_CODES.has(ticket.details.error)
+            ) {
+              await this.clearDeadToken(userId, token, ticket.details.error);
+            }
+          }
         } catch (e) {
           this.logger.error(`Expo push failed: ${e}`);
         }
@@ -91,11 +129,45 @@ export class NotificationsService {
       this.logger.warn('Firebase not initialized, skipping push');
       return;
     }
-    return admin.messaging().send({
-      token,
-      notification: { title, body },
-      data,
-    });
+    try {
+      return await admin.messaging().send({
+        token,
+        notification: { title, body },
+        data,
+      });
+    } catch (err: any) {
+      const code: string = err?.errorInfo?.code ?? err?.code ?? '';
+      if (FCM_DEAD_TOKEN_CODES.has(code)) {
+        await this.clearDeadToken(userId, token, code);
+        return;
+      }
+      this.logger.error(`FCM send failed (code=${code}): ${err?.message ?? err}`);
+      throw err;
+    }
+  }
+
+  /**
+   * Null out a dead push token. We match by token (not just userId) so a
+   * user who already re-registered a fresh token doesn't lose it because
+   * a stale push came back with the previous one. Best-effort — failures
+   * here are non-fatal.
+   */
+  private async clearDeadToken(
+    userId: string | undefined,
+    token: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const where = userId ? { id: userId, fcmToken: token } : { fcmToken: token };
+      const res = await this.userRepo.update(where as any, { fcmToken: null as any });
+      if ((res?.affected ?? 0) > 0) {
+        this.logger.warn(
+          `Cleared dead push token (reason=${reason}, userId=${userId ?? 'unknown'})`,
+        );
+      }
+    } catch (err: any) {
+      this.logger.warn(`clearDeadToken failed: ${err?.message ?? err}`);
+    }
   }
 
   /**

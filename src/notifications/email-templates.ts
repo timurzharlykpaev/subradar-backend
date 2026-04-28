@@ -922,24 +922,49 @@ const PRO_EXPIRATION_STRINGS: Record<
 };
 
 /**
- * 7-day Pro expiration warning email. Localized via PRO_EXPIRATION_STRINGS;
- * other locales currently fall back to English (parity with the rest of the
- * email pipeline pending the full 10-locale rollout).
+ * 7-day Pro expiration warning email. Localized via PRO_EXPIRATION_STRINGS,
+ * wrapped in the standard branded shell with CAN-SPAM-compliant footer
+ * (postal address + unsubscribe link). The unsubscribe URL must be supplied
+ * by the caller via NotificationsService.buildUnsubscribeUrl().
  */
 export function buildProExpirationEmail(opts: {
   locale: string;
   name: string | null;
+  unsubscribeUrl?: string | null;
 }): { subject: string; html: string } {
   const lang = (opts.locale ?? 'en').split('-')[0].toLowerCase();
   const s = PRO_EXPIRATION_STRINGS[lang] ?? PRO_EXPIRATION_STRINGS.en;
   const name = (opts.name ?? '').trim();
-  const html = `
-    <h2>${s.heading}</h2>
-    <p>${s.greeting(name)}</p>
-    <p>${s.body}</p>
-    <p><a href="${APP_URL}">${s.cta}</a></p>
-    <p>${s.signoff}</p>
-  `;
+  const content = `
+  <tr>
+    <td style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;border:1px solid rgba(139,92,246,0.3);padding:36px;">
+      <h1 style="margin:0 0 20px;font-size:22px;color:#ffffff;font-weight:800;line-height:1.3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${s.heading}
+      </h1>
+      <p style="margin:0 0 16px;font-size:15px;color:#a0a0b8;line-height:1.5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${s.greeting(name)}
+      </p>
+      <p style="margin:0 0 28px;font-size:15px;color:#ffffff;line-height:1.55;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${s.body}
+      </p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td align="center">
+            <a href="${MOBILE_URL}" style="display:inline-block;background:linear-gradient(135deg,#8B5CF6,#6D28D9);color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:15px 40px;border-radius:12px;letter-spacing:0.3px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              ${s.cta}
+            </a>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:28px 0 0;font-size:13px;color:#a0a0b8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        ${s.signoff}
+      </p>
+    </td>
+  </tr>`;
+  const html = wrap(content, {
+    unsubscribeUrl: opts.unsubscribeUrl ?? null,
+    preheader: s.body.slice(0, 110),
+  });
   return { subject: s.subject, html };
 }
 

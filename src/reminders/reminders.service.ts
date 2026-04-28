@@ -42,6 +42,41 @@ export class RemindersService {
   }
 
   /**
+   * Atomically reserve the right to send a notification to one user by
+   * stamping a "lastXxxAt" column. Returns true ONLY for the worker that
+   * actually wins the UPDATE — ties go to nobody. Without this two
+   * concurrent pods can both pass the in-memory `sentWithin()` check on
+   * the same row and double-fire the push/email. The window keeps the
+   * stale-row test on the SQL side so it's race-free.
+   *
+   * Caveat: this stamps BEFORE the channel call. If the FCM/Resend send
+   * fails the user simply misses this run — next tomorrow's cycle will
+   * pick them back up. This is the right tradeoff vs the alternative
+   * (stamp after success, double-send under contention).
+   */
+  private async claimNotification(
+    userId: string,
+    column:
+      | 'lastPaymentRemindersSentAt'
+      | 'lastTrialPushAt'
+      | 'lastProExpirationPushAt'
+      | 'lastProExpirationEmailAt'
+      | 'lastWeeklyPushDigestAt'
+      | 'lastWinBackPushAt',
+    hours: number,
+  ): Promise<boolean> {
+    const cutoff = new Date(Date.now() - hours * 3_600_000);
+    const res = await this.userRepo
+      .createQueryBuilder()
+      .update(User)
+      .set({ [column]: () => 'NOW()' } as any)
+      .where('id = :id', { id: userId })
+      .andWhere(`(${column} IS NULL OR ${column} < :cutoff)`, { cutoff })
+      .execute();
+    return (res.affected ?? 0) > 0;
+  }
+
+  /**
    * Resolve a user's local hour and weekday (0=Sunday). Falls back to UTC if
    * the user has no detected timezone. Used by the hourly cron to fire
    * notifications when the *user's* local clock hits the desired hour
@@ -124,8 +159,9 @@ export class RemindersService {
         const local = this.userLocalNow(user);
         if (local.hour !== TARGET_LOCAL_HOUR) continue;
 
-        // Per-user idempotency. Once we've fired the digest today there is
-        // nothing else to send for this user even if the cron reruns.
+        // Per-user idempotency. Cheap in-memory pre-check skips most users
+        // before we do any aggregation work; the atomic claim further down
+        // is the actual race-safe gate.
         if (this.sentWithin(user.lastPaymentRemindersSentAt, 20)) continue;
 
         const userTz = user.timezoneDetected || user.timezone || 'UTC';
@@ -178,6 +214,15 @@ export class RemindersService {
 
         if (due.length === 0) continue;
 
+        // Race-safe: only one worker proceeds even if two pods both passed
+        // the in-memory check above on the same row.
+        const claimed = await this.claimNotification(
+          user.id,
+          'lastPaymentRemindersSentAt',
+          20,
+        );
+        if (!claimed) continue;
+
         // Total in the user's display currency proxy — we use the first
         // subscription's currency since FX conversion is not in scope here.
         const totalAmount = due.reduce((sum, d) => {
@@ -227,22 +272,20 @@ export class RemindersService {
             user.fcmToken,
             title,
             body,
-            { screen: '/(tabs)' },
+            { type: 'payment_reminders_digest', screen: '/(tabs)' },
+            user.id,
           );
         }
 
         // Mark per-sub flags so a half-rerun later today still skips
-        // these. We do this AFTER the channel calls so a Resend / FCM
-        // failure leaves the rows unsent and tomorrow's run can retry.
+        // these. The user-level claim already holds — these are belt-
+        // and-braces for the per-sub `reminderEnabled` gate.
         await this.subscriptionRepo
           .createQueryBuilder()
           .update()
           .set({ lastReminderSentDate: utcToday } as any)
           .whereInIds(due.map((d) => d.sub.id))
           .execute();
-        await this.userRepo.update(user.id, {
-          lastPaymentRemindersSentAt: new Date(),
-        });
         usersNotified++;
       } catch (err) {
         errors++;
@@ -304,17 +347,25 @@ export class RemindersService {
         if (daysLeft !== 1 && daysLeft !== 4) continue;
         if (!user.notificationsEnabled) continue;
         if (this.sentWithin(user.lastTrialPushAt, 20)) continue;
+        if (!user.fcmToken) continue;
+
+        // Atomic claim BEFORE the channel call to prevent multi-pod
+        // double-fire on the same hour tick.
+        const claimed = await this.claimNotification(
+          user.id,
+          'lastTrialPushAt',
+          20,
+        );
+        if (!claimed) continue;
 
         const { title, body } = pushT(user.locale).trialExpiry({ daysLeft });
-
-        if (user.fcmToken) {
-          await this.notificationsService.sendPushNotification(
-            user.fcmToken,
-            title,
-            body,
-          );
-          await this.userRepo.update(user.id, { lastTrialPushAt: new Date() });
-        }
+        await this.notificationsService.sendPushNotification(
+          user.fcmToken,
+          title,
+          body,
+          { type: 'trial_expiry', screen: '/paywall' },
+          user.id,
+        );
 
         sent++;
       } catch (err) {
@@ -374,17 +425,22 @@ export class RemindersService {
 
         const { title, body } = pushT(user.locale).proExpiration({ daysLeft });
 
-        // Push: dedupe per-day (20h window).
+        // Push: race-safe claim per-day (20h window).
         if (user.fcmToken && !this.sentWithin(user.lastProExpirationPushAt, 20)) {
-          await this.notificationsService.sendPushNotification(
-            user.fcmToken,
-            title,
-            body,
-            { screen: '/paywall' },
+          const claimedPush = await this.claimNotification(
+            user.id,
+            'lastProExpirationPushAt',
+            20,
           );
-          await this.userRepo.update(user.id, {
-            lastProExpirationPushAt: new Date(),
-          });
+          if (claimedPush) {
+            await this.notificationsService.sendPushNotification(
+              user.fcmToken,
+              title,
+              body,
+              { type: 'pro_expiration', screen: '/paywall' },
+              user.id,
+            );
+          }
         }
 
         // Email only at the 7-day mark, dedupe with a long window so the
@@ -393,19 +449,28 @@ export class RemindersService {
         if (daysLeft === 7) {
           const emailEnabled = user.emailNotifications !== false;
           if (emailEnabled && !this.sentWithin(user.lastProExpirationEmailAt, 20)) {
-            const { subject, html } = buildProExpirationEmail({
-              locale: user.locale ?? 'en',
-              name: user.name ?? null,
-            });
-            await this.notificationsService.sendEmail(
-              user.email,
-              subject,
-              html,
-              { userId: user.id, unsubType: 'email_notifications' },
+            const claimedEmail = await this.claimNotification(
+              user.id,
+              'lastProExpirationEmailAt',
+              20,
             );
-            await this.userRepo.update(user.id, {
-              lastProExpirationEmailAt: new Date(),
-            });
+            if (claimedEmail) {
+              const unsubscribeUrl = this.notificationsService.buildUnsubscribeUrl(
+                user.id,
+                'email_notifications',
+              );
+              const { subject, html } = buildProExpirationEmail({
+                locale: user.locale ?? 'en',
+                name: user.name ?? null,
+                unsubscribeUrl,
+              });
+              await this.notificationsService.sendEmail(
+                user.email,
+                subject,
+                html,
+                { userId: user.id, unsubType: 'email_notifications' },
+              );
+            }
           }
         }
 
@@ -488,6 +553,14 @@ export class RemindersService {
           return d >= now && d <= weekFromNow;
         });
 
+        // Race-safe claim — only the worker that wins the UPDATE proceeds.
+        const claimed = await this.claimNotification(
+          user.id,
+          'lastWeeklyPushDigestAt',
+          6 * 24,
+        );
+        if (!claimed) continue;
+
         const currency = active[0]?.currency ?? 'USD';
         const { title, body } = pushT(user.locale).weeklyDigest({
           currency,
@@ -500,11 +573,9 @@ export class RemindersService {
           user.fcmToken,
           title,
           body,
-          { screen: '/(tabs)' },
+          { type: 'weekly_digest', screen: '/(tabs)' },
+          user.id,
         );
-        await this.userRepo.update(user.id, {
-          lastWeeklyPushDigestAt: new Date(),
-        });
         sent++;
       } catch (err) {
         this.logger.error(`Weekly digest push failed for ${user.id}:`, err);
@@ -589,6 +660,14 @@ export class RemindersService {
 
         if (upcomingSubs === 0) continue;
 
+        // Race-safe claim before sending.
+        const claimed = await this.claimNotification(
+          user.id,
+          'lastWinBackPushAt',
+          20,
+        );
+        if (!claimed) continue;
+
         const { title, body } = pushT(user.locale).winBack({
           upcomingCount: upcomingSubs,
         });
@@ -597,9 +676,9 @@ export class RemindersService {
           user.fcmToken,
           title,
           body,
-          { screen: '/(tabs)' },
+          { type: 'win_back', screen: '/(tabs)' },
+          user.id,
         );
-        await this.userRepo.update(user.id, { lastWinBackPushAt: new Date() });
         sent++;
       } catch (err) {
         this.logger.error(`Win-back push failed for ${user.id}:`, err);
