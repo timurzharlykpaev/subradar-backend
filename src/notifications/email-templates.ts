@@ -79,11 +79,364 @@ const STRINGS: Record<string, I18nStrings> = {
     dateLabel: 'Billing date',
     openApp: 'Open SubRadar →',
   },
+  es: {
+    greeting: (name: string) => `Hola, ${name} 👋`,
+    reportTitle: (month: string) => `Informe de ${month}`,
+    reportSubtitle: 'Así fue tu mes de suscripciones',
+    totalLabel: 'TOTAL DEL MES',
+    activeCount: (n: number) => `${n} suscripcion${n === 1 ? '' : 'es'} activa${n === 1 ? '' : 's'}`,
+    topSubs: '💳 Suscripciones principales',
+    perMonth: '/mes',
+    ctaText: 'Abrir SubRadar →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'Previsión de gastos · AI auto-añadir · Recordatorios inteligentes',
+    proCtaText: 'Prueba Pro gratis →',
+    unsubscribe: 'Cancelar suscripción a notificaciones',
+    footerTagline: 'Gestiona tus suscripciones de forma más inteligente con SubRadar AI',
+    paymentReminderLabel: 'RECORDATORIO DE PAGO',
+    chargesIn: (days: number) => days === 1 ? 'se cobra mañana' : `se cobra en ${days} días`,
+    subscriptionLabel: 'Suscripción',
+    amountLabel: 'Importe',
+    dateLabel: 'Fecha de cobro',
+    openApp: 'Abrir SubRadar →',
+  },
+  de: {
+    greeting: (name: string) => `Hallo ${name} 👋`,
+    reportTitle: (month: string) => `Bericht für ${month}`,
+    reportSubtitle: 'So lief dein Abo-Monat',
+    totalLabel: 'GESAMTAUSGABEN PRO MONAT',
+    activeCount: (n: number) => `${n} aktive${n === 1 ? 's' : ''} Abonnement${n === 1 ? '' : 's'}`,
+    topSubs: '💳 Top-Abos',
+    perMonth: '/Mon.',
+    ctaText: 'SubRadar öffnen →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'Ausgabenprognose · AI auto-hinzufügen · Smarte Erinnerungen',
+    proCtaText: 'Pro kostenlos testen →',
+    unsubscribe: 'Benachrichtigungen abbestellen',
+    footerTagline: 'Abos smarter verwalten mit SubRadar AI',
+    paymentReminderLabel: 'ZAHLUNGSERINNERUNG',
+    chargesIn: (days: number) => days === 1 ? 'morgen fällig' : `in ${days} Tagen fällig`,
+    subscriptionLabel: 'Abonnement',
+    amountLabel: 'Betrag',
+    dateLabel: 'Abbuchungsdatum',
+    openApp: 'SubRadar öffnen →',
+  },
+  fr: {
+    greeting: (name: string) => `Salut ${name} 👋`,
+    reportTitle: (month: string) => `Rapport de ${month}`,
+    reportSubtitle: "Voici votre mois d'abonnements",
+    totalLabel: 'DÉPENSES TOTALES DU MOIS',
+    activeCount: (n: number) => `${n} abonnement${n === 1 ? '' : 's'} actif${n === 1 ? '' : 's'}`,
+    topSubs: '💳 Top abonnements',
+    perMonth: '/mois',
+    ctaText: 'Ouvrir SubRadar →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'Prévisions · IA auto-ajout · Rappels intelligents',
+    proCtaText: 'Essayer Pro gratuitement →',
+    unsubscribe: 'Se désabonner des notifications',
+    footerTagline: 'Gérez vos abonnements plus intelligemment avec SubRadar AI',
+    paymentReminderLabel: 'RAPPEL DE PAIEMENT',
+    chargesIn: (days: number) => days === 1 ? 'prélevé demain' : `prélevé dans ${days} jours`,
+    subscriptionLabel: 'Abonnement',
+    amountLabel: 'Montant',
+    dateLabel: 'Date de prélèvement',
+    openApp: 'Ouvrir SubRadar →',
+  },
+  pt: {
+    greeting: (name: string) => `Olá, ${name} 👋`,
+    reportTitle: (month: string) => `Relatório de ${month}`,
+    reportSubtitle: 'Veja como foi seu mês de assinaturas',
+    totalLabel: 'TOTAL DO MÊS',
+    activeCount: (n: number) => `${n} assinatura${n === 1 ? '' : 's'} ativa${n === 1 ? '' : 's'}`,
+    topSubs: '💳 Principais assinaturas',
+    perMonth: '/mês',
+    ctaText: 'Abrir SubRadar →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'Previsão de gastos · IA auto-adicionar · Lembretes inteligentes',
+    proCtaText: 'Experimente Pro grátis →',
+    unsubscribe: 'Cancelar assinatura das notificações',
+    footerTagline: 'Gerencie suas assinaturas de forma inteligente com SubRadar AI',
+    paymentReminderLabel: 'LEMBRETE DE PAGAMENTO',
+    chargesIn: (days: number) => days === 1 ? 'cobrança amanhã' : `cobrança em ${days} dias`,
+    subscriptionLabel: 'Assinatura',
+    amountLabel: 'Valor',
+    dateLabel: 'Data da cobrança',
+    openApp: 'Abrir SubRadar →',
+  },
+  zh: {
+    greeting: (name: string) => `你好，${name} 👋`,
+    reportTitle: (month: string) => `${month} 报告`,
+    reportSubtitle: '这是您本月的订阅情况',
+    totalLabel: '本月总支出',
+    activeCount: (n: number) => `${n} 个有效订阅`,
+    topSubs: '💳 主要订阅',
+    perMonth: '/月',
+    ctaText: '打开 SubRadar →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: '支出预测 · AI 自动添加 · 智能提醒',
+    proCtaText: '免费试用 Pro →',
+    unsubscribe: '取消订阅通知',
+    footerTagline: '使用 SubRadar AI 更智能地管理订阅',
+    paymentReminderLabel: '付款提醒',
+    chargesIn: (days: number) => days === 1 ? '明天扣款' : `${days} 天后扣款`,
+    subscriptionLabel: '订阅',
+    amountLabel: '金额',
+    dateLabel: '扣款日期',
+    openApp: '打开 SubRadar →',
+  },
+  ja: {
+    greeting: (name: string) => `こんにちは、${name}さん 👋`,
+    reportTitle: (month: string) => `${month}のレポート`,
+    reportSubtitle: '今月のサブスクリプション概要',
+    totalLabel: '今月の合計支出',
+    activeCount: (n: number) => `アクティブなサブスク ${n} 件`,
+    topSubs: '💳 主なサブスク',
+    perMonth: '/月',
+    ctaText: 'SubRadar を開く →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: '支出予測 · AI 自動追加 · スマートリマインダー',
+    proCtaText: 'Pro を無料で試す →',
+    unsubscribe: '通知を停止',
+    footerTagline: 'SubRadar AI でサブスクをスマートに管理',
+    paymentReminderLabel: '支払いリマインダー',
+    chargesIn: (days: number) => days === 1 ? '明日請求' : `${days}日後に請求`,
+    subscriptionLabel: 'サブスクリプション',
+    amountLabel: '金額',
+    dateLabel: '請求日',
+    openApp: 'SubRadar を開く →',
+  },
+  ko: {
+    greeting: (name: string) => `안녕하세요, ${name}님 👋`,
+    reportTitle: (month: string) => `${month} 리포트`,
+    reportSubtitle: '이번 달 구독 요약입니다',
+    totalLabel: '이번 달 총 지출',
+    activeCount: (n: number) => `활성 구독 ${n}개`,
+    topSubs: '💳 주요 구독',
+    perMonth: '/월',
+    ctaText: 'SubRadar 열기 →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: '지출 예측 · AI 자동 추가 · 스마트 알림',
+    proCtaText: 'Pro 무료 체험 →',
+    unsubscribe: '알림 구독 취소',
+    footerTagline: 'SubRadar AI로 구독을 더 똑똑하게 관리하세요',
+    paymentReminderLabel: '결제 알림',
+    chargesIn: (days: number) => days === 1 ? '내일 결제' : `${days}일 후 결제`,
+    subscriptionLabel: '구독',
+    amountLabel: '금액',
+    dateLabel: '결제일',
+    openApp: 'SubRadar 열기 →',
+  },
+  kk: {
+    greeting: (name: string) => `Сәлем, ${name} 👋`,
+    reportTitle: (month: string) => `${month} есебі`,
+    reportSubtitle: 'Жазылымдарыңыздың айлық жиынтығы',
+    totalLabel: 'АЙЛЫҚ ЖАЛПЫ ШЫҒЫН',
+    activeCount: (n: number) => `${n} белсенді жазылым`,
+    topSubs: '💳 Негізгі жазылымдар',
+    perMonth: '/айына',
+    ctaText: 'SubRadar ашу →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'Шығын болжамы · AI авто-қосу · Ақылды еске салу',
+    proCtaText: 'Pro-ны тегін көру →',
+    unsubscribe: 'Хабарламалардан бас тарту',
+    footerTagline: 'SubRadar AI-мен жазылымдарды ақылды басқарыңыз',
+    paymentReminderLabel: 'ТӨЛЕМ ЕСКЕРТУ',
+    chargesIn: (days: number) => days === 1 ? 'ертең есептен шығады' : `${days} күннен кейін есептен шығады`,
+    subscriptionLabel: 'Жазылым',
+    amountLabel: 'Сома',
+    dateLabel: 'Есептен шығару күні',
+    openApp: 'SubRadar ашу →',
+  },
 };
 
 function t(locale: string): I18nStrings {
   const lang = (locale ?? 'en').split('-')[0].toLowerCase();
   return STRINGS[lang] ?? STRINGS.en;
+}
+
+const MONTHLY_REPORT_SUBJECT: Record<string, (month: string) => string> = {
+  ru: (m) => `📊 Ваш отчёт SubRadar за ${m}`,
+  en: (m) => `📊 Your SubRadar report for ${m}`,
+  es: (m) => `📊 Tu informe de SubRadar de ${m}`,
+  de: (m) => `📊 Dein SubRadar Bericht für ${m}`,
+  fr: (m) => `📊 Votre rapport SubRadar de ${m}`,
+  pt: (m) => `📊 Seu relatório SubRadar de ${m}`,
+  zh: (m) => `📊 您的 SubRadar ${m} 报告`,
+  ja: (m) => `📊 ${m} の SubRadar レポート`,
+  ko: (m) => `📊 ${m} SubRadar 리포트`,
+  kk: (m) => `📊 ${m} SubRadar есебі`,
+};
+
+/** Localized subject line for the monthly spending report email. */
+export function monthlyReportSubject(locale: string, month: string): string {
+  const lang = (locale ?? 'en').split('-')[0].toLowerCase();
+  return (MONTHLY_REPORT_SUBJECT[lang] ?? MONTHLY_REPORT_SUBJECT.en)(month);
+}
+
+/** Localized subject line for the daily reminders digest email. */
+export function dailyDigestSubject(locale: string, count: number): string {
+  const lang = (locale ?? 'en').split('-')[0].toLowerCase();
+  const s = DIGEST_STRINGS[lang] ?? DIGEST_STRINGS.en;
+  return `⏰ ${s.heading(count)}`;
+}
+
+// ─── Auth emails (magic link + OTP) ──────────────────────────────────────────
+
+interface AuthStrings {
+  magicSubject: string;
+  magicHeading: string;
+  magicBody: string;
+  magicCta: string;
+  otpSubject: string;
+  otpHeading: string;
+  otpBody: string;
+  ignoreNote: string;
+}
+
+const AUTH_STRINGS: Record<string, AuthStrings> = {
+  en: {
+    magicSubject: 'Your SubRadar sign-in link',
+    magicHeading: 'Sign in to SubRadar',
+    magicBody: 'Click the button below to sign in. This link expires in 15 minutes.',
+    magicCta: 'Sign in to SubRadar',
+    otpSubject: 'Your SubRadar verification code',
+    otpHeading: 'Your verification code',
+    otpBody: 'Enter this code to sign in to SubRadar. It expires in 15 minutes.',
+    ignoreNote: "If you didn't request this, ignore this email.",
+  },
+  ru: {
+    magicSubject: 'Ссылка для входа в SubRadar',
+    magicHeading: 'Войдите в SubRadar',
+    magicBody: 'Нажмите кнопку ниже, чтобы войти. Ссылка действует 15 минут.',
+    magicCta: 'Войти в SubRadar',
+    otpSubject: 'Ваш код подтверждения SubRadar',
+    otpHeading: 'Ваш код подтверждения',
+    otpBody: 'Введите код, чтобы войти в SubRadar. Срок действия — 15 минут.',
+    ignoreNote: 'Если вы не запрашивали это письмо, просто проигнорируйте его.',
+  },
+  es: {
+    magicSubject: 'Tu enlace para iniciar sesión en SubRadar',
+    magicHeading: 'Iniciar sesión en SubRadar',
+    magicBody: 'Haz clic en el botón para iniciar sesión. El enlace expira en 15 minutos.',
+    magicCta: 'Iniciar sesión',
+    otpSubject: 'Tu código de verificación SubRadar',
+    otpHeading: 'Tu código de verificación',
+    otpBody: 'Introduce este código para iniciar sesión. Expira en 15 minutos.',
+    ignoreNote: 'Si no solicitaste esto, ignora este correo.',
+  },
+  de: {
+    magicSubject: 'Dein SubRadar-Anmeldelink',
+    magicHeading: 'Bei SubRadar anmelden',
+    magicBody: 'Klicke auf den Button, um dich anzumelden. Der Link läuft in 15 Minuten ab.',
+    magicCta: 'Bei SubRadar anmelden',
+    otpSubject: 'Dein SubRadar Bestätigungscode',
+    otpHeading: 'Dein Bestätigungscode',
+    otpBody: 'Gib diesen Code ein, um dich anzumelden. Er läuft in 15 Minuten ab.',
+    ignoreNote: 'Wenn du das nicht angefordert hast, ignoriere diese E-Mail.',
+  },
+  fr: {
+    magicSubject: 'Votre lien de connexion SubRadar',
+    magicHeading: 'Se connecter à SubRadar',
+    magicBody: 'Cliquez sur le bouton ci-dessous pour vous connecter. Le lien expire dans 15 minutes.',
+    magicCta: 'Se connecter à SubRadar',
+    otpSubject: 'Votre code de vérification SubRadar',
+    otpHeading: 'Votre code de vérification',
+    otpBody: 'Saisissez ce code pour vous connecter. Il expire dans 15 minutes.',
+    ignoreNote: "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.",
+  },
+  pt: {
+    magicSubject: 'Seu link de acesso ao SubRadar',
+    magicHeading: 'Entrar no SubRadar',
+    magicBody: 'Clique no botão abaixo para entrar. O link expira em 15 minutos.',
+    magicCta: 'Entrar no SubRadar',
+    otpSubject: 'Seu código de verificação SubRadar',
+    otpHeading: 'Seu código de verificação',
+    otpBody: 'Digite este código para entrar. Ele expira em 15 minutos.',
+    ignoreNote: 'Se você não solicitou, ignore este email.',
+  },
+  zh: {
+    magicSubject: '您的 SubRadar 登录链接',
+    magicHeading: '登录 SubRadar',
+    magicBody: '点击下方按钮登录。链接 15 分钟后过期。',
+    magicCta: '登录 SubRadar',
+    otpSubject: '您的 SubRadar 验证码',
+    otpHeading: '您的验证码',
+    otpBody: '输入此验证码以登录 SubRadar。15 分钟后过期。',
+    ignoreNote: '如果不是您操作的，请忽略此邮件。',
+  },
+  ja: {
+    magicSubject: 'SubRadar サインインリンク',
+    magicHeading: 'SubRadar にサインイン',
+    magicBody: '下のボタンをタップしてサインインしてください。リンクは 15 分後に失効します。',
+    magicCta: 'SubRadar にサインイン',
+    otpSubject: 'SubRadar 認証コード',
+    otpHeading: '認証コード',
+    otpBody: 'このコードを入力してサインインしてください。15 分後に失効します。',
+    ignoreNote: '心当たりがない場合は、このメールを無視してください。',
+  },
+  ko: {
+    magicSubject: 'SubRadar 로그인 링크',
+    magicHeading: 'SubRadar에 로그인',
+    magicBody: '아래 버튼을 눌러 로그인하세요. 링크는 15분 후 만료됩니다.',
+    magicCta: 'SubRadar에 로그인',
+    otpSubject: 'SubRadar 인증 코드',
+    otpHeading: '인증 코드',
+    otpBody: '이 코드를 입력하여 SubRadar에 로그인하세요. 15분 후 만료됩니다.',
+    ignoreNote: '본인이 요청하지 않았다면 이 이메일을 무시하세요.',
+  },
+  kk: {
+    magicSubject: 'SubRadar кіру сілтемесі',
+    magicHeading: 'SubRadar-ға кіру',
+    magicBody: 'Кіру үшін төмендегі түймені басыңыз. Сілтеме 15 минуттан кейін жарамсыз болады.',
+    magicCta: 'SubRadar-ға кіру',
+    otpSubject: 'SubRadar растау коды',
+    otpHeading: 'Растау коды',
+    otpBody: 'SubRadar-ға кіру үшін осы кодты енгізіңіз. 15 минуттан кейін жарамсыз болады.',
+    ignoreNote: 'Сіз сұрамасаңыз, бұл хатты елемеңіз.',
+  },
+};
+
+function authT(locale: string): AuthStrings {
+  const lang = (locale ?? 'en').split('-')[0].toLowerCase();
+  return AUTH_STRINGS[lang] ?? AUTH_STRINGS.en;
+}
+
+/** Localized magic link email. */
+export function buildMagicLinkEmail(opts: {
+  locale: string;
+  link: string;
+}): { subject: string; html: string } {
+  const s = authT(opts.locale);
+  const html = `
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+      <h2 style="margin-bottom:8px">${s.magicHeading}</h2>
+      <p style="color:#666;margin-bottom:24px">${s.magicBody}</p>
+      <a href="${opts.link}" style="display:inline-block;background:#8B5CF6;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-weight:600">
+        ${s.magicCta}
+      </a>
+      <p style="color:#999;font-size:12px;margin-top:24px">${s.ignoreNote}</p>
+    </div>
+  `;
+  return { subject: s.magicSubject, html };
+}
+
+/** Localized OTP email. */
+export function buildOtpEmail(opts: {
+  locale: string;
+  code: string;
+}): { subject: string; html: string } {
+  const s = authT(opts.locale);
+  const html = `
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+      <h2 style="margin-bottom:8px">${s.otpHeading}</h2>
+      <p style="color:#666;margin-bottom:24px">${s.otpBody}</p>
+      <div style="background:#f4f0ff;border-radius:12px;padding:20px;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#8B5CF6;">
+        ${opts.code}
+      </div>
+      <p style="color:#999;font-size:12px;margin-top:24px">${s.ignoreNote}</p>
+    </div>
+  `;
+  return { subject: s.otpSubject, html };
 }
 
 // ─── Shared layout wrappers ───────────────────────────────────────────────────
@@ -502,6 +855,70 @@ const PRO_EXPIRATION_STRINGS: Record<
     cta: 'Renew your subscription',
     signoff: '— SubRadar Team',
   },
+  es: {
+    subject: 'Tu suscripción SubRadar Pro termina en 7 días',
+    heading: 'Tu suscripción Pro termina pronto',
+    greeting: (n: string) => `Hola${n ? ` ${n}` : ''},`,
+    body: 'Tu suscripción SubRadar Pro terminará en 7 días. Después perderás el acceso a suscripciones ilimitadas y funciones AI.',
+    cta: 'Renovar suscripción',
+    signoff: '— Equipo SubRadar',
+  },
+  de: {
+    subject: 'Dein SubRadar Pro endet in 7 Tagen',
+    heading: 'Deine Pro-Mitgliedschaft endet bald',
+    greeting: (n: string) => `Hallo${n ? ` ${n}` : ''},`,
+    body: 'Deine SubRadar Pro Mitgliedschaft endet in 7 Tagen. Danach verlierst du den Zugriff auf unbegrenzte Abos und AI-Funktionen.',
+    cta: 'Abo verlängern',
+    signoff: '— Das SubRadar Team',
+  },
+  fr: {
+    subject: 'Votre abonnement SubRadar Pro se termine dans 7 jours',
+    heading: 'Votre abonnement Pro se termine bientôt',
+    greeting: (n: string) => `Bonjour${n ? ` ${n}` : ''},`,
+    body: 'Votre abonnement SubRadar Pro se termine dans 7 jours. Vous perdrez ensuite l’accès aux abonnements illimités et aux fonctions AI.',
+    cta: "Renouveler l'abonnement",
+    signoff: '— Équipe SubRadar',
+  },
+  pt: {
+    subject: 'Sua assinatura SubRadar Pro termina em 7 dias',
+    heading: 'Sua assinatura Pro está terminando',
+    greeting: (n: string) => `Olá${n ? ` ${n}` : ''},`,
+    body: 'Sua assinatura SubRadar Pro terminará em 7 dias. Após isso você perderá acesso a assinaturas ilimitadas e recursos de IA.',
+    cta: 'Renovar assinatura',
+    signoff: '— Equipe SubRadar',
+  },
+  zh: {
+    subject: '您的 SubRadar Pro 订阅将在 7 天后结束',
+    heading: '您的 Pro 订阅即将到期',
+    greeting: (n: string) => `${n ? `${n}，` : ''}您好,`,
+    body: '您的 SubRadar Pro 订阅将在 7 天后结束。之后您将无法使用无限订阅和 AI 功能。',
+    cta: '续订订阅',
+    signoff: '— SubRadar 团队',
+  },
+  ja: {
+    subject: 'SubRadar Pro は 7 日後に終了します',
+    heading: 'Pro サブスクリプションが終了します',
+    greeting: (n: string) => `${n ? `${n} 様、` : ''}こんにちは,`,
+    body: 'SubRadar Pro サブスクリプションは 7 日後に終了します。終了後は無制限サブスクリプションと AI 機能をご利用いただけません。',
+    cta: 'サブスクリプションを更新',
+    signoff: '— SubRadar チーム',
+  },
+  ko: {
+    subject: 'SubRadar Pro 구독이 7일 후 종료됩니다',
+    heading: 'Pro 구독이 곧 종료됩니다',
+    greeting: (n: string) => `${n ? `${n}님, ` : ''}안녕하세요,`,
+    body: 'SubRadar Pro 구독이 7일 후 종료됩니다. 종료 후에는 무제한 구독 및 AI 기능을 사용할 수 없습니다.',
+    cta: '구독 갱신',
+    signoff: '— SubRadar 팀',
+  },
+  kk: {
+    subject: 'SubRadar Pro жазылымы 7 күннен кейін аяқталады',
+    heading: 'Pro жазылымыңыз жақын арада аяқталады',
+    greeting: (n: string) => `Сәлем${n ? `, ${n}` : ''},`,
+    body: 'SubRadar Pro жазылымыңыз 7 күннен кейін аяқталады. Содан кейін шектеусіз жазылымдар мен AI функцияларына қол жеткізе алмайсыз.',
+    cta: 'Жазылымды жаңарту',
+    signoff: '— SubRadar командасы',
+  },
 };
 
 /**
@@ -556,6 +973,70 @@ const DIGEST_STRINGS: Record<
     chargesIn: (d) => (d === 0 ? 'today' : d === 1 ? 'in 1 day' : `in ${d} days`),
     todayLabel: 'today',
     cta: 'Open SubRadar',
+  },
+  es: {
+    heading: (n) => `${n} suscripcion${n === 1 ? '' : 'es'} se renueva${n === 1 ? '' : 'n'} pronto`,
+    intro: 'Esto es lo que debes revisar:',
+    totalLabel: 'TOTAL',
+    chargesIn: (d) => (d === 0 ? 'hoy' : d === 1 ? 'en 1 día' : `en ${d} días`),
+    todayLabel: 'hoy',
+    cta: 'Abrir SubRadar',
+  },
+  de: {
+    heading: (n) => `${n} Abonnement${n === 1 ? '' : 's'} wird bald fällig`,
+    intro: 'Das solltest du dir ansehen:',
+    totalLabel: 'GESAMT',
+    chargesIn: (d) => (d === 0 ? 'heute' : d === 1 ? 'morgen' : `in ${d} Tagen`),
+    todayLabel: 'heute',
+    cta: 'SubRadar öffnen',
+  },
+  fr: {
+    heading: (n) => `${n} abonnement${n === 1 ? '' : 's'} bientôt renouvelé${n === 1 ? '' : 's'}`,
+    intro: 'À vérifier :',
+    totalLabel: 'TOTAL',
+    chargesIn: (d) => (d === 0 ? "aujourd'hui" : d === 1 ? 'demain' : `dans ${d} jours`),
+    todayLabel: "aujourd'hui",
+    cta: 'Ouvrir SubRadar',
+  },
+  pt: {
+    heading: (n) => `${n} assinatura${n === 1 ? '' : 's'} vencendo em breve`,
+    intro: 'Confira:',
+    totalLabel: 'TOTAL',
+    chargesIn: (d) => (d === 0 ? 'hoje' : d === 1 ? 'amanhã' : `em ${d} dias`),
+    todayLabel: 'hoje',
+    cta: 'Abrir SubRadar',
+  },
+  zh: {
+    heading: (n) => `${n} 个订阅即将续费`,
+    intro: '需要确认的内容：',
+    totalLabel: '合计',
+    chargesIn: (d) => (d === 0 ? '今天' : d === 1 ? '明天' : `${d}天后`),
+    todayLabel: '今天',
+    cta: '打开 SubRadar',
+  },
+  ja: {
+    heading: (n) => `${n}件のサブスクが更新されます`,
+    intro: '確認内容：',
+    totalLabel: '合計',
+    chargesIn: (d) => (d === 0 ? '本日' : d === 1 ? '明日' : `${d}日後`),
+    todayLabel: '本日',
+    cta: 'SubRadar を開く',
+  },
+  ko: {
+    heading: (n) => `${n}개 구독이 곧 갱신됩니다`,
+    intro: '확인할 내용:',
+    totalLabel: '합계',
+    chargesIn: (d) => (d === 0 ? '오늘' : d === 1 ? '내일' : `${d}일 후`),
+    todayLabel: '오늘',
+    cta: 'SubRadar 열기',
+  },
+  kk: {
+    heading: (n) => `${n} жазылым жақын арада жаңарады`,
+    intro: 'Назар аударыңыз:',
+    totalLabel: 'БАРЛЫҒЫ',
+    chargesIn: (d) => (d === 0 ? 'бүгін' : d === 1 ? 'ертең' : `${d} күннен кейін`),
+    todayLabel: 'бүгін',
+    cta: 'SubRadar ашу',
   },
 };
 

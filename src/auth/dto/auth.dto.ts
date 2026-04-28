@@ -20,6 +20,9 @@ export class LoginDto {
 
 export class MagicLinkDto {
   @ApiProperty() @IsEmail() email: string;
+  /** ISO-639 locale of the requesting client (en/ru/es/de/fr/pt/zh/ja/ko/kk).
+   * Drives email subject + body language. Falls back to `en` when missing. */
+  @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
 }
 
 export class RefreshTokenDto {
@@ -33,6 +36,8 @@ export class AppleAuthDto {
 
 export class OtpSendDto {
   @ApiProperty() @IsEmail() email: string;
+  /** ISO-639 locale of the requesting client. Drives email subject + body. */
+  @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
 }
 
 export class OtpVerifyDto {

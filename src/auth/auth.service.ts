@@ -14,6 +14,10 @@ import { UsersService } from '../users/users.service';
 import { User, AuthProvider } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
+  buildMagicLinkEmail,
+  buildOtpEmail,
+} from '../notifications/email-templates';
+import {
   RegisterDto,
   LoginDto,
   MagicLinkDto,
@@ -189,20 +193,15 @@ export class AuthService {
 
     const isProd = this.cfg.get('NODE_ENV') === 'production';
 
+    const magicEmail = buildMagicLinkEmail({
+      locale: dto.locale ?? user.locale ?? 'en',
+      link,
+    });
     await this.notifications.sendEmail(
-        dto.email,
-        'Your SubRadar sign-in link',
-        `
-          <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
-            <h2 style="margin-bottom:8px">Sign in to SubRadar</h2>
-            <p style="color:#666;margin-bottom:24px">Click the button below to sign in. This link expires in 15 minutes.</p>
-            <a href="${link}" style="display:inline-block;background:#8B5CF6;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-weight:600">
-              Sign in to SubRadar
-            </a>
-            <p style="color:#999;font-size:12px;margin-top:24px">If you didn't request this, ignore this email.</p>
-          </div>
-        `,
-      );
+      dto.email,
+      magicEmail.subject,
+      magicEmail.html,
+    );
 
     // В dev — возвращаем ссылку в ответе для удобства тестирования
     return {
@@ -469,20 +468,11 @@ export class AuthService {
       : Math.floor(100000 + Math.random() * 900000).toString();
     await this.redis.set(`otp:${dto.email}`, code, 'EX', 900);
 
-    await this.notifications.sendEmail(
-      dto.email,
-      'Your SubRadar verification code',
-      `
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
-          <h2 style="margin-bottom:8px">Your verification code</h2>
-          <p style="color:#666;margin-bottom:24px">Enter this code to sign in to SubRadar. It expires in 15 minutes.</p>
-          <div style="background:#f4f0ff;border-radius:12px;padding:20px;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#8B5CF6;">
-            ${code}
-          </div>
-          <p style="color:#999;font-size:12px;margin-top:24px">If you didn't request this, ignore this email.</p>
-        </div>
-      `,
-    );
+    const otpEmail = buildOtpEmail({
+      locale: dto.locale ?? 'en',
+      code,
+    });
+    await this.notifications.sendEmail(dto.email, otpEmail.subject, otpEmail.html);
 
     const isProd = this.cfg.get('NODE_ENV') === 'production';
     return {

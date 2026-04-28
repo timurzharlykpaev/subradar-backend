@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
-import { buildMonthlyReportHtml } from '../notifications/email-templates';
+import { buildMonthlyReportHtml, monthlyReportSubject } from '../notifications/email-templates';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
 
@@ -119,9 +119,7 @@ export class MonthlyReportService {
             locale,
           );
 
-          const subject = locale.startsWith('ru')
-            ? `📊 Ваш отчёт SubRadar за ${userMonthName}`
-            : `📊 Your SubRadar report for ${userMonthName}`;
+          const subject = monthlyReportSubject(locale, userMonthName);
 
           await this.notifications.sendEmail(user.email, subject, html, {
             userId: user.id,

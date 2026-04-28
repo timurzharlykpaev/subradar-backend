@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, LessThan } from 'typeorm';
 import { toZonedTime } from 'date-fns-tz';
@@ -9,6 +9,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import {
   buildProExpirationEmail,
   buildDailyDigestEmail,
+  dailyDigestSubject,
 } from '../notifications/email-templates';
 import { pushT } from '../notifications/push-i18n';
 import { TelegramAlertService } from '../common/telegram-alert.service';
@@ -40,7 +41,28 @@ export class RemindersService {
     return new Date(last).getTime() > cutoff;
   }
 
-  @Cron('0 9 * * *')
+  /**
+   * Resolve a user's local hour and weekday (0=Sunday). Falls back to UTC if
+   * the user has no detected timezone. Used by the hourly cron to fire
+   * notifications when the *user's* local clock hits the desired hour
+   * instead of blasting everyone at 09:00 UTC (= 04:00 PST / 18:00 in
+   * Tokyo).
+   */
+  private userLocalNow(user: User): { hour: number; weekday: number } {
+    const tz = user.timezoneDetected || user.timezone || 'UTC';
+    let zoned: Date;
+    try {
+      zoned = toZonedTime(new Date(), tz);
+    } catch {
+      zoned = new Date();
+    }
+    return { hour: zoned.getHours(), weekday: zoned.getDay() };
+  }
+
+  // ── 5 daily/weekly notification crons all run hourly and gate per-user
+  // by the user's local clock. Idempotency columns (lastXxxAt, 20h /
+  // 6 days windows) make the second hourly tick on the same day a no-op.
+  @Cron(CronExpression.EVERY_HOUR)
   async sendDailyReminders() {
     return runCronHandler('sendDailyReminders', this.logger, this.tg, () =>
       this.sendDailyRemindersImpl(),
@@ -88,11 +110,19 @@ export class RemindersService {
     let errors = 0;
     const todayKey = utcToday.toISOString().split('T')[0];
 
+    const TARGET_LOCAL_HOUR = 9; // 09:00 in the user's own timezone
     for (const [userId, userSubs] of subsByUser) {
       try {
         const user = await this.userRepo.findOne({ where: { id: userId } });
         if (!user) continue;
         if (!user.notificationsEnabled) continue;
+
+        // Send only when the user's local clock hits the target hour.
+        // The cron runs every hour but each user only matches one tick
+        // per day. Idempotency below catches the rare case where two
+        // hourly ticks land in the same wall hour (clock skew).
+        const local = this.userLocalNow(user);
+        if (local.hour !== TARGET_LOCAL_HOUR) continue;
 
         // Per-user idempotency. Once we've fired the digest today there is
         // nothing else to send for this user even if the cron reruns.
@@ -177,9 +207,7 @@ export class RemindersService {
             totalAmount,
             currency,
           });
-          const subject = (user.locale ?? 'en').toLowerCase().startsWith('ru')
-            ? `⏰ ${due.length} ${due.length === 1 ? 'подписка' : due.length < 5 ? 'подписки' : 'подписок'} спишутся скоро`
-            : `⏰ ${due.length} subscription${due.length === 1 ? '' : 's'} renewing soon`;
+          const subject = dailyDigestSubject(user.locale ?? 'en', due.length);
           await this.notificationsService.sendEmail(user.email, subject, html, {
             userId: user.id,
             unsubType: 'email_notifications',
@@ -231,7 +259,7 @@ export class RemindersService {
   }
 
   /** Notify users whose trial is about to expire — runs daily at 10:00 */
-  @Cron('0 10 * * *')
+  @Cron(CronExpression.EVERY_HOUR)
   async sendTrialExpiryReminders() {
     return runCronHandler('sendTrialExpiryReminders', this.logger, this.tg, () =>
       this.sendTrialExpiryRemindersImpl(),
@@ -240,6 +268,7 @@ export class RemindersService {
 
   private async sendTrialExpiryRemindersImpl() {
     this.logger.log('Running trial expiry reminders cron...');
+    const TARGET_LOCAL_HOUR = 10;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -264,6 +293,7 @@ export class RemindersService {
     for (const user of users) {
       try {
         if (!user.trialEndDate) continue;
+        if (this.userLocalNow(user).hour !== TARGET_LOCAL_HOUR) continue;
 
         const trialEnd = new Date(user.trialEndDate);
         trialEnd.setHours(0, 0, 0, 0);
@@ -301,8 +331,8 @@ export class RemindersService {
     );
   }
 
-  /** Notify users whose Pro subscription is about to expire — runs daily at 10:00 UTC */
-  @Cron('0 10 * * *')
+  /** Notify users whose Pro subscription is about to expire — at 10:00 in their local timezone. */
+  @Cron(CronExpression.EVERY_HOUR)
   async sendProExpirationReminders() {
     return runCronHandler('sendProExpirationReminders', this.logger, this.tg, () =>
       this.sendProExpirationRemindersImpl(),
@@ -311,6 +341,7 @@ export class RemindersService {
 
   private async sendProExpirationRemindersImpl() {
     this.logger.log('Running Pro expiration reminders cron...');
+    const TARGET_LOCAL_HOUR = 10;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -330,6 +361,7 @@ export class RemindersService {
       try {
         if (!user.currentPeriodEnd) continue;
         if (!user.notificationsEnabled) continue;
+        if (this.userLocalNow(user).hour !== TARGET_LOCAL_HOUR) continue;
 
         const periodEnd = new Date(user.currentPeriodEnd);
         periodEnd.setHours(0, 0, 0, 0);
@@ -392,8 +424,8 @@ export class RemindersService {
     );
   }
 
-  /** Weekly push digest — every Sunday at 11:00 UTC */
-  @Cron('0 11 * * 0')
+  /** Weekly push digest — every Sunday at 11:00 in the user's local timezone. */
+  @Cron(CronExpression.EVERY_HOUR)
   async sendWeeklyPushDigest() {
     return runCronHandler('sendWeeklyPushDigest', this.logger, this.tg, () =>
       this.sendWeeklyPushDigestImpl(),
@@ -402,6 +434,8 @@ export class RemindersService {
 
   private async sendWeeklyPushDigestImpl() {
     this.logger.log('Running weekly push digest...');
+    const TARGET_LOCAL_HOUR = 11;
+    const TARGET_LOCAL_WEEKDAY = 0; // Sunday
 
     const now = new Date();
     const weekFromNow = new Date(now.getTime() + 7 * 86400000);
@@ -418,6 +452,9 @@ export class RemindersService {
 
     for (const user of users) {
       try {
+        const local = this.userLocalNow(user);
+        if (local.weekday !== TARGET_LOCAL_WEEKDAY) continue;
+        if (local.hour !== TARGET_LOCAL_HOUR) continue;
         // Dedupe to one digest per ~6 days even if the cron fires twice
         // (multi-pod, restart). The rest of the heavy aggregation below
         // only runs for users that actually need it.
@@ -503,8 +540,8 @@ export class RemindersService {
     }
   }
 
-  /** Win-back push for users inactive 7+ days — daily at 14:00 UTC */
-  @Cron('0 14 * * *')
+  /** Win-back push for users inactive 7+ days — at 14:00 in their local timezone. */
+  @Cron(CronExpression.EVERY_HOUR)
   async sendWinBackPush() {
     return runCronHandler('sendWinBackPush', this.logger, this.tg, () =>
       this.sendWinBackPushImpl(),
@@ -513,6 +550,7 @@ export class RemindersService {
 
   private async sendWinBackPushImpl() {
     this.logger.log('Running win-back push cron...');
+    const TARGET_LOCAL_HOUR = 14;
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000);
 
@@ -528,6 +566,7 @@ export class RemindersService {
 
     for (const user of inactiveUsers) {
       try {
+        if (this.userLocalNow(user).hour !== TARGET_LOCAL_HOUR) continue;
         // Don't pester the same user twice in a calendar day if the cron
         // restarts. Win-back is meant to be a gentle nudge, not a barrage.
         if (this.sentWithin(user.lastWinBackPushAt, 20)) continue;
