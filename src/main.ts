@@ -70,6 +70,12 @@ async function bootstrap() {
   const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
   const ORIGIN_BYPASS_PREFIXES = [
     '/api/v1/billing/webhook',
+    // RevenueCat posts server-to-server with no Origin header and a UA
+    // (`RevenueCat-Backend`) that doesn't match the non-browser regex —
+    // without this prefix every CANCELLATION/EXPIRATION/RENEWAL silently
+    // gets a 403 and the user's plan never downgrades.
+    '/api/v1/billing/revenuecat-webhook',
+    '/api/v1/notifications/resend-webhook',
     '/api/v1/auth/google/callback',
     '/health',
     '/metrics',
