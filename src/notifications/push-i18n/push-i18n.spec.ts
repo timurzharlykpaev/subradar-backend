@@ -40,6 +40,13 @@ describe('push-i18n', () => {
         daysLeft: 3,
         dateStr: '2026-05-01',
       },
+      paymentRemindersDigest: {
+        count: 3,
+        totalAmount: 42,
+        currency: 'USD',
+        earliestDays: 1,
+        topNames: ['Netflix', 'Spotify'],
+      },
       trialExpiry: { daysLeft: 1 },
       proExpiration: { daysLeft: 7 },
       weeklyDigest: {
@@ -49,16 +56,10 @@ describe('push-i18n', () => {
         renewingThisWeek: 2,
       },
       winBack: { upcomingCount: 3 },
-      upcomingBilling: {
-        subscriptionName: 'Spotify',
-        amount: 10,
-        currency: 'EUR',
-        billingDate: '2026-05-01',
-      },
     };
 
     for (const code of SUPPORTED_PUSH_LOCALES) {
-      it(`${code}: renders all 6 scenarios with non-empty title/body`, () => {
+      it(`${code}: renders all scenarios with non-empty title/body`, () => {
         const dict = pushT(code);
         for (const key of Object.keys(params) as (keyof typeof params)[]) {
           const result = (dict[key] as any)(params[key]);

@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { getQueueToken } from '@nestjs/bull';
 import { NotificationsService } from './notifications.service';
 import { SuppressionService } from './suppression.service';
 
@@ -16,7 +15,6 @@ jest.mock('resend', () => ({
   })),
 }));
 
-const mockQueue = { add: jest.fn().mockResolvedValue({ id: 'job-1' }) };
 const mockConfigService = {
   get: jest.fn((key: string, defaultVal?: string) => {
     if (key === 'RESEND_API_KEY') return 're_testkey';
@@ -31,7 +29,6 @@ describe('NotificationsService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         NotificationsService,
-        { provide: getQueueToken('notifications'), useValue: mockQueue },
         { provide: ConfigService, useValue: mockConfigService },
         {
           provide: SuppressionService,
@@ -44,14 +41,6 @@ describe('NotificationsService', () => {
   });
 
   it('should be defined', () => { expect(service).toBeDefined(); });
-
-  describe('scheduleReminderNotification', () => {
-    it('adds job to queue', async () => {
-      const jobData = { userId: 'u1', email: 'test@example.com', subscriptionName: 'Netflix', amount: 15, currency: 'USD', daysUntilBilling: 3, billingDate: '2024-12-01' };
-      await service.scheduleReminderNotification(jobData);
-      expect(mockQueue.add).toHaveBeenCalledWith('send-reminder', jobData, expect.any(Object));
-    });
-  });
 
   describe('sendUpcomingPaymentEmail', () => {
     it('calls sendEmail', async () => {

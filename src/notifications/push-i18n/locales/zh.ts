@@ -48,9 +48,4 @@ export const zh: PushI18n = {
     title: '👀 别错过即将到来的扣款',
     body: `本周有 ${upcomingCount} 个订阅将续订`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 即将扣款',
-    body: `${subscriptionName} 将于 ${billingDate} 扣款 ${fmtAmount(amount, currency)}`,
-  }),
 };

@@ -48,9 +48,4 @@ export const en: PushI18n = {
     title: "👀 Don't miss upcoming charges",
     body: `${upcomingCount} subscription${upcomingCount === 1 ? '' : 's'} renewing this week`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 Upcoming Billing',
-    body: `${subscriptionName} will be charged ${fmtAmount(amount, currency)} on ${billingDate}`,
-  }),
 };

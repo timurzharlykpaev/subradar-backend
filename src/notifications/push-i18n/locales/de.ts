@@ -48,9 +48,4 @@ export const de: PushI18n = {
     title: '👀 Verpasse keine anstehenden Abbuchungen',
     body: `${upcomingCount} Abo${upcomingCount === 1 ? '' : 's'} verlänger${upcomingCount === 1 ? 't sich' : 'n sich'} diese Woche`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 Anstehende Abbuchung',
-    body: `${subscriptionName} wird am ${billingDate} mit ${fmtAmount(amount, currency)} belastet`,
-  }),
 };

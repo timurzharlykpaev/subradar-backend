@@ -52,9 +52,4 @@ export const fr: PushI18n = {
     title: '👀 Ne ratez pas les prochains prélèvements',
     body: `${upcomingCount} abonnement${upcomingCount === 1 ? '' : 's'} se renouvelle${upcomingCount === 1 ? '' : 'nt'} cette semaine`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 Prélèvement à venir',
-    body: `${subscriptionName} sera prélevé de ${fmtAmount(amount, currency)} le ${billingDate}`,
-  }),
 };

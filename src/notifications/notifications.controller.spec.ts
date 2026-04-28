@@ -75,20 +75,21 @@ describe('NotificationsController', () => {
     expect(result).toHaveProperty('daysBefore', 3);
   });
 
-  it('sendTest sends push when user has fcmToken', async () => {
-    const body = { title: 'Test', message: 'Hello' };
-    const result = await controller.sendTest(req, body);
+  it('sendTest sends localized push when user has fcmToken', async () => {
+    const result = await controller.sendTest(req);
     expect(mockUsersService.findById).toHaveBeenCalledWith('user-1');
-    expect(mockNotificationsService.sendPushNotification).toHaveBeenCalledWith(
-      'fcm-token', 'Test', 'Hello',
-    );
+    expect(mockNotificationsService.sendPushNotification).toHaveBeenCalled();
+    const args = mockNotificationsService.sendPushNotification.mock.calls[0];
+    expect(args[0]).toBe('fcm-token');
+    expect(typeof args[1]).toBe('string'); // title
+    expect(typeof args[2]).toBe('string'); // body
+    expect(args[3]).toMatchObject({ type: 'test' });
     expect(result.message).toContain('sent');
   });
 
-  it('sendTest skips push when user has no fcmToken', async () => {
+  it('sendTest throws 400 when user has no fcmToken', async () => {
     mockUsersService.findById.mockResolvedValueOnce({ id: 'user-1', fcmToken: null });
-    const body = { title: 'Test', message: 'Hello' };
-    await controller.sendTest(req, body);
+    await expect(controller.sendTest(req)).rejects.toThrow();
     expect(mockNotificationsService.sendPushNotification).not.toHaveBeenCalled();
   });
 });

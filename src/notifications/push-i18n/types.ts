@@ -56,14 +56,6 @@ export interface PushI18n {
     title: string;
     body: string;
   };
-
-  /** Generic upcoming-billing job (notifications.processor → send-reminder). */
-  upcomingBilling: (params: {
-    subscriptionName: string;
-    amount: number | string;
-    currency: string;
-    billingDate: string;
-  }) => { title: string; body: string };
 }
 
 export const SUPPORTED_PUSH_LOCALES = [

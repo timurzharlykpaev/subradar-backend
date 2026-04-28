@@ -1,6 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectQueue } from '@nestjs/bull';
-import type { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
 import { Resend } from 'resend';
@@ -34,7 +32,6 @@ export class NotificationsService {
   private readonly expo = new Expo();
 
   constructor(
-    @InjectQueue('notifications') private readonly queue: Queue,
     private readonly cfg: ConfigService,
     private readonly suppression: SuppressionService,
   ) {
@@ -61,33 +58,6 @@ export class NotificationsService {
         });
       }
     }
-  }
-
-  /**
-   * @deprecated Unused since the reminder pipeline moved to RemindersService
-   * cron jobs (`sendDailyReminders`). Kept around so its Bull queue + Processor
-   * can be removed in a follow-up commit alongside the Module wiring; do not
-   * call it from new code — it would create a parallel reminder path with no
-   * dedupe guarantee against the cron jobs.
-   */
-  async scheduleReminderNotification(
-    jobData: {
-      userId: string;
-      fcmToken?: string;
-      email: string;
-      subscriptionName: string;
-      amount: number;
-      currency: string;
-      daysUntilBilling: number;
-      billingDate: string;
-      locale?: string;
-    },
-    delayMs = 0,
-  ) {
-    return this.queue.add('send-reminder', jobData, {
-      delay: delayMs,
-      attempts: 3,
-    });
   }
 
   async sendPushNotification(

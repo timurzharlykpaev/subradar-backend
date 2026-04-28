@@ -48,9 +48,4 @@ export const pt: PushI18n = {
     title: '👀 Não perca as próximas cobranças',
     body: `${upcomingCount} assinatura${upcomingCount === 1 ? '' : 's'} renovando esta semana`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 Cobrança a caminho',
-    body: `${subscriptionName} será cobrado ${fmtAmount(amount, currency)} em ${billingDate}`,
-  }),
 };

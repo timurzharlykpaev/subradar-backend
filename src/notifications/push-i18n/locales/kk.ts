@@ -52,9 +52,4 @@ export const kk: PushI18n = {
     title: '👀 Алдағы есептен шығаруларды өткізіп алмаңыз',
     body: `Осы аптада ${upcomingCount} жазылым жаңарады`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 Жақын арадағы есептен шығару',
-    body: `${subscriptionName} ${billingDate} күні ${fmtAmount(amount, currency)} есептен шығады`,
-  }),
 };

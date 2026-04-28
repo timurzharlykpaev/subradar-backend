@@ -48,9 +48,4 @@ export const ja: PushI18n = {
     title: '👀 まもなくの請求をお見逃しなく',
     body: `今週 ${upcomingCount} 件のサブスクが更新されます`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 請求予定',
-    body: `${subscriptionName} は ${billingDate} に ${fmtAmount(amount, currency)} 請求されます`,
-  }),
 };

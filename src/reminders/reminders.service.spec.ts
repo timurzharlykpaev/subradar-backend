@@ -28,8 +28,9 @@ const mockUserRepo = {
 };
 
 const mockNotificationsService = {
-  scheduleReminderNotification: jest.fn().mockResolvedValue({}),
   sendEmail: jest.fn().mockResolvedValue({}),
+  sendPushNotification: jest.fn().mockResolvedValue({}),
+  sendUpcomingPaymentEmail: jest.fn().mockResolvedValue({}),
 };
 
 describe('RemindersService', () => {

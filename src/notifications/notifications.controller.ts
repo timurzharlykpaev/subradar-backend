@@ -1,10 +1,21 @@
-import { Controller, Post, Get, Put, Body, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Put,
+  Body,
+  UseGuards,
+  Request,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { IsString, IsBoolean, IsNumber, IsOptional } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
 import { UsersService } from '../users/users.service';
-import { SUPPORTED_PUSH_LOCALES } from './push-i18n';
+import { SUPPORTED_PUSH_LOCALES, pushT } from './push-i18n';
 
 class PushTokenDto {
   @IsString() token: string;
@@ -88,15 +99,38 @@ export class NotificationsController {
     };
   }
 
+  /**
+   * Developer / debugging affordance — fires a localized test push to the
+   * caller's stored FCM token. The mobile dev-mode panel calls this so
+   * users can verify push permissions and tap-to-open behaviour without
+   * waiting for a real reminder cron tick.
+   *
+   * Throttled to 5/min to keep abuse off Apple/Google quota.
+   */
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('test')
-  async sendTest(
-    @Request() req,
-    @Body() body: { title: string; message: string },
-  ) {
+  async sendTest(@Request() req) {
     const user = await this.usersService.findById(req.user.id);
-    if (user.fcmToken) {
-      await this.service.sendPushNotification(user.fcmToken, body.title, body.message);
+    if (!user.fcmToken) {
+      throw new HttpException(
+        'No push token registered for this account. Open the app on a device where push permission was granted.',
+        HttpStatus.BAD_REQUEST,
+      );
     }
-    return { message: 'Test notification sent' };
+    const t = pushT(user.locale);
+    // Reuse the paymentReminder copy — it's the most common channel a user
+    // wants to verify and already exists in all 10 locales.
+    const { title, body } = t.paymentReminder({
+      name: 'SubRadar',
+      amount: 0,
+      currency: '',
+      daysLeft: 1,
+      dateStr: new Date().toISOString().slice(0, 10),
+    });
+    await this.service.sendPushNotification(user.fcmToken, title, body, {
+      type: 'test',
+      screen: '/(tabs)/settings',
+    });
+    return { message: 'Test notification sent', token: user.fcmToken.slice(0, 12) + '…' };
   }
 }

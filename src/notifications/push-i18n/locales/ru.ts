@@ -61,9 +61,4 @@ export const ru: PushI18n = {
     title: '👀 Не пропустите грядущие списания',
     body: `${upcomingCount} ${pluralRu(upcomingCount, 'подписка продлевается', 'подписки продлеваются', 'подписок продлеваются')} на этой неделе`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 Грядущее списание',
-    body: `${subscriptionName} спишется на ${fmtAmount(amount, currency)} ${billingDate}`,
-  }),
 };

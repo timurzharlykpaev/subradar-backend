@@ -48,9 +48,4 @@ export const ko: PushI18n = {
     title: '👀 다가오는 결제를 놓치지 마세요',
     body: `이번 주 ${upcomingCount}개 구독이 갱신됩니다`,
   }),
-
-  upcomingBilling: ({ subscriptionName, amount, currency, billingDate }) => ({
-    title: '🔔 결제 예정',
-    body: `${subscriptionName} 결제 ${fmtAmount(amount, currency)} (${billingDate})`,
-  }),
 };
