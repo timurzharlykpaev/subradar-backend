@@ -5,6 +5,7 @@ import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramAlertService } from '../common/telegram-alert.service';
+import { UserBillingRepository } from '../billing/user-billing.repository';
 
 const mockSubscriptionRepo = {
   createQueryBuilder: jest.fn(() => ({
@@ -44,6 +45,13 @@ describe('RemindersService', () => {
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: TelegramAlertService, useValue: { send: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: UserBillingRepository,
+          useValue: {
+            read: jest.fn(),
+            applyTransition: jest.fn().mockResolvedValue({ applied: true, from: 'active', to: 'free', snapshot: {} }),
+          },
+        },
       ],
     }).compile();
     service = module.get<RemindersService>(RemindersService);
@@ -177,7 +185,7 @@ describe('RemindersService', () => {
       await expect(service.expireTrials()).resolves.not.toThrow();
     });
 
-    it('downgrades expired trial users to free', async () => {
+    it('downgrades expired trial users via state machine + clears trialEndDate', async () => {
       const expiredUser = { id: 'user-1', email: 'user@test.com', plan: 'pro' };
       (mockUserRepo.createQueryBuilder as jest.Mock).mockReturnValue({
         where: jest.fn().mockReturnThis(),
@@ -185,11 +193,20 @@ describe('RemindersService', () => {
         getMany: jest.fn().mockResolvedValue([expiredUser]),
       });
       mockUserRepo.update = jest.fn().mockResolvedValue(undefined);
+      const userBilling = (service as any).userBilling;
+      userBilling.applyTransition = jest.fn().mockResolvedValue({
+        applied: true, from: 'active', to: 'free', snapshot: {},
+      });
 
       await expect(service.expireTrials()).resolves.not.toThrow();
+      expect(userBilling.applyTransition).toHaveBeenCalledWith(
+        'user-1',
+        { type: 'TRIAL_EXPIRED' },
+        { actor: 'cron_trial' },
+      );
       expect(mockUserRepo.update).toHaveBeenCalledWith(
         'user-1',
-        expect.objectContaining({ plan: 'free', billingStatus: 'free' }),
+        expect.objectContaining({ trialEndDate: null }),
       );
     });
   });
