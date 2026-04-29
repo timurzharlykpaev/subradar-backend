@@ -26,8 +26,23 @@ export class GracePeriodCron {
       });
       let count = 0;
       for (const u of users) {
+        // Grace ran out — drop the user back to free. Earlier this only
+        // wiped gracePeriodEnd, leaving `billingStatus` stuck on
+        // `grace_pro` / `grace_team` and `plan` on the old paid tier, so
+        // EffectiveAccessResolver kept granting paid access indefinitely.
+        const wasGracePro = u.billingStatus === 'grace_pro';
+        const wasGraceTeam = u.billingStatus === 'grace_team';
         u.gracePeriodEnd = null;
         u.gracePeriodReason = null;
+        if (wasGracePro || wasGraceTeam) {
+          u.billingStatus = 'free' as any;
+          u.cancelAtPeriodEnd = false;
+          u.currentPeriodEnd = null as any;
+          // grace_team users may have had no own subscription (they relied
+          // on a team owner) — only flip plan if it was paid.
+          if (u.plan !== 'free') u.plan = 'free' as any;
+          if (wasGracePro) u.billingSource = null as any;
+        }
         await this.userRepo.save(u);
         count++;
       }

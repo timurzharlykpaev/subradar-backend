@@ -1222,6 +1222,7 @@ export class BillingService {
     }
 
     const entitlements = rcData?.subscriber?.entitlements ?? {};
+    const subscriptions = rcData?.subscriber?.subscriptions ?? {};
     const now = Date.now();
 
     const isEntitlementActive = (e: any): boolean => {
@@ -1280,24 +1281,45 @@ export class BillingService {
       );
     }
 
+    // Look up the underlying RC subscription for this exact product so we can
+    // (a) write the correct currentPeriodStart and (b) detect the case where
+    // the user already cancelled this purchase (Apple Settings) and we must
+    // NOT clobber `cancelAtPeriodEnd` back to false. Without this, a Restore
+    // tap right after an Apple-Settings cancel re-stamped the user as
+    // active=true and silently neutralised the cancellation.
+    const subscriptionForProduct: any = subscriptions[productId] ?? null;
+    const periodEnd = matchingExpiresMs ? new Date(matchingExpiresMs) : null;
+    const periodStartRaw = subscriptionForProduct?.purchase_date;
+    const periodStartMs = periodStartRaw
+      ? Date.parse(String(periodStartRaw))
+      : NaN;
+    const periodStart =
+      !isNaN(periodStartMs) && periodStartMs > 0
+        ? new Date(periodStartMs)
+        : null;
+    const cancelDetectedForProduct = Boolean(
+      subscriptionForProduct?.unsubscribe_detected_at,
+    );
+
     // Single atomic UPDATE — avoids partial-save anomalies and concurrent
     // webhook writes clobbering freshly-set billingStatus. Team membership
     // takes precedence via effective access; `plan` here is just the "own
     // subscription" marker.
-    const periodEnd = matchingExpiresMs ? new Date(matchingExpiresMs) : null;
-    await this.usersService.update(userId, {
+    const patch: Record<string, any> = {
       plan,
       billingPeriod,
       billingSource: 'revenuecat',
-      billingStatus: 'active',
-      cancelAtPeriodEnd: false,
+      billingStatus: cancelDetectedForProduct ? 'cancel_at_period_end' : 'active',
+      cancelAtPeriodEnd: cancelDetectedForProduct,
       currentPeriodEnd: periodEnd,
       billingIssueAt: null,
       gracePeriodEnd: null,
       gracePeriodReason: null,
-    });
+    };
+    if (periodStart) patch.currentPeriodStart = periodStart;
+    await this.usersService.update(userId, patch);
     this.logger.log(
-      `syncRevenueCat: verified via RC — user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId}, periodEnd: ${periodEnd?.toISOString() ?? 'n/a'})`,
+      `syncRevenueCat: verified via RC — user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId}, periodStart: ${periodStart?.toISOString() ?? 'n/a'}, periodEnd: ${periodEnd?.toISOString() ?? 'n/a'}, cancelAtPeriodEnd: ${cancelDetectedForProduct})`,
     );
   }
 
