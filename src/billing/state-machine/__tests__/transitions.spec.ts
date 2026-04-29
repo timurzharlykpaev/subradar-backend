@@ -1,5 +1,5 @@
 import { transition } from '../transitions';
-import { UserBillingSnapshot } from '../types';
+import { InvalidTransitionError, UserBillingSnapshot } from '../types';
 
 function freeSnapshot(): UserBillingSnapshot {
   return {
@@ -303,6 +303,35 @@ describe('BillingStateMachine.transition', () => {
         currentPeriodEnd: new Date('2099-01-01'),
       };
       expect(transition(rcActive, { type: 'TRIAL_EXPIRED' })).toEqual(rcActive);
+    });
+  });
+
+  describe('ADMIN_GRANT_PRO', () => {
+    it('grants pro to a free user', () => {
+      const free = freeSnapshot();
+      const next = transition(free, {
+        type: 'ADMIN_GRANT_PRO',
+        plan: 'pro',
+        invitedByUserId: 'owner-1',
+      });
+      expect(next.plan).toBe('pro');
+      expect(next.state).toBe('active');
+      expect(next.billingSource).toBeNull();
+      expect(next.billingPeriod).toBeNull();
+      expect(next.currentPeriodEnd).toBeNull();
+      expect(next.cancelAtPeriodEnd).toBe(false);
+    });
+
+    it('throws when the user already has a paid plan', () => {
+      const active: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'pro',
+        state: 'active',
+        billingSource: 'revenuecat',
+      };
+      expect(() =>
+        transition(active, { type: 'ADMIN_GRANT_PRO', plan: 'pro', invitedByUserId: 'x' }),
+      ).toThrow(InvalidTransitionError);
     });
   });
 });
