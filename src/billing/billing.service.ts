@@ -1056,11 +1056,17 @@ export class BillingService {
         throw new ConflictException('User already on a paid plan');
       }
 
-      invitee.plan = 'pro';
-      invitee.billingSource = null as any;
+      // billing fields are owned by the state machine; only non-billing
+      // book-keeping (invitedByUserId / proInviteeEmail) goes through `m.save`.
       invitee.invitedByUserId = owner.id;
       owner.proInviteeEmail = email;
       await m.save([owner, invitee]);
+
+      await this.userBilling.applyTransition(
+        invitee.id,
+        { type: 'ADMIN_GRANT_PRO', plan: 'pro', invitedByUserId: owner.id },
+        { actor: 'admin_grant', manager: m },
+      );
 
       await this.audit.log({
         userId: owner.id,
@@ -1114,10 +1120,16 @@ export class BillingService {
 
       const previousPlan = invitee.plan;
       const inviterId = invitee.invitedByUserId;
-      invitee.plan = 'free';
-      invitee.billingSource = null as any;
       invitee.invitedByUserId = null;
       await m.save(invitee);
+
+      // billing fields owned by the state machine — TRIAL_EXPIRED is the
+      // canonical "drop to free + clear period" verb for non-RC paid rows.
+      await this.userBilling.applyTransition(
+        invitee.id,
+        { type: 'TRIAL_EXPIRED' },
+        { actor: 'admin_grant', manager: m },
+      );
 
       await this.audit.log({
         userId: inviterId ?? invitee.id,
