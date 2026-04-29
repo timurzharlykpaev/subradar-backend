@@ -162,7 +162,15 @@ export class EffectiveAccessResolver {
       hasOwnPaidPlan &&
       user.plan &&
       user.plan !== 'free' &&
-      !PAID_STATES.has(billingStatus)
+      !PAID_STATES.has(billingStatus) &&
+      // Self-heal MUST NOT fire when the period has already lapsed —
+      // otherwise a user whose EXPIRATION webhook never arrived stays on
+      // Pro forever. We only paper over the gap while the receipt is
+      // still inside the paid window: `currentPeriodEnd` either null
+      // (very fresh purchase, webhook hasn't filled it yet) or in the
+      // future. If it's in the past, fall through to free / grace.
+      (user.currentPeriodEnd == null ||
+        new Date(user.currentPeriodEnd).getTime() > now.getTime())
     ) {
       // Defensive self-heal: billingSource is set and `user.plan` reflects the
       // purchased tier, but `billingStatus` lags behind (e.g. sync-revenuecat
@@ -170,7 +178,8 @@ export class EffectiveAccessResolver {
       // webhook arrived before sync in Sandbox). Without this branch the user
       // appears as free right after a verified purchase, which is never
       // correct when we hold a valid RC entitlement. An actual lapse will be
-      // corrected by the next RC webhook (BILLING_ISSUE/EXPIRATION).
+      // corrected by the next RC webhook (BILLING_ISSUE/EXPIRATION) or by
+      // the currentPeriodEnd guard above.
       this.logger.warn(
         `EffectiveAccess self-heal: user ${userId} billingSource=${billingSource} plan=${user.plan} but billingStatus=${billingStatus}; treating as paid`,
       );

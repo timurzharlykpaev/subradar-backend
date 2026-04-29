@@ -382,7 +382,11 @@ export class BillingService {
     }
   }
 
-  async claimWebhookEvent(provider: string, eventId: string): Promise<boolean> {
+  async claimWebhookEvent(
+    provider: string,
+    eventId: string,
+    eventType?: string | null,
+  ): Promise<boolean> {
     if (!eventId) {
       // Without a stable event_id we can't dedupe — just let it through
       // and rely on downstream idempotency of the individual operations.
@@ -390,7 +394,16 @@ export class BillingService {
       return true;
     }
     try {
-      await this.webhookEventRepo.insert({ provider, eventId });
+      // Write event_type on INSERT so we have observability even when the
+      // handler bails early (anonymous user, user-not-found, processing
+      // crash before updateWebhookEventMeta) — previously event_type stayed
+      // NULL on those paths and the reconciliation cron lost its grip on
+      // which webhooks need replay.
+      await this.webhookEventRepo.insert({
+        provider,
+        eventId,
+        eventType: eventType ?? null,
+      });
       return true;
     } catch (err) {
       const isUniqueViolation =
@@ -448,7 +461,7 @@ export class BillingService {
 
     const email: string | undefined = data?.attributes?.user_email;
 
-    const claimed = await this.claimWebhookEvent('lemon_squeezy', eventId);
+    const claimed = await this.claimWebhookEvent('lemon_squeezy', eventId, event);
     if (!claimed) return;
 
     // Resolve local user id from LS customer email — best effort; the
@@ -638,12 +651,14 @@ export class BillingService {
       return;
     }
 
-    const claimed = await this.claimWebhookEvent('revenuecat', eventId);
+    const claimed = await this.claimWebhookEvent('revenuecat', eventId, type);
     if (!claimed) return;
 
     const user = await this.usersService.findById(appUserId).catch(() => null);
     if (!user) {
       this.logger.warn(`RevenueCat webhook: user ${appUserId} not found`);
+      // Stamp user_id=null but keep event_type so the row remains diagnostic.
+      await this.updateWebhookEventMeta('revenuecat', eventId, null, type, 'user_not_found');
       return;
     }
 
@@ -1324,6 +1339,7 @@ export class BillingService {
     }
 
     const entitlements = rcData?.subscriber?.entitlements ?? {};
+    const subscriptions = rcData?.subscriber?.subscriptions ?? {};
     const now = Date.now();
     const hasActiveEntitlement = Object.values(entitlements).some((e: any) => {
       if (!e) return false;
@@ -1334,7 +1350,37 @@ export class BillingService {
       return !isNaN(ts) && ts > now;
     });
 
+    // RC sets `unsubscribe_detected_at` the moment the user cancels, even
+    // though the entitlement remains active until expires_date. Without
+    // honouring this signal, reconcile silently returned `noop` and the
+    // backend stayed on `state='active'` forever — the exact bug behind
+    // production users seeing "Pro" indefinitely after cancelling in the
+    // App Store.
+    const cancelDetected = Object.values(subscriptions).some(
+      (s: any) => s && s.unsubscribe_detected_at,
+    );
+
     if (hasActiveEntitlement) {
+      // Apple-cancelled but still in the paid period → mirror it onto the
+      // user row so /billing/me can reflect the "cancelling on X" state and
+      // the paywall lets them upgrade to Team.
+      if (cancelDetected && !user.cancelAtPeriodEnd) {
+        const latestExpiresMs = Object.values(subscriptions)
+          .map((s: any) => (s?.expires_date ? Date.parse(String(s.expires_date)) : NaN))
+          .filter((n) => !isNaN(n))
+          .reduce((max, ts) => (ts > max ? ts : max), 0);
+        await this.usersService.update(userId, {
+          cancelAtPeriodEnd: true,
+          billingStatus: 'cancel_at_period_end' as any,
+          ...(latestExpiresMs > 0
+            ? { currentPeriodEnd: new Date(latestExpiresMs) }
+            : {}),
+        });
+        this.logger.log(
+          `reconcileRevenueCat: user ${userId} cancel detected via unsubscribe_detected_at → cancel_at_period_end`,
+        );
+        return { action: 'cancel_at_period_end', reason: 'unsubscribe_detected_at' };
+      }
       return { action: 'noop', reason: 'rc_has_active_entitlement' };
     }
 
