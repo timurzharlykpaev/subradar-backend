@@ -641,6 +641,23 @@ export class BillingService {
     const appUserId: string = event.app_user_id;
     const productId: string = event.product_id;
 
+    // Reject sandbox events when running in production. Without this guard
+    // a developer with a TestFlight build pointed at the prod backend can
+    // emit an INITIAL_PURCHASE for a free Apple sandbox account and the
+    // prod DB will happily upgrade them to Pro. The override env var
+    // ALLOW_RC_SANDBOX exists so we can intentionally accept sandbox in
+    // staging/dev environments that share a webhook URL.
+    const env = (event.environment ?? '').toUpperCase();
+    const isSandbox = env === 'SANDBOX';
+    const isProdNode = (this.cfg.get<string>('NODE_ENV', '') || '').toLowerCase() === 'production';
+    const allowSandboxOverride = (this.cfg.get<string>('ALLOW_RC_SANDBOX', '') || '').toLowerCase() === 'true';
+    if (isSandbox && isProdNode && !allowSandboxOverride) {
+      this.logger.warn(
+        `RevenueCat: ignoring SANDBOX event ${type} (app_user_id=${appUserId}) on production`,
+      );
+      return;
+    }
+
     // RC provides a stable `event.id` on every delivery.
     const eventId: string =
       event.id ||

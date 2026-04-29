@@ -187,7 +187,10 @@ describe('RemindersService', () => {
       mockUserRepo.update = jest.fn().mockResolvedValue(undefined);
 
       await expect(service.expireTrials()).resolves.not.toThrow();
-      expect(mockUserRepo.update).toHaveBeenCalledWith('user-1', { plan: 'free' });
+      expect(mockUserRepo.update).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ plan: 'free', billingStatus: 'free' }),
+      );
     });
   });
 });

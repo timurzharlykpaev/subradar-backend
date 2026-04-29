@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -12,6 +13,7 @@ export class UsersService {
   constructor(
     @InjectRepository(User) private readonly repo: Repository<User>,
     private readonly audit: AuditService,
+    private readonly cfg: ConfigService,
   ) {}
 
   async findById(id: string): Promise<User> {
@@ -120,6 +122,59 @@ export class UsersService {
     return this.repo.save(user);
   }
 
+  /**
+   * Delete the RC subscriber record so Apple stops attributing future
+   * webhooks to a deleted user. Best-effort: if RC returns 404 (already
+   * gone) or the call fails, we continue with the local delete — the
+   * user has explicitly asked to delete their data and we shouldn't block
+   * on a third-party outage. GDPR / Apple HIG explicitly require us to
+   * tell RC to forget the user when we delete the account.
+   *
+   * Note: this does NOT cancel the underlying Apple subscription — Apple
+   * controls IAP cancellation and we have no API for that. The user must
+   * cancel via App Store; the in-app delete-account UI should warn them.
+   */
+  private async deleteRevenueCatSubscriber(userId: string): Promise<void> {
+    const apiKey =
+      this.cfg.get<string>('REVENUECAT_API_KEY_SECRET', '') ||
+      this.cfg.get<string>('REVENUECAT_API_KEY', '');
+    if (!apiKey) {
+      this.logger.warn(
+        `deleteRevenueCatSubscriber: no RC API key — skipping (id=${userId})`,
+      );
+      return;
+    }
+    try {
+      const res = await fetch(
+        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+        {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+      if (res.ok) {
+        this.logger.log(`RC subscriber deleted (id=${userId})`);
+      } else if (res.status === 404) {
+        this.logger.log(
+          `RC subscriber already absent (id=${userId}, 404) — skipping`,
+        );
+      } else {
+        const text = await res.text().catch(() => '');
+        this.logger.warn(
+          `RC subscriber delete failed (id=${userId}, status=${res.status}): ${text.slice(0, 200)}`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `RC subscriber delete error (id=${userId}): ${e?.message ?? e}`,
+      );
+    }
+  }
+
   async deleteAccount(id: string): Promise<void> {
     const em = this.repo.manager;
 
@@ -135,6 +190,12 @@ export class UsersService {
           createdAt: existing.createdAt,
         }
       : null;
+
+    // Tell RC to forget this user — required by Apple HIG & GDPR. Best-
+    // effort, doesn't block local delete if RC is unreachable.
+    if (existing?.billingSource === 'revenuecat') {
+      await this.deleteRevenueCatSubscriber(id);
+    }
 
     // Order matters: delete children before parents (workspaces own workspace_members
     // via FK; delete members first, then workspaces). FK-constrained deletes must

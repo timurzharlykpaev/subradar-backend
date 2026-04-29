@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service';
@@ -38,6 +39,10 @@ describe('UsersService', () => {
         UsersService,
         { provide: getRepositoryToken(User), useValue: mockRepo },
         { provide: AuditService, useValue: { log: jest.fn() } },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn(() => '') },
+        },
       ],
     }).compile();
     service = module.get<UsersService>(UsersService);

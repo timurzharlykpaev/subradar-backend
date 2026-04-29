@@ -33,6 +33,11 @@ export type BillingEvent =
   | { type: 'RC_UNCANCELLATION' }
   | { type: 'RC_EXPIRATION' }
   | { type: 'RC_BILLING_ISSUE' }
+  // Apple-issued refund — entitlement is reversed immediately, no period
+  // continuation. The previous code path mapped this through the regular
+  // CANCELLATION handler, which would have left the user with full Pro
+  // access until period end after their money was returned.
+  | { type: 'RC_REFUND' }
   | { type: 'TEAM_OWNER_EXPIRED'; memberHasOwnSub: boolean }
   | { type: 'TEAM_MEMBER_REMOVED' }
   | { type: 'GRACE_EXPIRED' }

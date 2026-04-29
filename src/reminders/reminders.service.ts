@@ -600,10 +600,29 @@ export class RemindersService {
       .andWhere('u.trialUsed = true')
       .andWhere('u.trialEndDate < NOW()')
       .andWhere('u.lemonSqueezyCustomerId IS NULL')
+      // Skip users who started a real RC subscription on top of the
+      // legacy trial — their billingSource will be set, and we must not
+      // null out their plan. The trial timer is only authoritative for
+      // backend-only trials.
+      .andWhere('(u."billingSource" IS NULL)')
       .getMany();
 
     for (const user of expired) {
-      await this.userRepo.update(user.id, { plan: 'free' } as any);
+      // Update plan AND billingStatus together. The previous version only
+      // touched `plan`, leaving `billingStatus='active'` from the trial
+      // start, which made EffectiveAccessResolver still report Pro via
+      // PAID_STATES.has(billingStatus) — the trial "expired" by the cron
+      // but the user kept seeing Pro in /billing/me until something else
+      // wrote to billingStatus. cancelAtPeriodEnd is also cleared so the
+      // banner pipeline doesn't mistake an expired trial for an
+      // outstanding cancellation.
+      await this.userRepo.update(user.id, {
+        plan: 'free',
+        billingStatus: 'free' as any,
+        cancelAtPeriodEnd: false,
+        currentPeriodEnd: null as any,
+        trialEndDate: null as any,
+      });
       this.logger.log(`Trial expired → downgraded to free: ${user.email}`);
     }
     if (expired.length > 0) {

@@ -12,7 +12,20 @@ export function transition(
 ): UserBillingSnapshot {
   switch (e.type) {
     case 'RC_INITIAL_PURCHASE':
-      if (s.state !== 'free' && s.state !== 'grace_pro' && s.state !== 'grace_team') {
+      // Allow from `active`, `cancel_at_period_end`, `billing_issue` too —
+      // those happen on Restore Purchases (new device, reinstall) where RC
+      // re-emits INITIAL_PURCHASE for an entitlement we already track.
+      // Treating these as no-op-ish (refresh the period, clear billing
+      // issue) is the only thing that keeps Restore from 500-ing — Apple
+      // Review does test Restore on a fresh device.
+      if (
+        s.state !== 'free' &&
+        s.state !== 'grace_pro' &&
+        s.state !== 'grace_team' &&
+        s.state !== 'active' &&
+        s.state !== 'cancel_at_period_end' &&
+        s.state !== 'billing_issue'
+      ) {
         throw new InvalidTransitionError(s.state, e.type);
       }
       return {
@@ -30,7 +43,18 @@ export function transition(
       };
 
     case 'RC_RENEWAL':
-      if (s.state !== 'active' && s.state !== 'billing_issue') {
+      // Apple may auto-renew a subscription that was flagged for
+      // cancellation if the user changed their mind in Settings (the
+      // UNCANCELLATION webhook can be delayed or lost). Accept RENEWAL
+      // from `cancel_at_period_end` too — clearing the cancel flag so
+      // the user's paid period continues normally instead of crashing
+      // the webhook (which would mean their money is taken but plan
+      // stays "cancelling").
+      if (
+        s.state !== 'active' &&
+        s.state !== 'billing_issue' &&
+        s.state !== 'cancel_at_period_end'
+      ) {
         throw new InvalidTransitionError(s.state, e.type);
       }
       return {
@@ -43,13 +67,25 @@ export function transition(
       };
 
     case 'RC_PRODUCT_CHANGE':
-      if (s.state !== 'active') throw new InvalidTransitionError(s.state, e.type);
+      // Pro→Team mid-period upgrade is allowed by Apple even when the
+      // current Pro is `cancel_at_period_end`. Previously throwing here
+      // meant a user who cancelled Pro and then chose Team would see the
+      // webhook fail and stay on Pro forever.
+      if (s.state !== 'active' && s.state !== 'cancel_at_period_end') {
+        throw new InvalidTransitionError(s.state, e.type);
+      }
       return {
         ...s,
         plan: e.newPlan,
+        state: 'active',
         billingPeriod: e.period,
         currentPeriodStart: e.periodStart,
         currentPeriodEnd: e.periodEnd,
+        // The cancel-at-period-end flag belongs to the previous Pro
+        // subscription and must be cleared on PRODUCT_CHANGE — Apple
+        // issues a fresh subscription for the new product.
+        cancelAtPeriodEnd: false,
+        billingIssueAt: null,
       };
 
     case 'RC_CANCELLATION':
@@ -76,6 +112,25 @@ export function transition(
         graceExpiresAt: addDays(GRACE_PERIOD_DAYS),
         graceReason: 'pro_expired',
         cancelAtPeriodEnd: false,
+        billingIssueAt: null,
+      };
+
+    case 'RC_REFUND':
+      // Apple granted a refund. The receipt is reversed effective
+      // immediately — no grace period, no period-end continuation. Drop
+      // the user to free right away. Idempotent: refund on an already-
+      // free row is a no-op.
+      return {
+        ...s,
+        plan: 'free',
+        state: 'free',
+        billingSource: null,
+        billingPeriod: null,
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        graceExpiresAt: null,
+        graceReason: null,
         billingIssueAt: null,
       };
 
