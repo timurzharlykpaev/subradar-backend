@@ -89,6 +89,10 @@ export function computeBannerPriority(input: BannerInput): BannerResult {
         payload: {
           daysLeft,
           endsAt: input.currentPeriodEnd.toISOString(),
+          // `plan` is needed so the mobile banner can render
+          // "Pro ends in N days" vs "Team ends in N days" instead of
+          // hardcoding "Pro" for Team owners who cancelled.
+          plan: input.plan,
         },
       };
     }
