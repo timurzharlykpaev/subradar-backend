@@ -110,10 +110,20 @@ export class BillingService {
 
     const isTeamOwner = !!(workspace && workspace.ownerId === user.id);
     const isTeamMember = !!member;
+    // A user is "still on Pro/Team" while EITHER:
+    //   - the sub auto-renews (!cancelAtPeriodEnd), OR
+    //   - they cancelled but the period hasn't elapsed yet
+    //     (currentPeriodEnd > now) — Apple HIG requires honouring
+    //     paid access until the period closes, and this is the
+    //     branch the previous code missed: cancel_at_period_end
+    //     users got dumped into the `free` default below and hit
+    //     the 3-sub limit despite having paid Team/Pro access.
+    const periodStillActive =
+      !!user.currentPeriodEnd && new Date(user.currentPeriodEnd) > now;
     const hasOwnPro =
       user.billingSource === 'revenuecat' &&
       (user.plan === 'pro' || user.plan === 'organization') &&
-      !user.cancelAtPeriodEnd;
+      (!user.cancelAtPeriodEnd || periodStillActive);
 
     const computeDaysLeft = (date: Date | null): number | undefined => {
       if (!date) return undefined;
