@@ -1,0 +1,119 @@
+import { BillingEvent, BillingPeriod, Plan, RCSubscriberSnapshot, UserBillingSnapshot } from './types';
+
+function planFromProductId(productId: string | undefined): Exclude<Plan, 'free'> | null {
+  if (!productId) return null;
+  const lc = productId.toLowerCase();
+  if (lc.includes('team') || lc.includes('org')) return 'organization';
+  if (lc.includes('pro') || lc.includes('premium')) return 'pro';
+  return null;
+}
+
+function periodFromProductId(productId: string | undefined): BillingPeriod {
+  if (!productId) return 'monthly';
+  return productId.toLowerCase().includes('yearly') ? 'yearly' : 'monthly';
+}
+
+interface PickedEntitlement {
+  plan: Exclude<Plan, 'free'>;
+  period: BillingPeriod;
+  expiresAt: Date;
+  productId: string;
+}
+
+function pickActiveEntitlement(
+  rc: RCSubscriberSnapshot,
+  hint?: string,
+): PickedEntitlement | null {
+  const now = Date.now();
+  const isActive = (e: { expiresAt: Date | null }): boolean =>
+    e.expiresAt == null || e.expiresAt.getTime() > now;
+
+  if (hint) {
+    for (const ent of Object.values(rc.entitlements)) {
+      if (ent.productId === hint && isActive(ent) && ent.expiresAt) {
+        const plan = planFromProductId(ent.productId);
+        if (plan) {
+          return {
+            plan,
+            period: periodFromProductId(ent.productId),
+            expiresAt: ent.expiresAt,
+            productId: ent.productId,
+          };
+        }
+      }
+    }
+  }
+
+  // Prefer team over pro when both are active.
+  const active = Object.values(rc.entitlements).filter((e) => isActive(e) && e.expiresAt);
+  const team = active.find((e) => planFromProductId(e.productId) === 'organization');
+  const pro = active.find((e) => planFromProductId(e.productId) === 'pro');
+  const pick = team ?? pro;
+  if (!pick) return null;
+  const plan = planFromProductId(pick.productId);
+  if (!plan || !pick.expiresAt) return null;
+  return {
+    plan,
+    period: periodFromProductId(pick.productId),
+    expiresAt: pick.expiresAt,
+    productId: pick.productId,
+  };
+}
+
+/**
+ * Map a RevenueCat subscriber snapshot + the user's current billing state
+ * onto a single BillingEvent — the same event the webhook would produce
+ * for the equivalent transition. Returns null when nothing changed.
+ *
+ * The state machine itself stays oblivious to RC; this helper is the
+ * only RC-aware piece outside the webhook event mapper.
+ */
+export function inferEventFromRcSnapshot(
+  rc: RCSubscriberSnapshot,
+  current: UserBillingSnapshot,
+  productIdHint?: string,
+): BillingEvent | null {
+  const active = pickActiveEntitlement(rc, productIdHint);
+
+  if (!active) {
+    if (current.state === 'free') return null;
+    const periodEnd = current.currentPeriodEnd;
+    if (periodEnd && periodEnd.getTime() > Date.now()) {
+      return { type: 'RC_CANCELLATION', periodEnd };
+    }
+    return { type: 'RC_EXPIRATION' };
+  }
+
+  if (
+    rc.billingIssueDetectedAt &&
+    (current.state === 'active' || current.state === 'cancel_at_period_end')
+  ) {
+    return { type: 'RC_BILLING_ISSUE' };
+  }
+
+  if (rc.cancelAtPeriodEnd) {
+    return { type: 'RC_CANCELLATION', periodEnd: active.expiresAt };
+  }
+
+  if (current.state === 'free') {
+    return {
+      type: 'RC_INITIAL_PURCHASE',
+      plan: active.plan,
+      period: active.period,
+      periodStart: current.currentPeriodStart ?? new Date(),
+      periodEnd: active.expiresAt,
+    };
+  }
+
+  if (current.plan !== active.plan) {
+    return {
+      type: 'RC_PRODUCT_CHANGE',
+      newPlan: active.plan,
+      period: active.period,
+      periodStart: current.currentPeriodStart ?? new Date(),
+      periodEnd: active.expiresAt,
+    };
+  }
+
+  return null;
+}
