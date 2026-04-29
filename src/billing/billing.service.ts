@@ -1389,8 +1389,17 @@ export class BillingService {
     if (hasActiveEntitlement) {
       // Apple-cancelled but still in the paid period → mirror it onto the
       // user row so /billing/me can reflect the "cancelling on X" state and
-      // the paywall lets them upgrade to Team.
-      if (cancelDetected && !user.cancelAtPeriodEnd) {
+      // the paywall lets them upgrade to Team. We also re-stamp the row
+      // when only the billingStatus is out of sync (cancelAtPeriodEnd
+      // already true but status stuck on 'active' from an earlier code
+      // path that forgot to update it) — without this the noop branch
+      // would forever leave the user on `state: 'active'` despite the
+      // cancellation flag.
+      const needsCancelStamp =
+        cancelDetected &&
+        (!user.cancelAtPeriodEnd ||
+          user.billingStatus !== 'cancel_at_period_end');
+      if (needsCancelStamp) {
         const latestExpiresMs = Object.values(subscriptions)
           .map((s: any) => (s?.expires_date ? Date.parse(String(s.expires_date)) : NaN))
           .filter((n) => !isNaN(n))
@@ -1465,14 +1474,18 @@ export class BillingService {
       return;
     }
 
-    // Cancel RC subscription: mark cancelAtPeriodEnd. The actual termination
-    // happens when Apple stops charging and RC sends EXPIRATION webhook —
-    // this only flips the UI flag so the client can show "Cancels on …".
-    // The mobile client triggers this branch only after the user confirms
-    // cancel inside RevenueCat Customer Center / Apple Settings.
+    // Cancel RC subscription: mark cancelAtPeriodEnd AND flip billingStatus
+    // to 'cancel_at_period_end'. The actual downgrade waits for the
+    // EXPIRATION webhook (or the currentPeriodEnd guard in
+    // EffectiveAccessResolver). Without updating billingStatus here
+    // /billing/me returned `state: 'active'` after a successful cancel,
+    // which made the UI think the cancellation never happened — the user
+    // saw the Pro/Team badge intact and the Cancel CTA still active.
+    // Idempotent if the field is already in the right state.
     if (user.plan !== 'free' && user.billingSource === 'revenuecat') {
       await this.usersService.update(userId, {
         cancelAtPeriodEnd: true,
+        billingStatus: 'cancel_at_period_end' as any,
       });
       this.logger.log(
         `cancelSubscription: RC subscription marked cancel-at-period-end for user ${userId}`,
