@@ -23,16 +23,6 @@ import { OutboxService } from './outbox/outbox.service';
 import { TrialsService } from './trials/trials.service';
 import { maskEmail } from '../common/utils/pii';
 import {
-  BillingEvent,
-  BillingPeriod,
-  BillingSource,
-  BillingState,
-  GraceReason,
-  Plan,
-  UserBillingSnapshot,
-  transition,
-} from './state-machine';
-import {
   mapRCEventToBillingEvent,
   PRODUCT_TO_PLAN as RC_PRODUCT_TO_PLAN_MAP,
   RCRawEvent,
@@ -92,10 +82,6 @@ export class BillingService {
       cfg.get('LEMON_SQUEEZY_TEAM_VARIANT_ID', '874623');
     this.teamYearlyVariantId =
       cfg.get('LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID', '') || this.teamVariantId;
-  }
-
-  private extractBillingPeriod(productId: string): 'monthly' | 'yearly' {
-    return productId?.toLowerCase().includes('yearly') ? 'yearly' : 'monthly';
   }
 
   /**
@@ -301,19 +287,6 @@ export class BillingService {
 
     return user.plan;
   }
-
-  private readonly RC_PRODUCT_TO_PLAN: Record<string, string> = {
-    // Production product IDs
-    'io.subradar.mobile.pro.monthly': 'pro',
-    'io.subradar.mobile.pro.yearly': 'pro',
-    'io.subradar.mobile.team.monthly': 'organization',
-    'io.subradar.mobile.team.yearly': 'organization',
-    // Sandbox / StoreKit test product IDs (same identifiers, just in case)
-    'com.goalin.subradar.pro.monthly': 'pro',
-    'com.goalin.subradar.pro.yearly': 'pro',
-    'com.goalin.subradar.team.monthly': 'organization',
-    'com.goalin.subradar.team.yearly': 'organization',
-  };
 
   /**
    * HMAC-SHA256 compare with timing-safe equal. Accepts an optional fallback
@@ -707,53 +680,6 @@ export class BillingService {
     }
   }
 
-  /**
-   * Snapshot a User entity as a `UserBillingSnapshot` for the state machine.
-   * Any DB column the state machine reads MUST be mapped here, and any
-   * column it writes MUST be mirrored in `applySnapshot` below.
-   */
-  private snapshotFromUser(u: User): UserBillingSnapshot {
-    return {
-      userId: u.id,
-      plan: (u.plan as Plan) ?? 'free',
-      state: (u.billingStatus as BillingState) ?? 'free',
-      billingSource: (u.billingSource as BillingSource) ?? null,
-      billingPeriod: (u.billingPeriod as BillingPeriod | null) ?? null,
-      currentPeriodStart: u.currentPeriodStart ?? null,
-      currentPeriodEnd: u.currentPeriodEnd ?? null,
-      cancelAtPeriodEnd: !!u.cancelAtPeriodEnd,
-      graceExpiresAt: u.gracePeriodEnd ?? null,
-      graceReason: (u.gracePeriodReason as GraceReason) ?? null,
-      billingIssueAt: u.billingIssueAt ?? null,
-    };
-  }
-
-  /**
-   * Apply a state-machine snapshot back onto the User row via the active
-   * EntityManager. Participates in the caller's transaction. Also mutates
-   * the in-memory `user` object so downstream code sees the new state
-   * without having to re-fetch.
-   */
-  private async applySnapshot(
-    m: EntityManager,
-    user: User,
-    next: UserBillingSnapshot,
-  ): Promise<void> {
-    const updates: Partial<User> = {
-      plan: next.plan,
-      billingStatus: next.state,
-      billingSource: next.billingSource as any,
-      billingPeriod: next.billingPeriod,
-      currentPeriodStart: next.currentPeriodStart,
-      currentPeriodEnd: next.currentPeriodEnd,
-      cancelAtPeriodEnd: next.cancelAtPeriodEnd,
-      gracePeriodEnd: next.graceExpiresAt,
-      gracePeriodReason: next.graceReason,
-      billingIssueAt: next.billingIssueAt,
-    };
-    await m.update(User, user.id, updates);
-    Object.assign(user, updates);
-  }
 
   private amplitudeEventForRC(rcType: string, billingEventType?: string): string {
     // Refunds enter the webhook handler as `CANCELLATION` (with
