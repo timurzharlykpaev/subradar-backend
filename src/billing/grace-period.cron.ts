@@ -6,6 +6,7 @@ import { User } from '../users/entities/user.entity';
 import { Workspace } from '../workspace/entities/workspace.entity';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
+import { UserBillingRepository } from './user-billing.repository';
 
 @Injectable()
 export class GracePeriodCron {
@@ -15,6 +16,7 @@ export class GracePeriodCron {
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     @InjectRepository(Workspace) private readonly workspaceRepo: Repository<Workspace>,
     private readonly tg: TelegramAlertService,
+    private readonly userBilling: UserBillingRepository,
   ) {}
 
   @Cron('5 0 * * *')
@@ -26,24 +28,14 @@ export class GracePeriodCron {
       });
       let count = 0;
       for (const u of users) {
-        // Grace ran out — drop the user back to free. Earlier this only
-        // wiped gracePeriodEnd, leaving `billingStatus` stuck on
-        // `grace_pro` / `grace_team` and `plan` on the old paid tier, so
-        // EffectiveAccessResolver kept granting paid access indefinitely.
-        const wasGracePro = u.billingStatus === 'grace_pro';
-        const wasGraceTeam = u.billingStatus === 'grace_team';
-        u.gracePeriodEnd = null;
-        u.gracePeriodReason = null;
-        if (wasGracePro || wasGraceTeam) {
-          u.billingStatus = 'free' as any;
-          u.cancelAtPeriodEnd = false;
-          u.currentPeriodEnd = null as any;
-          // grace_team users may have had no own subscription (they relied
-          // on a team owner) — only flip plan if it was paid.
-          if (u.plan !== 'free') u.plan = 'free' as any;
-          if (wasGracePro) u.billingSource = null as any;
-        }
-        await this.userRepo.save(u);
+        // Route through the state machine — GRACE_EXPIRED is a no-op when
+        // the user has already moved off grace, otherwise transitions to
+        // free + clears period/source.
+        await this.userBilling.applyTransition(
+          u.id,
+          { type: 'GRACE_EXPIRED' },
+          { actor: 'cron_grace' },
+        );
         count++;
       }
       this.logger.log(`Reset grace period for ${count} users`);
