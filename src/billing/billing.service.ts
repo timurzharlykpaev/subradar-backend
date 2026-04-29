@@ -1157,7 +1157,10 @@ export class BillingService {
     const ents = data?.subscriber?.entitlements ?? {};
     const subs = data?.subscriber?.subscriptions ?? {};
     const now = Date.now();
-    const entitlements: Record<string, { expiresAt: Date | null; productId: string }> = {};
+    const entitlements: Record<
+      string,
+      { expiresAt: Date | null; productId: string; willRenew?: boolean }
+    > = {};
     let latestExpirationMs: number | null = null;
     for (const [name, value] of Object.entries(ents) as [string, any][]) {
       const expRaw = value?.expires_date;
@@ -1168,9 +1171,19 @@ export class BillingService {
             ? Date.parse(String(expRaw))
             : NaN;
       if (!isNaN(expMs) && expMs > now) {
+        const productId = String(value?.product_identifier ?? '');
+        // Look up the underlying subscription for this exact product to
+        // know whether THIS specific entitlement is renewing — the user
+        // may have a cancelled Team running side-by-side with a freshly
+        // purchased Pro. Without per-entitlement granularity our picker
+        // would always prefer Team and the Pro purchase would never
+        // surface in /billing/me.
+        const sub = productId ? subs[productId] : null;
+        const willRenew = sub ? !sub?.unsubscribe_detected_at : undefined;
         entitlements[name] = {
           expiresAt: new Date(expMs),
-          productId: String(value?.product_identifier ?? ''),
+          productId,
+          willRenew,
         };
         if (latestExpirationMs == null || expMs > latestExpirationMs) {
           latestExpirationMs = expMs;

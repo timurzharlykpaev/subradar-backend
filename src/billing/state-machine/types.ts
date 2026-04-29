@@ -55,8 +55,25 @@ export class InvalidTransitionError extends Error {
 }
 
 export interface RCSubscriberSnapshot {
-  entitlements: Record<string, { expiresAt: Date | null; productId: string }>;
+  entitlements: Record<
+    string,
+    {
+      expiresAt: Date | null;
+      productId: string;
+      /**
+       * Per-entitlement renewal flag derived from
+       * `subscriptions[productId].unsubscribe_detected_at` (RC REST).
+       * Lets `pickActiveEntitlement` prefer a renewing Pro over a
+       * cancelled-but-still-active Team when both entitlements are
+       * present at once (the case the user reports as "купил Pro но
+       * шильдик Team остался"). Optional for backwards compat —
+       * older snapshot producers can leave it undefined.
+       */
+      willRenew?: boolean;
+    }
+  >;
   latestExpirationMs: number | null;
+  /** Global flag — true if ANY subscription has `unsubscribe_detected_at`. */
   cancelAtPeriodEnd: boolean;
   billingIssueDetectedAt: Date | null;
 }

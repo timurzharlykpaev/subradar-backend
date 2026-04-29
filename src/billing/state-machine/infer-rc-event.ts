@@ -44,11 +44,27 @@ function pickActiveEntitlement(
     }
   }
 
-  // Prefer team over pro when both are active.
+  // When both Team and Pro entitlements are active, normally prefer Team
+  // (higher tier) — BUT if Team is cancelled-at-period-end and Pro is
+  // renewing, surface Pro instead. Otherwise the cancelled Team would
+  // hide a freshly-purchased Pro from /billing/me until Team's period
+  // elapses, leaving the user staring at a "TEAM" badge they no longer
+  // own. willRenew is `false` only when RC reports
+  // `unsubscribe_detected_at` for that entitlement's subscription;
+  // `undefined` (snapshot didn't carry the flag) is treated as "still
+  // renewing" for backwards compat.
   const active = Object.values(rc.entitlements).filter((e) => isActive(e) && e.expiresAt);
+  const isRenewing = (e: { willRenew?: boolean }) => e.willRenew !== false;
   const team = active.find((e) => planFromProductId(e.productId) === 'organization');
   const pro = active.find((e) => planFromProductId(e.productId) === 'pro');
-  const pick = team ?? pro;
+  let pick: typeof active[number] | undefined;
+  if (team && pro) {
+    if (isRenewing(team)) pick = team;
+    else if (isRenewing(pro)) pick = pro;
+    else pick = team; // both cancelled — keep precedence
+  } else {
+    pick = team ?? pro;
+  }
   if (!pick) return null;
   const plan = planFromProductId(pick.productId);
   if (!plan || !pick.expiresAt) return null;
