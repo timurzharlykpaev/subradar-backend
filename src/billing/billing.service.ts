@@ -1168,177 +1168,109 @@ export class BillingService {
     });
   }
 
-  async syncRevenueCat(userId: string, productId: string): Promise<void> {
-    // MANDATORY server-side verification — never trust the client.
-    // Without the REST API key we cannot confirm the entitlement, so we
-    // refuse the sync (503) rather than upgrading blindly. This protects
-    // us from trivial curl-based plan forgery.
-    const rcApiKey =
+  /**
+   * Fetch RC's subscriber view and shape it into the framework-agnostic
+   * RCSubscriberSnapshot the state-machine helpers consume. Throws 503
+   * when the API is unreachable so callers don't silently degrade — RC
+   * is mandatory for plan-grant authentication.
+   */
+  private async fetchRcSubscriberSnapshot(
+    userId: string,
+  ): Promise<RCSubscriberSnapshot> {
+    const apiKey =
       this.cfg.get<string>('REVENUECAT_API_KEY_SECRET', '') ||
       this.cfg.get<string>('REVENUECAT_API_KEY', '');
-    if (!rcApiKey) {
-      this.logger.error(
-        'syncRevenueCat: REVENUECAT_API_KEY_SECRET not set — refusing to sync without server-side verification',
+    if (!apiKey) {
+      throw new ServiceUnavailableException(
+        'Billing verification is temporarily unavailable. Please try again later.',
+      );
+    }
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+        { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' } },
+      );
+    } catch (e) {
+      this.logger.error(`fetchRcSubscriberSnapshot: RC fetch failed: ${e}`);
+      throw new ServiceUnavailableException(
+        'Billing verification is temporarily unavailable. Please try again later.',
+      );
+    }
+    if (!res.ok) {
+      this.logger.warn(
+        `fetchRcSubscriberSnapshot: RC returned ${res.status} for user ${userId}`,
       );
       throw new ServiceUnavailableException(
         'Billing verification is temporarily unavailable. Please try again later.',
       );
     }
-
-    // Resolve plan and billing period from productId first (still validated below against RC entitlements).
-    let plan = this.RC_PRODUCT_TO_PLAN[productId];
-    if (!plan) {
-      const lower = productId.toLowerCase();
-      if (lower.includes('team') || lower.includes('org')) {
-        plan = 'organization';
-      } else if (lower.includes('pro') || lower.includes('premium')) {
-        plan = 'pro';
-      } else {
-        this.logger.warn(`syncRevenueCat: unknown productId "${productId}", defaulting to pro`);
-        plan = 'pro';
+    const data = await res.json();
+    const ents = data?.subscriber?.entitlements ?? {};
+    const subs = data?.subscriber?.subscriptions ?? {};
+    const now = Date.now();
+    const entitlements: Record<string, { expiresAt: Date | null; productId: string }> = {};
+    let latestExpirationMs: number | null = null;
+    for (const [name, value] of Object.entries(ents) as [string, any][]) {
+      const expRaw = value?.expires_date;
+      const expMs =
+        typeof expRaw === 'number'
+          ? expRaw
+          : expRaw
+            ? Date.parse(String(expRaw))
+            : NaN;
+      if (!isNaN(expMs) && expMs > now) {
+        entitlements[name] = {
+          expiresAt: new Date(expMs),
+          productId: String(value?.product_identifier ?? ''),
+        };
+        if (latestExpirationMs == null || expMs > latestExpirationMs) {
+          latestExpirationMs = expMs;
+        }
       }
     }
-    const billingPeriod = this.extractBillingPeriod(productId);
-
-    // Call RevenueCat REST API to confirm the user actually has an active
-    // entitlement. Docs: https://www.revenuecat.com/docs/service/api-reference
-    let rcRes: Response;
-    try {
-      rcRes = await fetch(
-        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${rcApiKey}`,
-            Accept: 'application/json',
-          },
-        },
-      );
-    } catch (e) {
-      this.logger.error(`syncRevenueCat: RC API fetch failed: ${e}`);
-      throw new ServiceUnavailableException(
-        'Billing verification is temporarily unavailable. Please try again later.',
-      );
-    }
-
-    if (!rcRes.ok) {
-      this.logger.warn(
-        `syncRevenueCat: RC API returned ${rcRes.status} for user ${userId}`,
-      );
-      throw new ServiceUnavailableException(
-        'Billing verification is temporarily unavailable. Please try again later.',
-      );
-    }
-
-    let rcData: any;
-    try {
-      rcData = await rcRes.json();
-    } catch (e) {
-      this.logger.error(`syncRevenueCat: RC API returned invalid JSON: ${e}`);
-      throw new ServiceUnavailableException(
-        'Billing verification is temporarily unavailable. Please try again later.',
-      );
-    }
-
-    const entitlements = rcData?.subscriber?.entitlements ?? {};
-    const subscriptions = rcData?.subscriber?.subscriptions ?? {};
-    const now = Date.now();
-
-    const isEntitlementActive = (e: any): boolean => {
-      if (!e) return false;
-      if (e.expires_date === null || e.expires_date === undefined) return true;
-      const ts = typeof e.expires_date === 'number'
-        ? e.expires_date
-        : Date.parse(e.expires_date);
-      return !isNaN(ts) && ts > now;
-    };
-
-    // Require an active entitlement that matches the requested plan tier.
-    // Match flexibly: RC dashboard often uses display names like "SubRadar Pro"
-    // or "Team Access" rather than canonical slugs. We accept any entitlement
-    // whose lowercased name contains a relevant keyword AND whose productId
-    // (when present) matches the purchase we're syncing.
-    const planKeywords = plan === 'organization'
-      ? ['team', 'org', 'organization']
-      : ['pro', 'premium'];
-
-    const matchesPlanTier = (name: string, value: any): boolean => {
-      const lcName = name.toLowerCase();
-      if (planKeywords.some((k) => lcName.includes(k))) return true;
-      // Fallback: entitlement tied to the exact product we just purchased.
-      const entProductId = String(value?.product_identifier ?? '').toLowerCase();
-      return entProductId === productId.toLowerCase();
-    };
-
-    let matchingExpiresMs: number | null = null;
-    const matchingActive = Object.entries(entitlements).some(
-      ([name, value]: [string, any]) => {
-        if (!matchesPlanTier(name, value) || !isEntitlementActive(value)) {
-          return false;
-        }
-        const raw = (value as any)?.expires_date;
-        const ts =
-          typeof raw === 'number'
-            ? raw
-            : raw != null
-              ? Date.parse(String(raw))
-              : NaN;
-        if (!isNaN(ts) && (matchingExpiresMs === null || ts > matchingExpiresMs)) {
-          matchingExpiresMs = ts;
-        }
-        return true;
-      },
+    const cancelAtPeriodEnd = Object.values(subs).some(
+      (s: any) => s && s.unsubscribe_detected_at,
     );
+    const billingIssueDetectedAt = Object.values(subs)
+      .map((s: any) => s?.billing_issues_detected_at)
+      .filter(Boolean)
+      .map((v: any) => new Date(String(v)))
+      .reduce<Date | null>((acc, d) => (!acc || d > acc ? d : acc), null);
+    return { entitlements, latestExpirationMs, cancelAtPeriodEnd, billingIssueDetectedAt };
+  }
 
-    if (!matchingActive) {
-      const seen = Object.keys(entitlements).join(',') || '<none>';
+  async syncRevenueCat(userId: string, productId: string): Promise<void> {
+    const rc = await this.fetchRcSubscriberSnapshot(userId);
+
+    // Require the requested product (or its tier) to actually be present in
+    // RC, otherwise the client is asking us to grant access we can't verify.
+    const lowerProductId = productId.toLowerCase();
+    const isOrgTier = lowerProductId.includes('team') || lowerProductId.includes('org');
+    const matches = Object.entries(rc.entitlements).some(([name, ent]) => {
+      const lcName = name.toLowerCase();
+      if (ent.productId === productId) return true;
+      if (isOrgTier) return lcName.includes('team') || lcName.includes('org');
+      return lcName.includes('pro') || lcName.includes('premium');
+    });
+    if (!matches) {
+      const seen = Object.keys(rc.entitlements).join(',') || '<none>';
       this.logger.warn(
-        `syncRevenueCat: user ${userId} has no active entitlement matching tier=${plan} (product=${productId}); RC returned entitlements=[${seen}]`,
+        `syncRevenueCat: user ${userId} has no active entitlement matching product=${productId}; RC returned [${seen}]`,
       );
       throw new ForbiddenException(
         'No active RevenueCat entitlement found for this account.',
       );
     }
 
-    // Look up the underlying RC subscription for this exact product so we can
-    // (a) write the correct currentPeriodStart and (b) detect the case where
-    // the user already cancelled this purchase (Apple Settings) and we must
-    // NOT clobber `cancelAtPeriodEnd` back to false. Without this, a Restore
-    // tap right after an Apple-Settings cancel re-stamped the user as
-    // active=true and silently neutralised the cancellation.
-    const subscriptionForProduct: any = subscriptions[productId] ?? null;
-    const periodEnd = matchingExpiresMs ? new Date(matchingExpiresMs) : null;
-    const periodStartRaw = subscriptionForProduct?.purchase_date;
-    const periodStartMs = periodStartRaw
-      ? Date.parse(String(periodStartRaw))
-      : NaN;
-    const periodStart =
-      !isNaN(periodStartMs) && periodStartMs > 0
-        ? new Date(periodStartMs)
-        : null;
-    const cancelDetectedForProduct = Boolean(
-      subscriptionForProduct?.unsubscribe_detected_at,
-    );
-
-    // Single atomic UPDATE — avoids partial-save anomalies and concurrent
-    // webhook writes clobbering freshly-set billingStatus. Team membership
-    // takes precedence via effective access; `plan` here is just the "own
-    // subscription" marker.
-    const patch: Record<string, any> = {
-      plan,
-      billingPeriod,
-      billingSource: 'revenuecat',
-      billingStatus: cancelDetectedForProduct ? 'cancel_at_period_end' : 'active',
-      cancelAtPeriodEnd: cancelDetectedForProduct,
-      currentPeriodEnd: periodEnd,
-      billingIssueAt: null,
-      gracePeriodEnd: null,
-      gracePeriodReason: null,
-    };
-    if (periodStart) patch.currentPeriodStart = periodStart;
-    await this.usersService.update(userId, patch);
-    this.logger.log(
-      `syncRevenueCat: verified via RC — user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId}, periodStart: ${periodStart?.toISOString() ?? 'n/a'}, periodEnd: ${periodEnd?.toISOString() ?? 'n/a'}, cancelAtPeriodEnd: ${cancelDetectedForProduct})`,
-    );
+    const current = await this.userBilling.read(userId);
+    const event = inferEventFromRcSnapshot(rc, current, productId);
+    if (!event) {
+      this.logger.log(`syncRevenueCat: user ${userId} already in sync`);
+      return;
+    }
+    await this.userBilling.applyTransition(userId, event, { actor: 'sync' });
+    this.logger.log(`syncRevenueCat: user ${userId} → ${event.type}`);
   }
 
   /**
