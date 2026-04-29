@@ -40,7 +40,8 @@
 
 ## User Billing State Machine
 
-The `user_billing.billingStatus` column is owned by a finite-state machine.
+The `user_billing.billingStatus` column is owned by a finite-state machine
+(see `state-machine/transitions.ts`).
 Every transition runs through `UserBillingRepository.applyTransition(userId, event)`
 — the only call site allowed to write `plan` / `billingStatus` / `billingSource` /
 `billingPeriod` / `currentPeriodStart` / `currentPeriodEnd` / `cancelAtPeriodEnd` /
