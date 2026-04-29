@@ -5,6 +5,7 @@ import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
 import { EffectiveAccessResolver } from './effective-access/effective-access.service';
 import { TrialsService } from './trials/trials.service';
+import { IdempotencyService } from '../common/idempotency/idempotency.service';
 
 describe('BillingController', () => {
   let controller: BillingController;
@@ -56,6 +57,15 @@ describe('BillingController', () => {
         { provide: UsersService, useValue: mockUsersService },
         { provide: EffectiveAccessResolver, useValue: mockEffective },
         { provide: TrialsService, useValue: mockTrials },
+        {
+          provide: IdempotencyService,
+          useValue: {
+            run: jest.fn(async (_u, _e, _k, _b, handler: any) => {
+              const r = await handler();
+              return { cached: false, statusCode: r.statusCode, body: r.body };
+            }),
+          },
+        },
       ],
     }).compile();
 

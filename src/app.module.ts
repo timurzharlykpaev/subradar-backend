@@ -28,6 +28,7 @@ import { FxModule } from './fx/fx.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { HealthModule } from './health/health.module';
 import { AuditModule } from './common/audit/audit.module';
+import { IdempotencyModule } from './common/idempotency/idempotency.module';
 
 @Module({
   controllers: [AppController, ClientErrorController],
@@ -138,6 +139,7 @@ import { AuditModule } from './common/audit/audit.module';
     CatalogModule,
     HealthModule,
     AuditModule,
+    IdempotencyModule,
     ScheduleModule.forRoot(),
   ],
   providers: [
