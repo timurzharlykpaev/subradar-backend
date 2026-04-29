@@ -134,8 +134,30 @@ export class EffectiveAccessResolver {
       effectivePlan = 'organization';
       source = 'team';
     } else if (hasOwnPaidPlan && PAID_STATES.has(billingStatus)) {
-      effectivePlan = (user.plan as EffectivePlan) ?? 'free';
-      source = 'own';
+      // Hard guard: a `cancel_at_period_end` row is only "paid" until
+      // currentPeriodEnd lands. If the EXPIRATION webhook never arrives
+      // (Sandbox flakiness, network drop, missing signing secret) the row
+      // would otherwise stay on `pro` forever, blocking upgrades and
+      // making the paywall "cancel Pro first" gate impossible to clear.
+      // BillingService.getEffectivePlan already does this; the resolver
+      // used by /billing/me did not — that's the bug the user is hitting.
+      const currentPeriodEnd = user.currentPeriodEnd
+        ? new Date(user.currentPeriodEnd)
+        : null;
+      const periodExpired =
+        billingStatus === 'cancel_at_period_end' &&
+        currentPeriodEnd !== null &&
+        currentPeriodEnd.getTime() <= now.getTime();
+      if (periodExpired) {
+        this.logger.warn(
+          `EffectiveAccess: user ${userId} cancel_at_period_end with currentPeriodEnd in the past — downgrading to free`,
+        );
+        effectivePlan = 'free';
+        source = 'free';
+      } else {
+        effectivePlan = (user.plan as EffectivePlan) ?? 'free';
+        source = 'own';
+      }
     } else if (
       hasOwnPaidPlan &&
       user.plan &&
