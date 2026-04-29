@@ -42,6 +42,34 @@ type EffectivePlan = 'free' | 'pro' | 'organization';
 type EffectiveSource = BillingMeResponse['effective']['source'];
 
 /**
+ * In-process TTL cache with invalidation. Backs `EffectiveAccessResolver`
+ * and `BillingService.applyTransition`-side invalidation: every billing
+ * mutation calls `EffectiveAccessResolver.invalidate(userId)` so
+ * `/billing/me` immediately reflects the new state instead of waiting up
+ * to TTL_MS.
+ *
+ * 60s TTL was chosen as a compromise — long enough that a hot mobile
+ * client polling /billing/me won't hammer the DB on every render, short
+ * enough that any drift from stale workspace membership / team-owner
+ * status (the bits we DON'T invalidate explicitly) self-heals within a
+ * minute. If you're touching this, prefer to widen `invalidate()` over
+ * shrinking the TTL.
+ */
+const TTL_MS = 60_000;
+/**
+ * Hard upper bound on cached entries. Pure in-process cache, single
+ * pod ≈ ~10MB resident at 10k entries (BillingMeResponse is roughly
+ * 1KB serialised + JS object overhead). Going much higher means
+ * paying GC cost we don't need.
+ */
+const CACHE_MAX = 10_000;
+
+interface CacheEntry {
+  expiresAt: number;
+  payload: BillingMeResponse;
+}
+
+/**
  * EffectiveAccessResolver — the single authority that decides **what
  * access a user actually has right now** and produces the canonical
  * {@link BillingMeResponse} shape consumed by `GET /billing/me`.
@@ -59,6 +87,7 @@ type EffectiveSource = BillingMeResponse['effective']['source'];
 @Injectable()
 export class EffectiveAccessResolver {
   private readonly logger = new Logger(EffectiveAccessResolver.name);
+  private readonly cache = new Map<string, CacheEntry>();
 
   constructor(
     @InjectRepository(User)
@@ -73,7 +102,63 @@ export class EffectiveAccessResolver {
     private readonly subs: Repository<Subscription>,
   ) {}
 
+  /**
+   * Drop the cached entry for a user. Called from
+   * `UserBillingRepository.applyTransition` after every successful state
+   * transition so /billing/me on the next request reflects the new
+   * snapshot without waiting for the TTL.
+   */
+  invalidate(userId: string): void {
+    this.cache.delete(userId);
+  }
+
+  /**
+   * Drop ALL cached entries. Useful for cron jobs that touch many users
+   * in a single sweep (e.g. `expireTrials`, `GracePeriodCron`) — instead
+   * of looping `invalidate(userId)`, the cron simply nukes the cache.
+   */
+  invalidateAll(): void {
+    this.cache.clear();
+  }
+
   async resolve(userId: string): Promise<BillingMeResponse> {
+    const now = Date.now();
+    const cached = this.cache.get(userId);
+    if (cached) {
+      if (cached.expiresAt > now) return cached.payload;
+      // Lazy eviction — without this, stale entries linger in the Map
+      // forever until that exact userId polls again. Under wide-fanout
+      // traffic the Map would grow unbounded.
+      this.cache.delete(userId);
+    }
+    // Soft cap. Once the Map reaches CACHE_MAX entries we sweep the
+    // expired half before inserting. Cheap because we only walk the
+    // Map at high water; in steady state with TTL self-eviction above
+    // we never reach this branch.
+    if (this.cache.size >= CACHE_MAX) {
+      this.sweepExpired(now);
+      // If sweep didn't free anything (every entry still fresh), drop
+      // the oldest 10% to keep the upper bound real.
+      if (this.cache.size >= CACHE_MAX) {
+        let drop = Math.ceil(CACHE_MAX / 10);
+        for (const key of this.cache.keys()) {
+          if (drop-- <= 0) break;
+          this.cache.delete(key);
+        }
+      }
+    }
+    const payload = await this.computeResolve(userId);
+    this.cache.set(userId, { expiresAt: now + TTL_MS, payload });
+    return payload;
+  }
+
+  private sweepExpired(now: number): void {
+    for (const [userId, entry] of this.cache) {
+      if (entry.expiresAt <= now) this.cache.delete(userId);
+    }
+  }
+
+  private async computeResolve(userId: string): Promise<BillingMeResponse> {
     const user = await this.users.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 

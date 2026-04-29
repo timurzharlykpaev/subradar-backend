@@ -8,10 +8,30 @@ describe('UserBillingRepository', () => {
       update,
     };
     const billingRepoMock: any = { findOne: jest.fn().mockResolvedValue(fakeRow) };
+    const dlqRepoMock: any = { insert: jest.fn().mockResolvedValue(undefined) };
     const auditMock: any = { log: jest.fn().mockResolvedValue(undefined) };
+    const tgMock: any = { send: jest.fn().mockResolvedValue(true) };
+    const effectiveMock: any = { invalidate: jest.fn(), invalidateAll: jest.fn() };
     const ds: any = { transaction: jest.fn(async (cb: any) => cb(txManager)) };
-    const repo = new UserBillingRepository(billingRepoMock, ds, auditMock);
-    return { repo, update, audit: auditMock, ds, txManager, billingRepoMock };
+    const repo = new UserBillingRepository(
+      billingRepoMock,
+      dlqRepoMock,
+      ds,
+      auditMock,
+      tgMock,
+      effectiveMock,
+    );
+    return {
+      repo,
+      update,
+      audit: auditMock,
+      ds,
+      txManager,
+      billingRepoMock,
+      dlqRepoMock,
+      tgMock,
+      effectiveMock,
+    };
   };
 
   const freeUser = (overrides: any = {}) => ({

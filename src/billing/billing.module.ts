@@ -10,6 +10,7 @@ import { WorkspaceMember } from '../workspace/entities/workspace-member.entity';
 import { User } from '../users/entities/user.entity';
 import { WebhookEvent } from './entities/webhook-event.entity';
 import { UserBilling } from './entities/user-billing.entity';
+import { BillingDeadLetter } from './entities/billing-dead-letter.entity';
 import { GracePeriodCron } from './grace-period.cron';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { EffectiveAccessModule } from './effective-access/effective-access.module';
@@ -20,7 +21,7 @@ import { UserBillingRepository } from './user-billing.repository';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Workspace, WorkspaceMember, User, WebhookEvent, UserBilling]),
+    TypeOrmModule.forFeature([Workspace, WorkspaceMember, User, WebhookEvent, UserBilling, BillingDeadLetter]),
     UsersModule,
     forwardRef(() => SubscriptionsModule),
     EffectiveAccessModule,

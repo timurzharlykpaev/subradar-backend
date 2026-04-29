@@ -22,6 +22,7 @@ import { UsersService } from '../users/users.service';
 import { EffectiveAccessResolver } from './effective-access/effective-access.service';
 import { BillingMeResponse } from './effective-access/billing-me.types';
 import { TrialsService } from './trials/trials.service';
+import { IdempotencyService } from '../common/idempotency/idempotency.service';
 
 class CreateCheckoutDto {
   @IsOptional() @IsString() variantId?: string;
@@ -47,6 +48,7 @@ export class BillingController {
     private readonly usersService: UsersService,
     private readonly effective: EffectiveAccessResolver,
     private readonly trials: TrialsService,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   @SkipThrottle()
@@ -244,7 +246,24 @@ export class BillingController {
   @UseGuards(JwtAuthGuard)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('sync-revenuecat')
-  async syncRevenueCat(@Request() req, @Body() dto: SyncRevenueCatDto) {
+  async syncRevenueCat(
+    @Request() req,
+    @Body() dto: SyncRevenueCatDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    if (idempotencyKey) {
+      const result = await this.idempotency.run(
+        req.user.id,
+        'billing.sync-revenuecat',
+        idempotencyKey,
+        dto,
+        async () => {
+          await this.billingService.syncRevenueCat(req.user.id, dto.productId);
+          return { statusCode: 200, body: { success: true } };
+        },
+      );
+      return result.body;
+    }
     await this.billingService.syncRevenueCat(req.user.id, dto.productId);
     return { success: true };
   }
@@ -253,7 +272,23 @@ export class BillingController {
   @UseGuards(JwtAuthGuard)
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @Post('cancel')
-  async cancelBilling(@Request() req) {
+  async cancelBilling(
+    @Request() req,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    if (idempotencyKey) {
+      const result = await this.idempotency.run(
+        req.user.id,
+        'billing.cancel',
+        idempotencyKey,
+        null,
+        async () => {
+          await this.billingService.cancelSubscription(req.user.id);
+          return { statusCode: 200, body: { message: 'Subscription cancelled' } };
+        },
+      );
+      return result.body;
+    }
     await this.billingService.cancelSubscription(req.user.id);
     return { message: 'Subscription cancelled' };
   }

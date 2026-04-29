@@ -38,6 +38,107 @@
 - **PAUSED -> ACTIVE**: User resumes subscription
 - **Any -> ARCHIVED**: User archives (removes from main list, keeps in history)
 
+## User Billing State Machine
+
+The `user_billing.billingStatus` column is owned by a finite-state machine.
+Every transition runs through `UserBillingRepository.applyTransition(userId, event)`
+— the only call site allowed to write `plan` / `billingStatus` / `billingSource` /
+`billingPeriod` / `currentPeriodStart` / `currentPeriodEnd` / `cancelAtPeriodEnd` /
+`gracePeriodEnd` / `gracePeriodReason` / `billingIssueAt`.
+
+Reducer source: [`src/billing/state-machine/transitions.ts`](../src/billing/state-machine/transitions.ts).
+Event types: [`src/billing/state-machine/types.ts`](../src/billing/state-machine/types.ts).
+
+### Diagram
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> free: account.create
+
+    free --> active: RC_INITIAL_PURCHASE
+    free --> active: LS_SUBSCRIPTION_CREATED
+    free --> active: LS_SUBSCRIPTION_UPDATED
+    free --> active: ADMIN_GRANT_PRO
+
+    active --> active: LS_SUBSCRIPTION_UPDATED
+    cancel_at_period_end --> active: LS_SUBSCRIPTION_UPDATED
+    billing_issue --> active: LS_SUBSCRIPTION_UPDATED
+
+    active --> cancel_at_period_end: RC_CANCELLATION
+    cancel_at_period_end --> active: RC_UNCANCELLATION
+    cancel_at_period_end --> active: RC_RENEWAL
+
+    active --> active: RC_RENEWAL
+    active --> active: RC_PRODUCT_CHANGE
+    cancel_at_period_end --> active: RC_PRODUCT_CHANGE
+
+    active --> billing_issue: RC_BILLING_ISSUE
+    cancel_at_period_end --> billing_issue: RC_BILLING_ISSUE
+    billing_issue --> active: RC_RENEWAL
+
+    active --> grace_pro: RC_EXPIRATION
+    cancel_at_period_end --> grace_pro: RC_EXPIRATION
+    billing_issue --> grace_pro: RC_EXPIRATION
+
+    active --> grace_team: TEAM_OWNER_EXPIRED
+    active --> grace_team: TEAM_MEMBER_REMOVED
+
+    grace_pro --> active: RC_INITIAL_PURCHASE
+    grace_team --> active: RC_INITIAL_PURCHASE
+    grace_pro --> free: GRACE_EXPIRED
+    grace_team --> free: GRACE_EXPIRED
+
+    active --> free: RC_REFUND
+    cancel_at_period_end --> free: RC_REFUND
+    active --> free: TRIAL_EXPIRED
+    active --> free: LS_SUBSCRIPTION_CANCELLED
+```
+
+### State definitions
+
+| State | Meaning | Access |
+|---|---|---|
+| `free` | No paid plan | Free tier limits |
+| `active` | Paid + auto-renewing (RC / LS / admin grant) | Full plan access |
+| `cancel_at_period_end` | User asked to cancel; access until `currentPeriodEnd` | Full plan access |
+| `billing_issue` | Apple / LS reported a billing problem (expired card, etc.) | Full plan access (~16 day Apple grace) |
+| `grace_pro` | Pro sub expired; 7-day grace before downgrade | Full plan access |
+| `grace_team` | Team owner's sub expired (or member removed); 7-day grace | Full plan access |
+
+### Invariants (DB-enforced via CHECK constraints)
+
+1. `state='free'` ⇔ `plan='free'`
+2. `state='cancel_at_period_end'` ⇔ `cancelAtPeriodEnd=true` (except `billing_issue`, exempt)
+3. `state IN ('grace_pro','grace_team')` ⇒ `gracePeriodEnd IS NOT NULL`
+4. `state ∉ ('free','grace_*','billing_issue')` ⇒ `currentPeriodEnd IS NOT NULL` (except admin grants)
+5. `state != 'free'` ⇒ `billingSource IS NOT NULL` (except admin grants)
+
+Admin grants (`ADMIN_GRANT_PRO`) are the documented exception — they have no
+billing source and no period because access was granted by the system, not bought.
+
+### Event sources
+
+| Event | Fired by |
+|---|---|
+| `RC_*` | RevenueCat webhook ↦ `mapRCEventToBillingEvent` ↦ `processRevenueCatEvent` |
+| `LS_*` | Lemon Squeezy webhook ↦ `mapLSEventToBillingEvent` ↦ `processLemonSqueezyEvent` |
+| `TRIAL_EXPIRED` | `RemindersService.expireTrials` cron + `TrialCheckerCron.downgradeExpiredTrials` cron + user-cancel of legacy plans |
+| `ADMIN_GRANT_PRO` | `BillingService.activateProInvite` (Pro-invite seat grant) |
+| `TEAM_OWNER_EXPIRED` | Cascade from `processRevenueCatEvent` when `RC_EXPIRATION` hits a team owner |
+| `TEAM_MEMBER_REMOVED` | `WorkspaceService.removeMember` / `leaveWorkspace` |
+| `GRACE_EXPIRED` | `GracePeriodCron.resetExpiredGrace` (daily 00:05 UTC) |
+| `RC_CANCELLATION` (synthetic) | Mobile-initiated `cancelSubscription` re-uses this event |
+
+### Failure modes
+
+| Situation | Outcome |
+|---|---|
+| Reducer throws `InvalidTransitionError` | Caller gets `{ applied: false, reason: 'invalid_transition' }`. Row appended to `billing_dead_letter` table + Telegram alert. Webhook is **not** retried (RC keeps idempotency). |
+| Reducer returns identical snapshot | `{ applied: false, reason: 'idempotent_noop' }`. No DB write, no audit row. |
+| Concurrent webhook + reconcile on same user | `SELECT … FOR UPDATE` on the `user_billing` row serialises them. Loser usually no-ops. |
+
 ## Screen States
 
 Every screen in the app must handle these states:
