@@ -59,7 +59,12 @@ stateDiagram-v2
 
     free --> active: RC_INITIAL_PURCHASE
     free --> active: LS_SUBSCRIPTION_CREATED
+    free --> active: LS_SUBSCRIPTION_UPDATED
     free --> active: ADMIN_GRANT_PRO
+
+    active --> active: LS_SUBSCRIPTION_UPDATED
+    cancel_at_period_end --> active: LS_SUBSCRIPTION_UPDATED
+    billing_issue --> active: LS_SUBSCRIPTION_UPDATED
 
     active --> cancel_at_period_end: RC_CANCELLATION
     cancel_at_period_end --> active: RC_UNCANCELLATION

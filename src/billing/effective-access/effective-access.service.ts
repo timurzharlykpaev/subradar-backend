@@ -56,6 +56,13 @@ type EffectiveSource = BillingMeResponse['effective']['source'];
  * shrinking the TTL.
  */
 const TTL_MS = 60_000;
+/**
+ * Hard upper bound on cached entries. Pure in-process cache, single
+ * pod ≈ ~10MB resident at 10k entries (BillingMeResponse is roughly
+ * 1KB serialised + JS object overhead). Going much higher means
+ * paying GC cost we don't need.
+ */
+const CACHE_MAX = 10_000;
 
 interface CacheEntry {
   expiresAt: number;
@@ -115,13 +122,40 @@ export class EffectiveAccessResolver {
   }
 
   async resolve(userId: string): Promise<BillingMeResponse> {
+    const now = Date.now();
     const cached = this.cache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.payload;
+    if (cached) {
+      if (cached.expiresAt > now) return cached.payload;
+      // Lazy eviction — without this, stale entries linger in the Map
+      // forever until that exact userId polls again. Under wide-fanout
+      // traffic the Map would grow unbounded.
+      this.cache.delete(userId);
+    }
+    // Soft cap. Once the Map reaches CACHE_MAX entries we sweep the
+    // expired half before inserting. Cheap because we only walk the
+    // Map at high water; in steady state with TTL self-eviction above
+    // we never reach this branch.
+    if (this.cache.size >= CACHE_MAX) {
+      this.sweepExpired(now);
+      // If sweep didn't free anything (every entry still fresh), drop
+      // the oldest 10% to keep the upper bound real.
+      if (this.cache.size >= CACHE_MAX) {
+        let drop = Math.ceil(CACHE_MAX / 10);
+        for (const key of this.cache.keys()) {
+          if (drop-- <= 0) break;
+          this.cache.delete(key);
+        }
+      }
     }
     const payload = await this.computeResolve(userId);
-    this.cache.set(userId, { expiresAt: Date.now() + TTL_MS, payload });
+    this.cache.set(userId, { expiresAt: now + TTL_MS, payload });
     return payload;
+  }
+
+  private sweepExpired(now: number): void {
+    for (const [userId, entry] of this.cache) {
+      if (entry.expiresAt <= now) this.cache.delete(userId);
+    }
   }
 
   private async computeResolve(userId: string): Promise<BillingMeResponse> {

@@ -95,6 +95,58 @@ describe('IdempotencyService', () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
+  it('23505 race: loser reads winner row and returns winner response', async () => {
+    // Simulates two concurrent first-time calls. Both findOne return
+    // null (race). Both enter the handler. Winner inserts first.
+    // Loser's insert raises 23505; loser must catch + re-fetch and
+    // return the winner's body.
+    const rows: any[] = [];
+    const winnerBody = { winner: true };
+    const loserBody = { winner: false };
+    let firstFindOneSeesIt = false;
+    const repo: any = {
+      findOne: jest.fn(({ where }) => {
+        if (!firstFindOneSeesIt) {
+          firstFindOneSeesIt = true;
+          return null; // both initial findOnes see no row
+        }
+        return rows.find(
+          (r) =>
+            r.userId === where.userId &&
+            r.endpoint === where.endpoint &&
+            r.key === where.key,
+        ) ?? null;
+      }),
+      insert: jest
+        .fn()
+        .mockImplementationOnce(async (row) => {
+          rows.push({ ...row, createdAt: new Date() });
+        })
+        .mockImplementationOnce(async () => {
+          const e: any = new Error('duplicate');
+          e.code = '23505';
+          throw e;
+        }),
+      delete: jest.fn(),
+    };
+    const svc = new IdempotencyService(repo);
+
+    const winner = await svc.run('u-1', 'billing.cancel', 'k', null, async () => ({
+      statusCode: 200,
+      body: winnerBody,
+    }));
+    const loser = await svc.run('u-1', 'billing.cancel', 'k', null, async () => ({
+      statusCode: 200,
+      body: loserBody,
+    }));
+
+    expect(winner.cached).toBe(false);
+    expect(winner.body).toEqual(winnerBody);
+    // Loser caught 23505, refetched, returned winner's body.
+    expect(loser.cached).toBe(true);
+    expect(loser.body).toEqual(winnerBody);
+  });
+
   it('expired row (>24h): treats as first call again', async () => {
     const { svc, rows } = buildSvc();
     const handler = jest.fn().mockResolvedValue({ statusCode: 200, body: { v: 1 } });
