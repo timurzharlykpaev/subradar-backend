@@ -38,6 +38,9 @@ import {
   RCRawEvent,
 } from './revenuecat/event-mapper';
 import { mapLSEventToBillingEvent } from './lemon-squeezy/event-mapper';
+import { UserBillingRepository } from './user-billing.repository';
+import { inferEventFromRcSnapshot } from './state-machine/infer-rc-event';
+import { RCSubscriberSnapshot } from './state-machine/types';
 
 export interface EffectiveAccess {
   plan: 'free' | 'pro' | 'organization';
@@ -73,6 +76,7 @@ export class BillingService {
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
     private readonly trialsService: TrialsService,
+    private readonly userBilling: UserBillingRepository,
   ) {
     this.webhookSecret = cfg.get('LEMON_SQUEEZY_WEBHOOK_SECRET', '');
     this.apiKey = cfg.get('LEMON_SQUEEZY_API_KEY', '');
@@ -234,18 +238,17 @@ export class BillingService {
 
     for (const member of members) {
       if (member.userId === owner.id) continue;
-      const u = await m.findOne(User, { where: { id: member.userId } });
-      if (!u) continue;
-      const current = this.snapshotFromUser(u);
+      const current = await this.userBilling.read(member.userId).catch(() => null);
+      if (!current) continue;
       const memberHasOwnSub =
         current.billingSource === 'revenuecat' &&
         current.state === 'active' &&
         !current.cancelAtPeriodEnd;
-      const next = transition(current, {
-        type: 'TEAM_OWNER_EXPIRED',
-        memberHasOwnSub,
-      });
-      await this.applySnapshot(m, u, next);
+      await this.userBilling.applyTransition(
+        member.userId,
+        { type: 'TEAM_OWNER_EXPIRED', memberHasOwnSub },
+        { actor: 'webhook_rc', manager: m },
+      );
     }
     this.logger.log(
       `Team owner ${owner.id} expired — cascaded to ${members.length} members`,
@@ -541,31 +544,38 @@ export class BillingService {
     let inviteeEmailToRevoke: string | null = null;
 
     await this.dataSource.transaction(async (m) => {
-      const current = this.snapshotFromUser(user);
-      let next: UserBillingSnapshot;
-      try {
-        next = transition(current, billingEvent);
-      } catch (err) {
-        this.logger.warn(
-          `LS ${event} invalid transition from ${current.state} for user ${user.id}: ${(err as Error).message}`,
-        );
-        await this.audit.log({
-          userId: user.id,
-          action: 'billing.webhook.invalid_transition',
-          resourceType: 'user',
-          resourceId: user.id,
-          metadata: {
-            provider: 'lemon_squeezy',
-            event,
-            from: current.state,
-            variantId,
-            error: (err as Error).message,
-          },
-        });
+      const current = await this.userBilling.read(user.id);
+      const result = await this.userBilling.applyTransition(
+        user.id,
+        billingEvent,
+        { actor: 'webhook_ls', manager: m },
+      );
+      if (!result.applied) {
+        if (result.reason === 'invalid_transition') {
+          this.logger.warn(
+            `LS ${event} invalid transition from ${result.from} for user ${user.id}`,
+          );
+          await this.audit.log({
+            userId: user.id,
+            action: 'billing.webhook.invalid_transition',
+            resourceType: 'user',
+            resourceId: user.id,
+            metadata: {
+              provider: 'lemon_squeezy',
+              event,
+              from: result.from,
+              variantId,
+              error: 'invalid_transition',
+            },
+          });
+        }
         return;
       }
-
-      await this.applySnapshot(m, user, next);
+      const next = result.snapshot;
+      // Sync the in-memory user with the freshly-written row so downstream
+      // code (audit/outbox/customer-id update) sees the new state.
+      const refreshed = await m.findOne(User, { where: { id: user.id } });
+      if (refreshed) Object.assign(user, refreshed);
       previousPlan = current.plan;
       nextPlan = next.plan;
 
@@ -801,34 +811,42 @@ export class BillingService {
     }
 
     await this.dataSource.transaction(async (m) => {
-      const current = this.snapshotFromUser(user);
-      let next: UserBillingSnapshot;
-      try {
-        next = transition(current, billingEvent);
-      } catch (err) {
-        // Invalid transitions for RC are usually duplicate/late deliveries
-        // (e.g. CANCELLATION after EXPIRATION). Log + audit but don't fail
-        // the webhook — RC would keep retrying forever otherwise.
-        this.logger.warn(
-          `RC ${event.type} invalid transition from ${current.state} for user ${user.id}: ${(err as Error).message}`,
-        );
-        await this.audit.log({
-          userId: user.id,
-          action: 'billing.webhook.invalid_transition',
-          resourceType: 'user',
-          resourceId: user.id,
-          metadata: {
-            provider: 'revenuecat',
-            event: event.type,
-            from: current.state,
-            productId: event.product_id ?? null,
-            error: (err as Error).message,
-          },
-        });
+      const current = await this.userBilling.read(user.id);
+      const result = await this.userBilling.applyTransition(
+        user.id,
+        billingEvent,
+        { actor: 'webhook_rc', manager: m },
+      );
+      if (!result.applied) {
+        if (result.reason === 'invalid_transition') {
+          // Invalid transitions for RC are usually duplicate/late deliveries
+          // (e.g. CANCELLATION after EXPIRATION). Log + audit but don't fail
+          // the webhook — RC would keep retrying forever otherwise.
+          this.logger.warn(
+            `RC ${event.type} invalid transition from ${result.from} for user ${user.id}`,
+          );
+          await this.audit.log({
+            userId: user.id,
+            action: 'billing.webhook.invalid_transition',
+            resourceType: 'user',
+            resourceId: user.id,
+            metadata: {
+              provider: 'revenuecat',
+              event: event.type,
+              from: result.from,
+              productId: event.product_id ?? null,
+              error: 'invalid_transition',
+            },
+          });
+        }
         return;
       }
-
-      await this.applySnapshot(m, user, next);
+      const next = result.snapshot;
+      // Refresh in-memory user with the freshly-written row so the rest of
+      // the handler (workspace reactivation, downgradedAt, audit, outbox)
+      // sees the new state.
+      const refreshed = await m.findOne(User, { where: { id: user.id } });
+      if (refreshed) Object.assign(user, refreshed);
 
       // Reactivate owner's workspace on purchase / renewal / uncancellation —
       // a previous EXPIRATION may have marked it expired.

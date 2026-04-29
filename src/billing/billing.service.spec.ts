@@ -11,6 +11,7 @@ import { TelegramAlertService } from '../common/telegram-alert.service';
 import { AuditService } from '../common/audit/audit.service';
 import { OutboxService } from './outbox/outbox.service';
 import { TrialsService } from './trials/trials.service';
+import { UserBillingRepository } from './user-billing.repository';
 
 const mockUsersService = {
   findById: jest.fn(), findByEmail: jest.fn(), update: jest.fn(), save: jest.fn(),
@@ -73,6 +74,24 @@ describe('BillingService', () => {
         { provide: AuditService, useValue: { log: jest.fn() } },
         { provide: OutboxService, useValue: { enqueue: jest.fn().mockResolvedValue(undefined) } },
         { provide: TrialsService, useValue: { activate: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: UserBillingRepository,
+          useValue: {
+            read: jest.fn().mockResolvedValue({
+              userId: 'user-1', plan: 'free', state: 'free', billingSource: null,
+              billingPeriod: null, currentPeriodStart: null, currentPeriodEnd: null,
+              cancelAtPeriodEnd: false, graceExpiresAt: null, graceReason: null, billingIssueAt: null,
+            }),
+            applyTransition: jest.fn().mockResolvedValue({
+              applied: true, from: 'free', to: 'active',
+              snapshot: {
+                userId: 'user-1', plan: 'pro', state: 'active', billingSource: 'lemon_squeezy',
+                billingPeriod: 'monthly', currentPeriodStart: null, currentPeriodEnd: null,
+                cancelAtPeriodEnd: false, graceExpiresAt: null, graceReason: null, billingIssueAt: null,
+              },
+            }),
+          },
+        },
       ],
     }).compile();
     service = module.get<BillingService>(BillingService);
@@ -90,7 +109,7 @@ describe('BillingService', () => {
   describe('handleWebhook', () => {
     it('upgrades user to pro on subscription_created (via state machine)', async () => {
       mockUsersService.findByEmail.mockResolvedValue({ ...mockUser, plan: 'free', billingStatus: 'free' });
-      mockManager.update.mockClear();
+      const userBilling = (service as any).userBilling;
       await service.handleWebhook('subscription_created', {
         attributes: {
           user_email: 'test@example.com',
@@ -99,31 +118,30 @@ describe('BillingService', () => {
           customer_id: 'cust-1',
         },
       });
-      // First call is the state-machine snapshot write on the User row.
-      const userUpdate = mockManager.update.mock.calls.find(
-        (c: any[]) => c[1] === 'user-1',
-      );
-      expect(userUpdate).toBeTruthy();
-      expect(userUpdate?.[2]).toEqual(
-        expect.objectContaining({
-          plan: 'pro',
-          billingStatus: 'active',
-          billingSource: 'lemon_squeezy',
-        }),
+      expect(userBilling.applyTransition).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ type: 'LS_SUBSCRIPTION_CREATED', plan: 'pro' }),
+        expect.objectContaining({ actor: 'webhook_ls' }),
       );
     });
     it('downgrades user on subscription_cancelled (via state machine)', async () => {
       mockUsersService.findByEmail.mockResolvedValue({ ...mockUser, plan: 'pro', billingStatus: 'active' });
-      mockManager.update.mockClear();
+      const userBilling = (service as any).userBilling;
+      userBilling.applyTransition.mockResolvedValueOnce({
+        applied: true, from: 'active', to: 'free',
+        snapshot: {
+          userId: 'user-1', plan: 'free', state: 'free', billingSource: null,
+          billingPeriod: null, currentPeriodStart: null, currentPeriodEnd: null,
+          cancelAtPeriodEnd: false, graceExpiresAt: null, graceReason: null, billingIssueAt: null,
+        },
+      });
       await service.handleWebhook('subscription_cancelled', {
         attributes: { user_email: 'test@example.com' },
       });
-      const userUpdate = mockManager.update.mock.calls.find(
-        (c: any[]) => c[1] === 'user-1',
-      );
-      expect(userUpdate).toBeTruthy();
-      expect(userUpdate?.[2]).toEqual(
-        expect.objectContaining({ plan: 'free', billingStatus: 'free' }),
+      expect(userBilling.applyTransition).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ type: 'LS_SUBSCRIPTION_CANCELLED' }),
+        expect.objectContaining({ actor: 'webhook_ls' }),
       );
     });
     it('handles order_created without error', async () => {
@@ -164,6 +182,7 @@ describe('BillingService', () => {
         { log: jest.fn() } as any, // AuditService stub
         { enqueue: jest.fn() } as any, // OutboxService stub
         { activate: jest.fn() } as any, // TrialsService stub
+        { read: jest.fn(), applyTransition: jest.fn() } as any, // UserBillingRepository stub
       );
       const payload = 'test-payload';
       const sig = createHmac('sha256', secret).update(payload).digest('hex');

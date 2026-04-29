@@ -12,6 +12,7 @@ import { TelegramAlertService } from '../../common/telegram-alert.service';
 import { AuditService } from '../../common/audit/audit.service';
 import { OutboxService } from '../outbox/outbox.service';
 import { TrialsService } from '../trials/trials.service';
+import { UserBillingRepository } from '../user-billing.repository';
 
 /**
  * Integration-style unit test for webhook idempotency.
@@ -80,6 +81,10 @@ describe('BillingService.claimWebhookEvent (idempotency)', () => {
         { provide: AuditService, useValue: { log: jest.fn() } },
         { provide: OutboxService, useValue: { enqueue: jest.fn() } },
         { provide: TrialsService, useValue: { activate: jest.fn() } },
+        {
+          provide: UserBillingRepository,
+          useValue: { read: jest.fn(), applyTransition: jest.fn() },
+        },
       ],
     }).compile();
 
