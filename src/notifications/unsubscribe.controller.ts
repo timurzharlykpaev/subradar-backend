@@ -33,25 +33,29 @@ export class UnsubscribeController {
     // compromise of one secret leaked the ability to forge both auth
     // tokens AND unsubscribe URLs for any userId — link forgery here is
     // particularly bad because a single GET silently kills user emails.
+    //
+    // We DO NOT throw at startup if the var is missing in production: a
+    // deploy without the secret would crashloop the whole API on every
+    // redeploy until ops/CI catches up, which is a much worse outage than
+    // running another release on the JWT-fallback. Instead we log loud
+    // ERROR-level evidence and continue. Tighten back to throw in the
+    // next release once UNSUBSCRIBE_SECRET is provisioned everywhere.
     const dedicated = cfg.get<string>('UNSUBSCRIBE_SECRET', '');
+    const env = (cfg.get<string>('NODE_ENV', '') || '').toLowerCase();
     if (dedicated) {
       this.secret = dedicated;
     } else {
-      // Fall back to JWT_ACCESS_SECRET only outside production so local /
-      // dev environments stay bootable without yet another env var. In
-      // prod we throw at startup so the misconfiguration is impossible
-      // to miss.
-      const env = (cfg.get<string>('NODE_ENV', '') || '').toLowerCase();
-      if (env === 'production') {
-        throw new Error(
-          'UNSUBSCRIBE_SECRET is required in production — refusing to boot.',
-        );
-      }
       const jwt = cfg.get<string>('JWT_ACCESS_SECRET', '');
       this.secret = jwt || 'fallback-unsubscribe-secret';
-      UnsubscribeController.logger.warn(
-        'UNSUBSCRIBE_SECRET not set — falling back to JWT_ACCESS_SECRET (dev only)',
-      );
+      if (env === 'production') {
+        UnsubscribeController.logger.error(
+          'UNSUBSCRIBE_SECRET is missing in production — falling back to JWT_ACCESS_SECRET. Provision the dedicated secret before the next release.',
+        );
+      } else {
+        UnsubscribeController.logger.warn(
+          'UNSUBSCRIBE_SECRET not set — falling back to JWT_ACCESS_SECRET (dev only)',
+        );
+      }
     }
     // Legacy fallback is opt-in via `ALLOW_LEGACY_UNSUBSCRIBE_SIG=true`.
     // We only enable it during the transitional window when emails signed

@@ -102,6 +102,16 @@ export function transition(
       };
 
     case 'RC_CANCELLATION':
+      // Idempotent on cancel_at_period_end: RC re-delivers CANCELLATION on
+      // its own retries and Apple sometimes emits a second CANCELLATION
+      // immediately after EXPIRATION (e.g. a refund-style flow that
+      // re-stamps the row). Throwing here drops the idempotency record,
+      // sends the webhook back to RC for retry, and loses any updated
+      // periodEnd carried by the duplicate. Refresh-and-return is the
+      // safer choice — the user's intent is unchanged.
+      if (s.state === 'cancel_at_period_end') {
+        return { ...s, currentPeriodEnd: e.periodEnd };
+      }
       if (s.state !== 'active' && s.state !== 'billing_issue') {
         throw new InvalidTransitionError(s.state, e.type);
       }
