@@ -46,14 +46,19 @@ export class ReconciliationService {
    * Ordered by `currentPeriodEnd` asc so the oldest drift gets fixed first.
    */
   async findSuspicious(limit: number): Promise<User[]> {
+    // Phase 2 moved billing fields into `user_billing` — JOIN it in.
+    // We still SELECT `u.*` so callers get a fully-populated User entity;
+    // the billing snapshot fields are read via the eager OneToOne relation
+    // when the entity reaches `snapshotFromUser`.
     return this.users.query(
       `
       SELECT u.* FROM users u
-      WHERE u."billingSource" = 'revenuecat'
+      JOIN user_billing b ON b."userId" = u.id
+      WHERE b."billingSource" = 'revenuecat'
         AND (
-          (u."currentPeriodEnd" IS NOT NULL
-           AND u."currentPeriodEnd" < now() - interval '10 minutes'
-           AND u."billingStatus" NOT IN ('grace_pro','grace_team','free'))
+          (b."currentPeriodEnd" IS NOT NULL
+           AND b."currentPeriodEnd" < now() - interval '10 minutes'
+           AND b."billingStatus" NOT IN ('grace_pro','grace_team','free'))
           OR u.id IN (
             SELECT DISTINCT user_id FROM webhook_events
             WHERE provider = 'revenuecat'
@@ -62,7 +67,7 @@ export class ReconciliationService {
               AND user_id IS NOT NULL
           )
         )
-      ORDER BY u."currentPeriodEnd" ASC NULLS LAST
+      ORDER BY b."currentPeriodEnd" ASC NULLS LAST
       LIMIT $1
       `,
       [limit],
