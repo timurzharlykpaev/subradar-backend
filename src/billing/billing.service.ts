@@ -1332,69 +1332,71 @@ export class BillingService {
 
   async cancelSubscription(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
-    const before = {
-      plan: user.plan,
-      billingSource: user.billingSource,
-      billingStatus: user.billingStatus,
-      cancelAtPeriodEnd: user.cancelAtPeriodEnd,
-      trialEndDate: user.trialEndDate,
-    };
+    const current = await this.userBilling.read(userId);
     this.logger.log(
-      `cancelSubscription: user ${userId} before=${JSON.stringify(before)}`,
+      `cancelSubscription: user ${userId} state=${current.state} plan=${current.plan} source=${current.billingSource ?? 'null'}`,
     );
 
-    // Cancel trial: clear trial dates, reset plan to free
-    // Only if not already paying via RevenueCat (trial superseded by real purchase)
-    if (user.trialEndDate && new Date(user.trialEndDate) > new Date() && user.billingSource !== 'revenuecat') {
-      await this.usersService.update(userId, {
-        plan: 'free',
-        billingStatus: 'free' as any,
-        trialEndDate: undefined as any,
-        billingSource: undefined as any,
-        cancelAtPeriodEnd: false,
-      });
+    if (current.state === 'free') {
+      this.logger.warn(`cancelSubscription: user ${userId} already on free plan`);
+      return;
+    }
+
+    // Backend-only trial (no RC/LS sub yet) — TRIAL_EXPIRED resets the
+    // billing snapshot. Trial bookkeeping (trialEndDate) lives outside
+    // the state machine and is cleared via usersService.
+    const isOnBackendTrial =
+      user.trialEndDate &&
+      new Date(user.trialEndDate) > new Date() &&
+      current.billingSource !== 'revenuecat' &&
+      current.billingSource !== 'lemon_squeezy';
+    if (isOnBackendTrial) {
+      await this.userBilling.applyTransition(
+        userId,
+        { type: 'TRIAL_EXPIRED' },
+        { actor: 'user_cancel' },
+      );
+      await this.usersService.update(userId, { trialEndDate: undefined as any });
       this.logger.log(`cancelSubscription: trial cancelled for user ${userId}`);
       return;
     }
 
-    // Cancel RC subscription: mark cancelAtPeriodEnd AND flip billingStatus
-    // to 'cancel_at_period_end'. The actual downgrade waits for the
-    // EXPIRATION webhook (or the currentPeriodEnd guard in
-    // EffectiveAccessResolver). Without updating billingStatus here
-    // /billing/me returned `state: 'active'` after a successful cancel,
-    // which made the UI think the cancellation never happened — the user
-    // saw the Pro/Team badge intact and the Cancel CTA still active.
-    // Idempotent if the field is already in the right state.
-    if (user.plan !== 'free' && user.billingSource === 'revenuecat') {
-      await this.usersService.update(userId, {
-        cancelAtPeriodEnd: true,
-        billingStatus: 'cancel_at_period_end' as any,
-      });
+    if (current.billingSource === 'revenuecat') {
+      await this.userBilling.applyTransition(
+        userId,
+        {
+          type: 'RC_CANCELLATION',
+          periodEnd: current.currentPeriodEnd ?? new Date(),
+        },
+        { actor: 'user_cancel' },
+      );
       this.logger.log(
         `cancelSubscription: RC subscription marked cancel-at-period-end for user ${userId}`,
       );
       return;
     }
 
-    // Cancel non-RC paid subscription (legacy / admin grants / lemon_squeezy):
-    // downgrade to free immediately AND reset billingStatus so /billing/me
-    // reflects the change instead of keeping a stale 'active' status that
-    // makes the team-owner branch of effective-access keep returning org.
-    if (user.plan !== 'free') {
-      await this.usersService.update(userId, {
-        plan: 'free',
-        billingStatus: 'free' as any,
-        billingSource: undefined as any,
-        cancelAtPeriodEnd: false,
-        currentPeriodEnd: null as any,
-      });
+    if (current.billingSource === 'lemon_squeezy') {
+      await this.userBilling.applyTransition(
+        userId,
+        { type: 'LS_SUBSCRIPTION_CANCELLED' },
+        { actor: 'user_cancel' },
+      );
       this.logger.log(
-        `cancelSubscription: non-RC plan cancelled for user ${userId} (was ${before.plan}/${before.billingSource ?? 'null'})`,
+        `cancelSubscription: LS subscription cancelled for user ${userId}`,
       );
       return;
     }
 
-    // Already free — nothing to cancel
-    this.logger.warn(`cancelSubscription: user ${userId} already on free plan`);
+    // Legacy admin grant — no billing source but plan != free.
+    // TRIAL_EXPIRED resets the snapshot to free + clears period.
+    await this.userBilling.applyTransition(
+      userId,
+      { type: 'TRIAL_EXPIRED' },
+      { actor: 'user_cancel' },
+    );
+    this.logger.log(
+      `cancelSubscription: legacy paid plan cancelled for user ${userId}`,
+    );
   }
 }
