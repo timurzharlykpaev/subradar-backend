@@ -53,16 +53,26 @@ export class UsersService {
   }
 
   async update(id: string, data: Partial<User>): Promise<User> {
-    // Whitelist only known User columns to avoid TypeORM "Property not found" errors
+    // Whitelist only known User columns to avoid TypeORM "Property not found" errors.
+    //
+    // Caveat that bit prod: missing entries here are SILENTLY DROPPED, so
+    // callers calling `usersService.update(id, { billingStatus: 'cancel_at_period_end' })`
+    // saw a successful return and a row that didn't change. The
+    // `reconcileRevenueCat` flow + the `cancelSubscription` snapshot logger
+    // both relied on this. Adding `billingStatus` (and a few neighbours
+    // that were missing for the same reason) so the field actually persists.
     const ALLOWED_KEYS = new Set([
       'name', 'avatarUrl', 'fcmToken', 'refreshToken', 'refreshTokenIssuedAt',
       'magicLinkToken', 'magicLinkExpiry',
-      'lemonSqueezyCustomerId', 'plan', 'billingSource', 'billingPeriod', 'trialUsed', 'trialStartDate', 'trialEndDate',
-      'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'isActive',
+      'lemonSqueezyCustomerId', 'plan',
+      'billingSource', 'billingStatus', 'billingPeriod',
+      'currentPeriodStart', 'currentPeriodEnd',
+      'trialUsed', 'trialStartDate', 'trialEndDate',
+      'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'invitedByUserId', 'isActive',
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
       'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore',
       'weeklyDigestEnabled', 'weeklyDigestSentAt',
-      'cancelAtPeriodEnd', 'currentPeriodEnd', 'status', 'downgradedAt',
+      'cancelAtPeriodEnd', 'status', 'downgradedAt',
       'gracePeriodEnd', 'gracePeriodReason', 'billingIssueAt',
     ]);
     const safe: Partial<User> = {};
