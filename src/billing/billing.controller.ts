@@ -9,6 +9,8 @@ import {
   UseGuards,
   Request,
   BadRequestException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'crypto';
@@ -100,6 +102,22 @@ export class BillingController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('checkout')
   async createCheckout(@Request() req, @Body() dto: CreateCheckoutDto) {
+    // App Store Guideline 3.1.1 forbids any non-IAP purchase path on iOS.
+    // The Lemon Squeezy web checkout this endpoint produces is the web
+    // app's monetization path; if an iOS client ever calls it (mistakenly
+    // or by design) and opens the URL in a WebView/Linking, that's an
+    // App Review reject. Refuse explicitly.
+    const platform = String(req.headers?.['x-client-platform'] ?? '').toLowerCase();
+    const ua = String(req.headers?.['user-agent'] ?? '');
+    const looksIos =
+      platform === 'ios' ||
+      /\b(CFNetwork|Darwin|iOS|iPhone|iPad)\b/i.test(ua);
+    if (looksIos) {
+      throw new HttpException(
+        'Web checkout is unavailable on iOS — please subscribe via the in-app purchase.',
+        HttpStatus.GONE,
+      );
+    }
     const user = await this.usersService.findById(req.user.id);
     const variantId = dto.variantId || dto.planId || '';
     return this.billingService.createCheckout(req.user.id, variantId, user.email, dto.billing || 'monthly');

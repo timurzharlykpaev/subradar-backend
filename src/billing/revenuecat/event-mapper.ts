@@ -17,6 +17,20 @@ export interface RCRawEvent {
   app_user_id: string;
   id?: string;
   event_timestamp_ms?: number;
+  /**
+   * "PRODUCTION" | "SANDBOX". Used by the webhook handler to filter out
+   * sandbox events on the prod backend — without this filter a developer
+   * with a TestFlight build can flip real prod users to Pro by triggering
+   * sandbox transactions.
+   */
+  environment?: 'PRODUCTION' | 'SANDBOX';
+  /**
+   * Why the subscription was cancelled. RC sets this to "REFUNDED" when
+   * Apple grants a refund — we map that to RC_REFUND so access is removed
+   * immediately, not deferred to period end.
+   */
+  cancel_reason?: string;
+  cancellation_reason?: string;
 }
 
 /**
@@ -83,8 +97,17 @@ export function mapRCEventToBillingEvent(e: RCRawEvent): BillingEvent | null {
       return plan
         ? { type: 'RC_PRODUCT_CHANGE', newPlan: plan, period, periodStart, periodEnd }
         : null;
-    case 'CANCELLATION':
+    case 'CANCELLATION': {
+      // Refund-style cancellations have a different cancellation_reason
+      // and require an immediate downgrade — Apple already reversed the
+      // charge, the user is no longer entitled to the period. RC has used
+      // both `cancel_reason` and `cancellation_reason` across versions.
+      const reason = (e.cancel_reason ?? e.cancellation_reason ?? '').toUpperCase();
+      if (reason === 'REFUNDED' || reason === 'CUSTOMER_SUPPORT') {
+        return { type: 'RC_REFUND' };
+      }
       return { type: 'RC_CANCELLATION', periodEnd };
+    }
     case 'UNCANCELLATION':
       return { type: 'RC_UNCANCELLATION' };
     case 'EXPIRATION':

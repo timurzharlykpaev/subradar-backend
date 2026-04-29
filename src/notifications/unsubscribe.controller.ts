@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Res, BadRequestException, Post, Param } from '@nestjs/common';
+import { Controller, Get, Logger, Query, Res, BadRequestException, Post, Param } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { Response } from 'express';
@@ -14,14 +14,47 @@ type UnsubType = (typeof SUPPORTED_TYPES)[number];
  */
 @Controller('unsubscribe')
 export class UnsubscribeController {
+  private static readonly logger = new Logger('UnsubscribeController');
   private readonly secret: string;
+  /**
+   * When the migration to a dedicated UNSUBSCRIBE_SECRET is in flight we
+   * keep accepting links signed with the old JWT_ACCESS_SECRET so emails
+   * already in inboxes don't 400 their "unsubscribe" link. New emails are
+   * always signed with the new secret. Drop this once the older email
+   * cohort has expired (~2 weeks).
+   */
+  private readonly legacySecret: string | null;
 
   constructor(
     private readonly cfg: ConfigService,
     private readonly usersService: UsersService,
   ) {
-    // Reuse JWT secret as signing key — it's already rotated/secured
-    this.secret = cfg.get('JWT_ACCESS_SECRET', '') || 'fallback-unsubscribe-secret';
+    // Dedicated unsubscribe secret. Sharing the JWT signing key meant a
+    // compromise of one secret leaked the ability to forge both auth
+    // tokens AND unsubscribe URLs for any userId — link forgery here is
+    // particularly bad because a single GET silently kills user emails.
+    const dedicated = cfg.get<string>('UNSUBSCRIBE_SECRET', '');
+    if (dedicated) {
+      this.secret = dedicated;
+    } else {
+      // Fall back to JWT_ACCESS_SECRET only outside production so local /
+      // dev environments stay bootable without yet another env var. In
+      // prod we throw at startup so the misconfiguration is impossible
+      // to miss.
+      const env = (cfg.get<string>('NODE_ENV', '') || '').toLowerCase();
+      if (env === 'production') {
+        throw new Error(
+          'UNSUBSCRIBE_SECRET is required in production — refusing to boot.',
+        );
+      }
+      const jwt = cfg.get<string>('JWT_ACCESS_SECRET', '');
+      this.secret = jwt || 'fallback-unsubscribe-secret';
+      UnsubscribeController.logger.warn(
+        'UNSUBSCRIBE_SECRET not set — falling back to JWT_ACCESS_SECRET (dev only)',
+      );
+    }
+    const jwtForLegacy = cfg.get<string>('JWT_ACCESS_SECRET', '');
+    this.legacySecret = jwtForLegacy && jwtForLegacy !== this.secret ? jwtForLegacy : null;
   }
 
   /**
@@ -33,9 +66,8 @@ export class UnsubscribeController {
     return createHmac('sha256', secret).update(payload).digest('hex');
   }
 
-  private verify(userId: string, type: UnsubType, sig: string): boolean {
-    if (!userId || !type || !sig) return false;
-    const expected = UnsubscribeController.sign(userId, type, this.secret);
+  private verifyAgainst(userId: string, type: UnsubType, sig: string, secret: string): boolean {
+    const expected = UnsubscribeController.sign(userId, type, secret);
     const aBuf = Buffer.from(sig);
     const bBuf = Buffer.from(expected);
     if (aBuf.length !== bBuf.length) return false;
@@ -44,6 +76,20 @@ export class UnsubscribeController {
     } catch {
       return false;
     }
+  }
+
+  private verify(userId: string, type: UnsubType, sig: string): boolean {
+    if (!userId || !type || !sig) return false;
+    if (this.verifyAgainst(userId, type, sig, this.secret)) return true;
+    if (this.legacySecret && this.verifyAgainst(userId, type, sig, this.legacySecret)) {
+      // Legitimate legacy link — accept but log so we know how soon the
+      // legacy fallback can be retired.
+      UnsubscribeController.logger.log(
+        `unsubscribe: legacy-signed link accepted for uid=${userId} type=${type}`,
+      );
+      return true;
+    }
+    return false;
   }
 
   @Get()

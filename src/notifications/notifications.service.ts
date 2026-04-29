@@ -179,8 +179,12 @@ export class NotificationsService {
       'PUBLIC_API_URL',
       'https://api.subradar.ai/api/v1',
     );
+    // Sign with the dedicated UNSUBSCRIBE_SECRET. We fall back to JWT only
+    // outside production for parity with the controller's startup guard.
     const signingSecret =
-      this.cfg.get('JWT_ACCESS_SECRET', '') || 'fallback-unsubscribe-secret';
+      this.cfg.get<string>('UNSUBSCRIBE_SECRET', '') ||
+      this.cfg.get<string>('JWT_ACCESS_SECRET', '') ||
+      'fallback-unsubscribe-secret';
     const sig = UnsubscribeController.sign(userId, type, signingSecret);
     return `${apiUrl}/unsubscribe?uid=${userId}&type=${type}&sig=${sig}`;
   }
