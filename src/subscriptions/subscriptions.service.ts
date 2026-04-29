@@ -351,23 +351,30 @@ export class SubscriptionsService implements OnModuleInit {
       ? subs.filter((s) => allowedIds!.has(s.id))
       : subs;
     return filteredSubs.map((sub) => {
-      const origCurrency = sub.originalCurrency || sub.currency;
+      // Use the SUB'S CURRENT currency as the source for FX conversion,
+      // not `originalCurrency`. The two used to drift after a user edited
+      // a subscription and changed its currency: `currency` updated, but
+      // `originalCurrency` stayed at the create-time value. The converter
+      // then ran amount(in NEW currency) × rate(OLD currency → display),
+      // producing nonsense numbers. `originalCurrency` is now purely a
+      // historical record — never feeds display.
+      const sourceCurrency = sub.currency || sub.originalCurrency || displayCurrency;
       let displayAmountStr: string;
       let fxRate: number;
       try {
         const amount = new Decimal(sub.amount as unknown as string);
         const converted = this.fx.convert(
           amount,
-          origCurrency,
+          sourceCurrency,
           displayCurrency,
           fx.rates,
         );
         displayAmountStr = converted.toFixed(2);
         fxRate =
-          origCurrency === displayCurrency
+          sourceCurrency === displayCurrency
             ? 1
             : (fx.rates[displayCurrency] ?? 1) /
-              (fx.rates[origCurrency] ?? 1);
+              (fx.rates[sourceCurrency] ?? 1);
       } catch {
         displayAmountStr = String(sub.amount);
         fxRate = 1;
@@ -430,6 +437,15 @@ export class SubscriptionsService implements OnModuleInit {
   ): Promise<Subscription> {
     const sub = await this.findOne(userId, id);
     Object.assign(sub, dto);
+
+    // Keep originalCurrency in lockstep with currency on every edit. The
+    // historical "what was it when first saved" notion is unused in the
+    // current product, and letting the two drift is what produced the
+    // "edited price shows wrong amount in totals" reports — a sub edited
+    // from USD→KZT was being converted using its old USD origin.
+    if (dto.currency !== undefined && dto.currency !== null) {
+      sub.originalCurrency = dto.currency;
+    }
 
     if (dto.billingPeriod || dto.startDate || dto.billingDay !== undefined) {
       const startDate = sub.startDate ? new Date(sub.startDate) : null;
