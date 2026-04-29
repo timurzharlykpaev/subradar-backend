@@ -41,6 +41,8 @@ export type BillingEvent =
   | { type: 'TEAM_OWNER_EXPIRED'; memberHasOwnSub: boolean }
   | { type: 'TEAM_MEMBER_REMOVED' }
   | { type: 'GRACE_EXPIRED' }
+  | { type: 'TRIAL_EXPIRED' }
+  | { type: 'ADMIN_GRANT_PRO'; plan: Exclude<Plan, 'free'>; invitedByUserId: string }
   | { type: 'LS_SUBSCRIPTION_CREATED'; plan: Exclude<Plan, 'free'>; period: BillingPeriod; periodEnd: Date }
   | { type: 'LS_SUBSCRIPTION_UPDATED'; plan: Exclude<Plan, 'free'>; period: BillingPeriod; periodEnd: Date }
   | { type: 'LS_SUBSCRIPTION_CANCELLED' };

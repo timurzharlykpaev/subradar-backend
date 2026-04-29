@@ -23,21 +23,14 @@ import { OutboxService } from './outbox/outbox.service';
 import { TrialsService } from './trials/trials.service';
 import { maskEmail } from '../common/utils/pii';
 import {
-  BillingEvent,
-  BillingPeriod,
-  BillingSource,
-  BillingState,
-  GraceReason,
-  Plan,
-  UserBillingSnapshot,
-  transition,
-} from './state-machine';
-import {
   mapRCEventToBillingEvent,
   PRODUCT_TO_PLAN as RC_PRODUCT_TO_PLAN_MAP,
   RCRawEvent,
 } from './revenuecat/event-mapper';
 import { mapLSEventToBillingEvent } from './lemon-squeezy/event-mapper';
+import { UserBillingRepository } from './user-billing.repository';
+import { inferEventFromRcSnapshot } from './state-machine/infer-rc-event';
+import { RCSubscriberSnapshot } from './state-machine/types';
 
 export interface EffectiveAccess {
   plan: 'free' | 'pro' | 'organization';
@@ -73,6 +66,7 @@ export class BillingService {
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
     private readonly trialsService: TrialsService,
+    private readonly userBilling: UserBillingRepository,
   ) {
     this.webhookSecret = cfg.get('LEMON_SQUEEZY_WEBHOOK_SECRET', '');
     this.apiKey = cfg.get('LEMON_SQUEEZY_API_KEY', '');
@@ -88,10 +82,6 @@ export class BillingService {
       cfg.get('LEMON_SQUEEZY_TEAM_VARIANT_ID', '874623');
     this.teamYearlyVariantId =
       cfg.get('LEMON_SQUEEZY_TEAM_YEARLY_VARIANT_ID', '') || this.teamVariantId;
-  }
-
-  private extractBillingPeriod(productId: string): 'monthly' | 'yearly' {
-    return productId?.toLowerCase().includes('yearly') ? 'yearly' : 'monthly';
   }
 
   /**
@@ -234,18 +224,17 @@ export class BillingService {
 
     for (const member of members) {
       if (member.userId === owner.id) continue;
-      const u = await m.findOne(User, { where: { id: member.userId } });
-      if (!u) continue;
-      const current = this.snapshotFromUser(u);
+      const current = await this.userBilling.read(member.userId).catch(() => null);
+      if (!current) continue;
       const memberHasOwnSub =
         current.billingSource === 'revenuecat' &&
         current.state === 'active' &&
         !current.cancelAtPeriodEnd;
-      const next = transition(current, {
-        type: 'TEAM_OWNER_EXPIRED',
-        memberHasOwnSub,
-      });
-      await this.applySnapshot(m, u, next);
+      await this.userBilling.applyTransition(
+        member.userId,
+        { type: 'TEAM_OWNER_EXPIRED', memberHasOwnSub },
+        { actor: 'webhook_rc', manager: m },
+      );
     }
     this.logger.log(
       `Team owner ${owner.id} expired — cascaded to ${members.length} members`,
@@ -298,19 +287,6 @@ export class BillingService {
 
     return user.plan;
   }
-
-  private readonly RC_PRODUCT_TO_PLAN: Record<string, string> = {
-    // Production product IDs
-    'io.subradar.mobile.pro.monthly': 'pro',
-    'io.subradar.mobile.pro.yearly': 'pro',
-    'io.subradar.mobile.team.monthly': 'organization',
-    'io.subradar.mobile.team.yearly': 'organization',
-    // Sandbox / StoreKit test product IDs (same identifiers, just in case)
-    'com.goalin.subradar.pro.monthly': 'pro',
-    'com.goalin.subradar.pro.yearly': 'pro',
-    'com.goalin.subradar.team.monthly': 'organization',
-    'com.goalin.subradar.team.yearly': 'organization',
-  };
 
   /**
    * HMAC-SHA256 compare with timing-safe equal. Accepts an optional fallback
@@ -541,31 +517,38 @@ export class BillingService {
     let inviteeEmailToRevoke: string | null = null;
 
     await this.dataSource.transaction(async (m) => {
-      const current = this.snapshotFromUser(user);
-      let next: UserBillingSnapshot;
-      try {
-        next = transition(current, billingEvent);
-      } catch (err) {
-        this.logger.warn(
-          `LS ${event} invalid transition from ${current.state} for user ${user.id}: ${(err as Error).message}`,
-        );
-        await this.audit.log({
-          userId: user.id,
-          action: 'billing.webhook.invalid_transition',
-          resourceType: 'user',
-          resourceId: user.id,
-          metadata: {
-            provider: 'lemon_squeezy',
-            event,
-            from: current.state,
-            variantId,
-            error: (err as Error).message,
-          },
-        });
+      const current = await this.userBilling.read(user.id);
+      const result = await this.userBilling.applyTransition(
+        user.id,
+        billingEvent,
+        { actor: 'webhook_ls', manager: m },
+      );
+      if (!result.applied) {
+        if (result.reason === 'invalid_transition') {
+          this.logger.warn(
+            `LS ${event} invalid transition from ${result.from} for user ${user.id}`,
+          );
+          await this.audit.log({
+            userId: user.id,
+            action: 'billing.webhook.invalid_transition',
+            resourceType: 'user',
+            resourceId: user.id,
+            metadata: {
+              provider: 'lemon_squeezy',
+              event,
+              from: result.from,
+              variantId,
+              error: 'invalid_transition',
+            },
+          });
+        }
         return;
       }
-
-      await this.applySnapshot(m, user, next);
+      const next = result.snapshot;
+      // Sync the in-memory user with the freshly-written row so downstream
+      // code (audit/outbox/customer-id update) sees the new state.
+      const refreshed = await m.findOne(User, { where: { id: user.id } });
+      if (refreshed) Object.assign(user, refreshed);
       previousPlan = current.plan;
       nextPlan = next.plan;
 
@@ -697,53 +680,6 @@ export class BillingService {
     }
   }
 
-  /**
-   * Snapshot a User entity as a `UserBillingSnapshot` for the state machine.
-   * Any DB column the state machine reads MUST be mapped here, and any
-   * column it writes MUST be mirrored in `applySnapshot` below.
-   */
-  private snapshotFromUser(u: User): UserBillingSnapshot {
-    return {
-      userId: u.id,
-      plan: (u.plan as Plan) ?? 'free',
-      state: (u.billingStatus as BillingState) ?? 'free',
-      billingSource: (u.billingSource as BillingSource) ?? null,
-      billingPeriod: (u.billingPeriod as BillingPeriod | null) ?? null,
-      currentPeriodStart: u.currentPeriodStart ?? null,
-      currentPeriodEnd: u.currentPeriodEnd ?? null,
-      cancelAtPeriodEnd: !!u.cancelAtPeriodEnd,
-      graceExpiresAt: u.gracePeriodEnd ?? null,
-      graceReason: (u.gracePeriodReason as GraceReason) ?? null,
-      billingIssueAt: u.billingIssueAt ?? null,
-    };
-  }
-
-  /**
-   * Apply a state-machine snapshot back onto the User row via the active
-   * EntityManager. Participates in the caller's transaction. Also mutates
-   * the in-memory `user` object so downstream code sees the new state
-   * without having to re-fetch.
-   */
-  private async applySnapshot(
-    m: EntityManager,
-    user: User,
-    next: UserBillingSnapshot,
-  ): Promise<void> {
-    const updates: Partial<User> = {
-      plan: next.plan,
-      billingStatus: next.state,
-      billingSource: next.billingSource as any,
-      billingPeriod: next.billingPeriod,
-      currentPeriodStart: next.currentPeriodStart,
-      currentPeriodEnd: next.currentPeriodEnd,
-      cancelAtPeriodEnd: next.cancelAtPeriodEnd,
-      gracePeriodEnd: next.graceExpiresAt,
-      gracePeriodReason: next.graceReason,
-      billingIssueAt: next.billingIssueAt,
-    };
-    await m.update(User, user.id, updates);
-    Object.assign(user, updates);
-  }
 
   private amplitudeEventForRC(rcType: string, billingEventType?: string): string {
     // Refunds enter the webhook handler as `CANCELLATION` (with
@@ -801,34 +737,42 @@ export class BillingService {
     }
 
     await this.dataSource.transaction(async (m) => {
-      const current = this.snapshotFromUser(user);
-      let next: UserBillingSnapshot;
-      try {
-        next = transition(current, billingEvent);
-      } catch (err) {
-        // Invalid transitions for RC are usually duplicate/late deliveries
-        // (e.g. CANCELLATION after EXPIRATION). Log + audit but don't fail
-        // the webhook — RC would keep retrying forever otherwise.
-        this.logger.warn(
-          `RC ${event.type} invalid transition from ${current.state} for user ${user.id}: ${(err as Error).message}`,
-        );
-        await this.audit.log({
-          userId: user.id,
-          action: 'billing.webhook.invalid_transition',
-          resourceType: 'user',
-          resourceId: user.id,
-          metadata: {
-            provider: 'revenuecat',
-            event: event.type,
-            from: current.state,
-            productId: event.product_id ?? null,
-            error: (err as Error).message,
-          },
-        });
+      const current = await this.userBilling.read(user.id);
+      const result = await this.userBilling.applyTransition(
+        user.id,
+        billingEvent,
+        { actor: 'webhook_rc', manager: m },
+      );
+      if (!result.applied) {
+        if (result.reason === 'invalid_transition') {
+          // Invalid transitions for RC are usually duplicate/late deliveries
+          // (e.g. CANCELLATION after EXPIRATION). Log + audit but don't fail
+          // the webhook — RC would keep retrying forever otherwise.
+          this.logger.warn(
+            `RC ${event.type} invalid transition from ${result.from} for user ${user.id}`,
+          );
+          await this.audit.log({
+            userId: user.id,
+            action: 'billing.webhook.invalid_transition',
+            resourceType: 'user',
+            resourceId: user.id,
+            metadata: {
+              provider: 'revenuecat',
+              event: event.type,
+              from: result.from,
+              productId: event.product_id ?? null,
+              error: 'invalid_transition',
+            },
+          });
+        }
         return;
       }
-
-      await this.applySnapshot(m, user, next);
+      const next = result.snapshot;
+      // Refresh in-memory user with the freshly-written row so the rest of
+      // the handler (workspace reactivation, downgradedAt, audit, outbox)
+      // sees the new state.
+      const refreshed = await m.findOne(User, { where: { id: user.id } });
+      if (refreshed) Object.assign(user, refreshed);
 
       // Reactivate owner's workspace on purchase / renewal / uncancellation —
       // a previous EXPIRATION may have marked it expired.
@@ -1038,11 +982,17 @@ export class BillingService {
         throw new ConflictException('User already on a paid plan');
       }
 
-      invitee.plan = 'pro';
-      invitee.billingSource = null as any;
+      // billing fields are owned by the state machine; only non-billing
+      // book-keeping (invitedByUserId / proInviteeEmail) goes through `m.save`.
       invitee.invitedByUserId = owner.id;
       owner.proInviteeEmail = email;
       await m.save([owner, invitee]);
+
+      await this.userBilling.applyTransition(
+        invitee.id,
+        { type: 'ADMIN_GRANT_PRO', plan: 'pro', invitedByUserId: owner.id },
+        { actor: 'admin_grant', manager: m },
+      );
 
       await this.audit.log({
         userId: owner.id,
@@ -1096,10 +1046,16 @@ export class BillingService {
 
       const previousPlan = invitee.plan;
       const inviterId = invitee.invitedByUserId;
-      invitee.plan = 'free';
-      invitee.billingSource = null as any;
       invitee.invitedByUserId = null;
       await m.save(invitee);
+
+      // billing fields owned by the state machine — TRIAL_EXPIRED is the
+      // canonical "drop to free + clear period" verb for non-RC paid rows.
+      await this.userBilling.applyTransition(
+        invitee.id,
+        { type: 'TRIAL_EXPIRED' },
+        { actor: 'admin_grant', manager: m },
+      );
 
       await this.audit.log({
         userId: inviterId ?? invitee.id,
@@ -1150,155 +1106,109 @@ export class BillingService {
     });
   }
 
-  async syncRevenueCat(userId: string, productId: string): Promise<void> {
-    // MANDATORY server-side verification — never trust the client.
-    // Without the REST API key we cannot confirm the entitlement, so we
-    // refuse the sync (503) rather than upgrading blindly. This protects
-    // us from trivial curl-based plan forgery.
-    const rcApiKey =
+  /**
+   * Fetch RC's subscriber view and shape it into the framework-agnostic
+   * RCSubscriberSnapshot the state-machine helpers consume. Throws 503
+   * when the API is unreachable so callers don't silently degrade — RC
+   * is mandatory for plan-grant authentication.
+   */
+  private async fetchRcSubscriberSnapshot(
+    userId: string,
+  ): Promise<RCSubscriberSnapshot> {
+    const apiKey =
       this.cfg.get<string>('REVENUECAT_API_KEY_SECRET', '') ||
       this.cfg.get<string>('REVENUECAT_API_KEY', '');
-    if (!rcApiKey) {
-      this.logger.error(
-        'syncRevenueCat: REVENUECAT_API_KEY_SECRET not set — refusing to sync without server-side verification',
+    if (!apiKey) {
+      throw new ServiceUnavailableException(
+        'Billing verification is temporarily unavailable. Please try again later.',
+      );
+    }
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+        { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' } },
+      );
+    } catch (e) {
+      this.logger.error(`fetchRcSubscriberSnapshot: RC fetch failed: ${e}`);
+      throw new ServiceUnavailableException(
+        'Billing verification is temporarily unavailable. Please try again later.',
+      );
+    }
+    if (!res.ok) {
+      this.logger.warn(
+        `fetchRcSubscriberSnapshot: RC returned ${res.status} for user ${userId}`,
       );
       throw new ServiceUnavailableException(
         'Billing verification is temporarily unavailable. Please try again later.',
       );
     }
-
-    // Resolve plan and billing period from productId first (still validated below against RC entitlements).
-    let plan = this.RC_PRODUCT_TO_PLAN[productId];
-    if (!plan) {
-      const lower = productId.toLowerCase();
-      if (lower.includes('team') || lower.includes('org')) {
-        plan = 'organization';
-      } else if (lower.includes('pro') || lower.includes('premium')) {
-        plan = 'pro';
-      } else {
-        this.logger.warn(`syncRevenueCat: unknown productId "${productId}", defaulting to pro`);
-        plan = 'pro';
+    const data = await res.json();
+    const ents = data?.subscriber?.entitlements ?? {};
+    const subs = data?.subscriber?.subscriptions ?? {};
+    const now = Date.now();
+    const entitlements: Record<string, { expiresAt: Date | null; productId: string }> = {};
+    let latestExpirationMs: number | null = null;
+    for (const [name, value] of Object.entries(ents) as [string, any][]) {
+      const expRaw = value?.expires_date;
+      const expMs =
+        typeof expRaw === 'number'
+          ? expRaw
+          : expRaw
+            ? Date.parse(String(expRaw))
+            : NaN;
+      if (!isNaN(expMs) && expMs > now) {
+        entitlements[name] = {
+          expiresAt: new Date(expMs),
+          productId: String(value?.product_identifier ?? ''),
+        };
+        if (latestExpirationMs == null || expMs > latestExpirationMs) {
+          latestExpirationMs = expMs;
+        }
       }
     }
-    const billingPeriod = this.extractBillingPeriod(productId);
-
-    // Call RevenueCat REST API to confirm the user actually has an active
-    // entitlement. Docs: https://www.revenuecat.com/docs/service/api-reference
-    let rcRes: Response;
-    try {
-      rcRes = await fetch(
-        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${rcApiKey}`,
-            Accept: 'application/json',
-          },
-        },
-      );
-    } catch (e) {
-      this.logger.error(`syncRevenueCat: RC API fetch failed: ${e}`);
-      throw new ServiceUnavailableException(
-        'Billing verification is temporarily unavailable. Please try again later.',
-      );
-    }
-
-    if (!rcRes.ok) {
-      this.logger.warn(
-        `syncRevenueCat: RC API returned ${rcRes.status} for user ${userId}`,
-      );
-      throw new ServiceUnavailableException(
-        'Billing verification is temporarily unavailable. Please try again later.',
-      );
-    }
-
-    let rcData: any;
-    try {
-      rcData = await rcRes.json();
-    } catch (e) {
-      this.logger.error(`syncRevenueCat: RC API returned invalid JSON: ${e}`);
-      throw new ServiceUnavailableException(
-        'Billing verification is temporarily unavailable. Please try again later.',
-      );
-    }
-
-    const entitlements = rcData?.subscriber?.entitlements ?? {};
-    const now = Date.now();
-
-    const isEntitlementActive = (e: any): boolean => {
-      if (!e) return false;
-      if (e.expires_date === null || e.expires_date === undefined) return true;
-      const ts = typeof e.expires_date === 'number'
-        ? e.expires_date
-        : Date.parse(e.expires_date);
-      return !isNaN(ts) && ts > now;
-    };
-
-    // Require an active entitlement that matches the requested plan tier.
-    // Match flexibly: RC dashboard often uses display names like "SubRadar Pro"
-    // or "Team Access" rather than canonical slugs. We accept any entitlement
-    // whose lowercased name contains a relevant keyword AND whose productId
-    // (when present) matches the purchase we're syncing.
-    const planKeywords = plan === 'organization'
-      ? ['team', 'org', 'organization']
-      : ['pro', 'premium'];
-
-    const matchesPlanTier = (name: string, value: any): boolean => {
-      const lcName = name.toLowerCase();
-      if (planKeywords.some((k) => lcName.includes(k))) return true;
-      // Fallback: entitlement tied to the exact product we just purchased.
-      const entProductId = String(value?.product_identifier ?? '').toLowerCase();
-      return entProductId === productId.toLowerCase();
-    };
-
-    let matchingExpiresMs: number | null = null;
-    const matchingActive = Object.entries(entitlements).some(
-      ([name, value]: [string, any]) => {
-        if (!matchesPlanTier(name, value) || !isEntitlementActive(value)) {
-          return false;
-        }
-        const raw = (value as any)?.expires_date;
-        const ts =
-          typeof raw === 'number'
-            ? raw
-            : raw != null
-              ? Date.parse(String(raw))
-              : NaN;
-        if (!isNaN(ts) && (matchingExpiresMs === null || ts > matchingExpiresMs)) {
-          matchingExpiresMs = ts;
-        }
-        return true;
-      },
+    const cancelAtPeriodEnd = Object.values(subs).some(
+      (s: any) => s && s.unsubscribe_detected_at,
     );
+    const billingIssueDetectedAt = Object.values(subs)
+      .map((s: any) => s?.billing_issues_detected_at)
+      .filter(Boolean)
+      .map((v: any) => new Date(String(v)))
+      .reduce<Date | null>((acc, d) => (!acc || d > acc ? d : acc), null);
+    return { entitlements, latestExpirationMs, cancelAtPeriodEnd, billingIssueDetectedAt };
+  }
 
-    if (!matchingActive) {
-      const seen = Object.keys(entitlements).join(',') || '<none>';
+  async syncRevenueCat(userId: string, productId: string): Promise<void> {
+    const rc = await this.fetchRcSubscriberSnapshot(userId);
+
+    // Require the requested product (or its tier) to actually be present in
+    // RC, otherwise the client is asking us to grant access we can't verify.
+    const lowerProductId = productId.toLowerCase();
+    const isOrgTier = lowerProductId.includes('team') || lowerProductId.includes('org');
+    const matches = Object.entries(rc.entitlements).some(([name, ent]) => {
+      const lcName = name.toLowerCase();
+      if (ent.productId === productId) return true;
+      if (isOrgTier) return lcName.includes('team') || lcName.includes('org');
+      return lcName.includes('pro') || lcName.includes('premium');
+    });
+    if (!matches) {
+      const seen = Object.keys(rc.entitlements).join(',') || '<none>';
       this.logger.warn(
-        `syncRevenueCat: user ${userId} has no active entitlement matching tier=${plan} (product=${productId}); RC returned entitlements=[${seen}]`,
+        `syncRevenueCat: user ${userId} has no active entitlement matching product=${productId}; RC returned [${seen}]`,
       );
       throw new ForbiddenException(
         'No active RevenueCat entitlement found for this account.',
       );
     }
 
-    // Single atomic UPDATE — avoids partial-save anomalies and concurrent
-    // webhook writes clobbering freshly-set billingStatus. Team membership
-    // takes precedence via effective access; `plan` here is just the "own
-    // subscription" marker.
-    const periodEnd = matchingExpiresMs ? new Date(matchingExpiresMs) : null;
-    await this.usersService.update(userId, {
-      plan,
-      billingPeriod,
-      billingSource: 'revenuecat',
-      billingStatus: 'active',
-      cancelAtPeriodEnd: false,
-      currentPeriodEnd: periodEnd,
-      billingIssueAt: null,
-      gracePeriodEnd: null,
-      gracePeriodReason: null,
-    });
-    this.logger.log(
-      `syncRevenueCat: verified via RC — user ${userId} → plan ${plan} (${billingPeriod}, product: ${productId}, periodEnd: ${periodEnd?.toISOString() ?? 'n/a'})`,
-    );
+    const current = await this.userBilling.read(userId);
+    const event = inferEventFromRcSnapshot(rc, current, productId);
+    if (!event) {
+      this.logger.log(`syncRevenueCat: user ${userId} already in sync`);
+      return;
+    }
+    await this.userBilling.applyTransition(userId, event, { actor: 'sync' });
+    this.logger.log(`syncRevenueCat: user ${userId} → ${event.type}`);
   }
 
   /**
@@ -1319,199 +1229,112 @@ export class BillingService {
     action: 'noop' | 'cancel_at_period_end' | 'downgraded';
     reason: string;
   }> {
-    const user = await this.usersService.findById(userId);
-
-    if (user.billingSource !== 'revenuecat') {
-      return { action: 'noop', reason: `billingSource=${user.billingSource ?? 'null'}` };
+    const current = await this.userBilling.read(userId);
+    if (current.billingSource !== 'revenuecat') {
+      return { action: 'noop', reason: `billingSource=${current.billingSource ?? 'null'}` };
     }
-    if (user.plan === 'free') {
+    if (current.state === 'free') {
       return { action: 'noop', reason: 'already free' };
     }
 
-    const rcApiKey =
-      this.cfg.get<string>('REVENUECAT_API_KEY_SECRET', '') ||
-      this.cfg.get<string>('REVENUECAT_API_KEY', '');
-    if (!rcApiKey) {
-      this.logger.warn('reconcileRevenueCat: RC API key missing — skipping');
-      return { action: 'noop', reason: 'rc_api_key_missing' };
-    }
-
-    let rcRes: Response;
+    let rc: RCSubscriberSnapshot;
     try {
-      rcRes = await fetch(
-        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${rcApiKey}`,
-            Accept: 'application/json',
-          },
-        },
+      rc = await this.fetchRcSubscriberSnapshot(userId);
+    } catch (e: any) {
+      this.logger.warn(
+        `reconcileRevenueCat: RC fetch failed for ${userId}: ${e?.message}`,
       );
-    } catch (e) {
-      this.logger.warn(`reconcileRevenueCat: RC fetch failed for user ${userId}: ${e}`);
       return { action: 'noop', reason: 'rc_fetch_failed' };
     }
 
-    if (!rcRes.ok) {
-      this.logger.warn(`reconcileRevenueCat: RC returned ${rcRes.status} for user ${userId}`);
-      return { action: 'noop', reason: `rc_${rcRes.status}` };
-    }
+    const event = inferEventFromRcSnapshot(rc, current);
+    if (!event) return { action: 'noop', reason: 'rc_in_sync' };
 
-    let rcData: any;
-    try {
-      rcData = await rcRes.json();
-    } catch {
-      return { action: 'noop', reason: 'rc_invalid_json' };
-    }
-
-    const entitlements = rcData?.subscriber?.entitlements ?? {};
-    const subscriptions = rcData?.subscriber?.subscriptions ?? {};
-    const now = Date.now();
-    const hasActiveEntitlement = Object.values(entitlements).some((e: any) => {
-      if (!e) return false;
-      if (e.expires_date == null) return true;
-      const ts = typeof e.expires_date === 'number'
-        ? e.expires_date
-        : Date.parse(String(e.expires_date));
-      return !isNaN(ts) && ts > now;
+    const result = await this.userBilling.applyTransition(userId, event, {
+      actor: 'reconcile',
     });
+    if (!result.applied) return { action: 'noop', reason: result.reason };
 
-    // RC sets `unsubscribe_detected_at` the moment the user cancels, even
-    // though the entitlement remains active until expires_date. Without
-    // honouring this signal, reconcile silently returned `noop` and the
-    // backend stayed on `state='active'` forever — the exact bug behind
-    // production users seeing "Pro" indefinitely after cancelling in the
-    // App Store.
-    const cancelDetected = Object.values(subscriptions).some(
-      (s: any) => s && s.unsubscribe_detected_at,
-    );
-
-    if (hasActiveEntitlement) {
-      // Apple-cancelled but still in the paid period → mirror it onto the
-      // user row so /billing/me can reflect the "cancelling on X" state and
-      // the paywall lets them upgrade to Team. We also re-stamp the row
-      // when only the billingStatus is out of sync (cancelAtPeriodEnd
-      // already true but status stuck on 'active' from an earlier code
-      // path that forgot to update it) — without this the noop branch
-      // would forever leave the user on `state: 'active'` despite the
-      // cancellation flag.
-      const needsCancelStamp =
-        cancelDetected &&
-        (!user.cancelAtPeriodEnd ||
-          user.billingStatus !== 'cancel_at_period_end');
-      if (needsCancelStamp) {
-        const latestExpiresMs = Object.values(subscriptions)
-          .map((s: any) => (s?.expires_date ? Date.parse(String(s.expires_date)) : NaN))
-          .filter((n) => !isNaN(n))
-          .reduce((max, ts) => (ts > max ? ts : max), 0);
-        await this.usersService.update(userId, {
-          cancelAtPeriodEnd: true,
-          billingStatus: 'cancel_at_period_end' as any,
-          ...(latestExpiresMs > 0
-            ? { currentPeriodEnd: new Date(latestExpiresMs) }
-            : {}),
-        });
-        this.logger.log(
-          `reconcileRevenueCat: user ${userId} cancel detected via unsubscribe_detected_at → cancel_at_period_end`,
-        );
-        return { action: 'cancel_at_period_end', reason: 'unsubscribe_detected_at' };
-      }
-      return { action: 'noop', reason: 'rc_has_active_entitlement' };
-    }
-
-    const periodEnd = user.currentPeriodEnd
-      ? new Date(user.currentPeriodEnd).getTime()
-      : null;
-    const periodActive = periodEnd != null && periodEnd > now;
-
-    if (periodActive) {
-      await this.usersService.update(userId, {
-        cancelAtPeriodEnd: true,
-      });
+    if (event.type === 'RC_CANCELLATION') {
       this.logger.log(
-        `reconcileRevenueCat: user ${userId} entitlements empty but period still valid → cancelAtPeriodEnd=true (was plan=${user.plan}, status=${user.billingStatus})`,
+        `reconcileRevenueCat: user ${userId} → cancel_at_period_end`,
       );
-      return { action: 'cancel_at_period_end', reason: 'period_active' };
+      return { action: 'cancel_at_period_end', reason: event.type };
     }
-
-    await this.usersService.update(userId, {
-      plan: 'free',
-      billingStatus: 'free' as any,
-      billingSource: undefined as any,
-      cancelAtPeriodEnd: false,
-      currentPeriodEnd: null as any,
-    });
-    this.logger.log(
-      `reconcileRevenueCat: user ${userId} entitlements empty + period elapsed → free (was plan=${user.plan}, status=${user.billingStatus})`,
-    );
-    return { action: 'downgraded', reason: 'period_elapsed' };
+    if (event.type === 'RC_EXPIRATION') {
+      this.logger.log(`reconcileRevenueCat: user ${userId} → free`);
+      return { action: 'downgraded', reason: event.type };
+    }
+    return { action: 'noop', reason: event.type };
   }
 
   async cancelSubscription(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
-    const before = {
-      plan: user.plan,
-      billingSource: user.billingSource,
-      billingStatus: user.billingStatus,
-      cancelAtPeriodEnd: user.cancelAtPeriodEnd,
-      trialEndDate: user.trialEndDate,
-    };
+    const current = await this.userBilling.read(userId);
     this.logger.log(
-      `cancelSubscription: user ${userId} before=${JSON.stringify(before)}`,
+      `cancelSubscription: user ${userId} state=${current.state} plan=${current.plan} source=${current.billingSource ?? 'null'}`,
     );
 
-    // Cancel trial: clear trial dates, reset plan to free
-    // Only if not already paying via RevenueCat (trial superseded by real purchase)
-    if (user.trialEndDate && new Date(user.trialEndDate) > new Date() && user.billingSource !== 'revenuecat') {
-      await this.usersService.update(userId, {
-        plan: 'free',
-        billingStatus: 'free' as any,
-        trialEndDate: undefined as any,
-        billingSource: undefined as any,
-        cancelAtPeriodEnd: false,
-      });
+    if (current.state === 'free') {
+      this.logger.warn(`cancelSubscription: user ${userId} already on free plan`);
+      return;
+    }
+
+    // Backend-only trial (no RC/LS sub yet) — TRIAL_EXPIRED resets the
+    // billing snapshot. Trial bookkeeping (trialEndDate) lives outside
+    // the state machine and is cleared via usersService.
+    const isOnBackendTrial =
+      user.trialEndDate &&
+      new Date(user.trialEndDate) > new Date() &&
+      current.billingSource !== 'revenuecat' &&
+      current.billingSource !== 'lemon_squeezy';
+    if (isOnBackendTrial) {
+      await this.userBilling.applyTransition(
+        userId,
+        { type: 'TRIAL_EXPIRED' },
+        { actor: 'user_cancel' },
+      );
+      await this.usersService.update(userId, { trialEndDate: undefined as any });
       this.logger.log(`cancelSubscription: trial cancelled for user ${userId}`);
       return;
     }
 
-    // Cancel RC subscription: mark cancelAtPeriodEnd AND flip billingStatus
-    // to 'cancel_at_period_end'. The actual downgrade waits for the
-    // EXPIRATION webhook (or the currentPeriodEnd guard in
-    // EffectiveAccessResolver). Without updating billingStatus here
-    // /billing/me returned `state: 'active'` after a successful cancel,
-    // which made the UI think the cancellation never happened — the user
-    // saw the Pro/Team badge intact and the Cancel CTA still active.
-    // Idempotent if the field is already in the right state.
-    if (user.plan !== 'free' && user.billingSource === 'revenuecat') {
-      await this.usersService.update(userId, {
-        cancelAtPeriodEnd: true,
-        billingStatus: 'cancel_at_period_end' as any,
-      });
+    if (current.billingSource === 'revenuecat') {
+      await this.userBilling.applyTransition(
+        userId,
+        {
+          type: 'RC_CANCELLATION',
+          periodEnd: current.currentPeriodEnd ?? new Date(),
+        },
+        { actor: 'user_cancel' },
+      );
       this.logger.log(
         `cancelSubscription: RC subscription marked cancel-at-period-end for user ${userId}`,
       );
       return;
     }
 
-    // Cancel non-RC paid subscription (legacy / admin grants / lemon_squeezy):
-    // downgrade to free immediately AND reset billingStatus so /billing/me
-    // reflects the change instead of keeping a stale 'active' status that
-    // makes the team-owner branch of effective-access keep returning org.
-    if (user.plan !== 'free') {
-      await this.usersService.update(userId, {
-        plan: 'free',
-        billingStatus: 'free' as any,
-        billingSource: undefined as any,
-        cancelAtPeriodEnd: false,
-        currentPeriodEnd: null as any,
-      });
+    if (current.billingSource === 'lemon_squeezy') {
+      await this.userBilling.applyTransition(
+        userId,
+        { type: 'LS_SUBSCRIPTION_CANCELLED' },
+        { actor: 'user_cancel' },
+      );
       this.logger.log(
-        `cancelSubscription: non-RC plan cancelled for user ${userId} (was ${before.plan}/${before.billingSource ?? 'null'})`,
+        `cancelSubscription: LS subscription cancelled for user ${userId}`,
       );
       return;
     }
 
-    // Already free — nothing to cancel
-    this.logger.warn(`cancelSubscription: user ${userId} already on free plan`);
+    // Legacy admin grant — no billing source but plan != free.
+    // TRIAL_EXPIRED resets the snapshot to free + clears period.
+    await this.userBilling.applyTransition(
+      userId,
+      { type: 'TRIAL_EXPIRED' },
+      { actor: 'user_cancel' },
+    );
+    this.logger.log(
+      `cancelSubscription: legacy paid plan cancelled for user ${userId}`,
+    );
   }
 }

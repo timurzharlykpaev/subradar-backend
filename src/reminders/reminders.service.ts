@@ -14,6 +14,7 @@ import {
 import { pushT } from '../notifications/push-i18n';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
+import { UserBillingRepository } from '../billing/user-billing.repository';
 
 @Injectable()
 export class RemindersService {
@@ -26,6 +27,7 @@ export class RemindersService {
     private readonly userRepo: Repository<User>,
     private readonly notificationsService: NotificationsService,
     private readonly tg: TelegramAlertService,
+    private readonly userBilling: UserBillingRepository,
   ) {}
 
   /**
@@ -324,7 +326,8 @@ export class RemindersService {
 
     const users = await this.userRepo
       .createQueryBuilder('u')
-      .where("u.plan = 'pro'")
+      .leftJoinAndSelect('u.billing', 'b')
+      .where("b.plan = 'pro'")
       .andWhere('u.trialUsed = true')
       .andWhere('u.lemonSqueezyCustomerId IS NULL')
       .andWhere('u.trialEndDate IS NOT NULL')
@@ -400,9 +403,10 @@ export class RemindersService {
     // Find users with cancelAtPeriodEnd=true and currentPeriodEnd in the future (or today)
     const users = await this.userRepo
       .createQueryBuilder('u')
-      .where('u.cancelAtPeriodEnd = true')
-      .andWhere('u.currentPeriodEnd IS NOT NULL')
-      .andWhere("u.plan != 'free'")
+      .leftJoinAndSelect('u.billing', 'b')
+      .where('b.cancelAtPeriodEnd = true')
+      .andWhere('b.currentPeriodEnd IS NOT NULL')
+      .andWhere("b.plan != 'free'")
       .getMany();
 
     let sent = 0;
@@ -596,7 +600,8 @@ export class RemindersService {
   private async expireTrialsImpl() {
     const expired = await this.userRepo
       .createQueryBuilder('u')
-      .where("u.plan = 'pro'")
+      .leftJoinAndSelect('u.billing', 'b')
+      .where("b.plan = 'pro'")
       .andWhere('u.trialUsed = true')
       .andWhere('u.trialEndDate < NOW()')
       .andWhere('u.lemonSqueezyCustomerId IS NULL')
@@ -604,7 +609,7 @@ export class RemindersService {
       // legacy trial — their billingSource will be set, and we must not
       // null out their plan. The trial timer is only authoritative for
       // backend-only trials.
-      .andWhere('(u."billingSource" IS NULL)')
+      .andWhere('(b."billingSource" IS NULL)')
       .getMany();
 
     for (const user of expired) {
@@ -616,13 +621,13 @@ export class RemindersService {
       // wrote to billingStatus. cancelAtPeriodEnd is also cleared so the
       // banner pipeline doesn't mistake an expired trial for an
       // outstanding cancellation.
-      await this.userRepo.update(user.id, {
-        plan: 'free',
-        billingStatus: 'free' as any,
-        cancelAtPeriodEnd: false,
-        currentPeriodEnd: null as any,
-        trialEndDate: null as any,
-      });
+      await this.userBilling.applyTransition(
+        user.id,
+        { type: 'TRIAL_EXPIRED' },
+        { actor: 'cron_trial' },
+      );
+      // trialEndDate isn't a state-machine field — clear it directly.
+      await this.userRepo.update(user.id, { trialEndDate: null as any });
       this.logger.log(`Trial expired → downgraded to free: ${user.email}`);
     }
     if (expired.length > 0) {

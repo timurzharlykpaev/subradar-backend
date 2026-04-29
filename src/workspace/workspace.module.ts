@@ -10,6 +10,7 @@ import { AnalysisModule } from '../analysis/analysis.module';
 import { UsersModule } from '../users/users.module';
 import { GuardsModule } from '../common/guards/guards.module';
 import { OutboxModule } from '../billing/outbox/outbox.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { OutboxModule } from '../billing/outbox/outbox.module';
     UsersModule,
     GuardsModule,
     OutboxModule,
+    forwardRef(() => BillingModule),
   ],
   controllers: [WorkspaceController],
   providers: [WorkspaceService],

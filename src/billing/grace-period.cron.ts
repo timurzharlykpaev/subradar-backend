@@ -2,33 +2,41 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
-import { User } from '../users/entities/user.entity';
+import { UserBilling } from './entities/user-billing.entity';
 import { Workspace } from '../workspace/entities/workspace.entity';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
+import { UserBillingRepository } from './user-billing.repository';
 
 @Injectable()
 export class GracePeriodCron {
   private readonly logger = new Logger(GracePeriodCron.name);
 
   constructor(
-    @InjectRepository(User) private readonly userRepo: Repository<User>,
+    @InjectRepository(UserBilling)
+    private readonly billingRepo: Repository<UserBilling>,
     @InjectRepository(Workspace) private readonly workspaceRepo: Repository<Workspace>,
     private readonly tg: TelegramAlertService,
+    private readonly userBilling: UserBillingRepository,
   ) {}
 
   @Cron('5 0 * * *')
   async resetExpiredGrace() {
     await runCronHandler('resetExpiredGrace', this.logger, this.tg, async () => {
       const now = new Date();
-      const users = await this.userRepo.find({
+      const rows = await this.billingRepo.find({
         where: { gracePeriodEnd: LessThan(now) as any },
       });
       let count = 0;
-      for (const u of users) {
-        u.gracePeriodEnd = null;
-        u.gracePeriodReason = null;
-        await this.userRepo.save(u);
+      for (const row of rows) {
+        // Route through the state machine — GRACE_EXPIRED is a no-op when
+        // the user has already moved off grace, otherwise transitions to
+        // free + clears period/source.
+        await this.userBilling.applyTransition(
+          row.userId,
+          { type: 'GRACE_EXPIRED' },
+          { actor: 'cron_grace' },
+        );
         count++;
       }
       this.logger.log(`Reset grace period for ${count} users`);

@@ -1,5 +1,5 @@
 import { transition } from '../transitions';
-import { UserBillingSnapshot } from '../types';
+import { InvalidTransitionError, UserBillingSnapshot } from '../types';
 
 function freeSnapshot(): UserBillingSnapshot {
   return {
@@ -266,5 +266,72 @@ describe('BillingStateMachine.transition', () => {
     const next = transition(cap, { type: 'RC_BILLING_ISSUE' });
     expect(next.state).toBe('billing_issue');
     expect(next.billingIssueAt).toBeInstanceOf(Date);
+  });
+
+  describe('TRIAL_EXPIRED', () => {
+    it('drops paid trial state to free', () => {
+      const trialing: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'pro',
+        state: 'active',
+        billingSource: null,
+        billingPeriod: 'monthly',
+        currentPeriodEnd: new Date('2099-01-01'),
+      };
+      const next = transition(trialing, { type: 'TRIAL_EXPIRED' });
+      expect(next.plan).toBe('free');
+      expect(next.state).toBe('free');
+      expect(next.billingSource).toBeNull();
+      expect(next.billingPeriod).toBeNull();
+      expect(next.currentPeriodStart).toBeNull();
+      expect(next.currentPeriodEnd).toBeNull();
+      expect(next.cancelAtPeriodEnd).toBe(false);
+    });
+
+    it('is a no-op on free', () => {
+      const free = freeSnapshot();
+      expect(transition(free, { type: 'TRIAL_EXPIRED' })).toEqual(free);
+    });
+
+    it('is a no-op on active RC subscription (trial superseded by real purchase)', () => {
+      const rcActive: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'pro',
+        state: 'active',
+        billingSource: 'revenuecat',
+        billingPeriod: 'monthly',
+        currentPeriodEnd: new Date('2099-01-01'),
+      };
+      expect(transition(rcActive, { type: 'TRIAL_EXPIRED' })).toEqual(rcActive);
+    });
+  });
+
+  describe('ADMIN_GRANT_PRO', () => {
+    it('grants pro to a free user', () => {
+      const free = freeSnapshot();
+      const next = transition(free, {
+        type: 'ADMIN_GRANT_PRO',
+        plan: 'pro',
+        invitedByUserId: 'owner-1',
+      });
+      expect(next.plan).toBe('pro');
+      expect(next.state).toBe('active');
+      expect(next.billingSource).toBeNull();
+      expect(next.billingPeriod).toBeNull();
+      expect(next.currentPeriodEnd).toBeNull();
+      expect(next.cancelAtPeriodEnd).toBe(false);
+    });
+
+    it('throws when the user already has a paid plan', () => {
+      const active: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'pro',
+        state: 'active',
+        billingSource: 'revenuecat',
+      };
+      expect(() =>
+        transition(active, { type: 'ADMIN_GRANT_PRO', plan: 'pro', invitedByUserId: 'x' }),
+      ).toThrow(InvalidTransitionError);
+    });
   });
 });

@@ -195,6 +195,46 @@ export function transition(
         billingSource: null,
       };
 
+    case 'TRIAL_EXPIRED':
+      // Backend-only trial timer ran out. Skip if the user already moved
+      // off trial (RC purchase superseded it, or already on free).
+      if (s.state === 'free') return s;
+      if (s.billingSource === 'revenuecat' || s.billingSource === 'lemon_squeezy') return s;
+      return {
+        ...s,
+        plan: 'free',
+        state: 'free',
+        billingSource: null,
+        billingPeriod: null,
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        graceExpiresAt: null,
+        graceReason: null,
+        billingIssueAt: null,
+      };
+
+    case 'ADMIN_GRANT_PRO':
+      // Owner-invitee grant — the invited user gets a paid plan attached
+      // to no billing source. Only allowed from `free` so we never clobber
+      // a real RC/LS subscription.
+      if (s.state !== 'free') {
+        throw new InvalidTransitionError(s.state, e.type);
+      }
+      return {
+        ...s,
+        plan: e.plan,
+        state: 'active',
+        billingSource: null,
+        billingPeriod: null,
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        graceExpiresAt: null,
+        graceReason: null,
+        billingIssueAt: null,
+      };
+
     case 'LS_SUBSCRIPTION_CREATED':
     case 'LS_SUBSCRIPTION_UPDATED':
       return {

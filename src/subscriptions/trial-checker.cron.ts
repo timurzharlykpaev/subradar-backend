@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -7,6 +7,7 @@ import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
+import { UserBillingRepository } from '../billing/user-billing.repository';
 
 @Injectable()
 export class TrialCheckerCron {
@@ -19,6 +20,8 @@ export class TrialCheckerCron {
     private readonly userRepo: Repository<User>,
     private readonly notifications: NotificationsService,
     private readonly tg: TelegramAlertService,
+    @Inject(forwardRef(() => UserBillingRepository))
+    private readonly userBilling: UserBillingRepository,
   ) {}
 
   // ── Subscription trial reminders (1d, 3d before end) ──────────────────────
@@ -118,12 +121,13 @@ export class TrialCheckerCron {
     // Users on our backend trial expiring in ~1 day, not yet RC subscribers
     const expiringUsers = await this.userRepo
       .createQueryBuilder('u')
-      .where('u.plan = :plan', { plan: 'pro' })
+      .leftJoinAndSelect('u.billing', 'b')
+      .where('b.plan = :plan', { plan: 'pro' })
       .andWhere('u.trialUsed = true')
       .andWhere('u.trialEndDate IS NOT NULL')
       .andWhere('u.trialEndDate >= :tomorrow', { tomorrow })
       .andWhere('u.trialEndDate < :dayAfter', { dayAfter })
-      .andWhere('u.billingSource IS NULL')  // not yet paid via RC/LS
+      .andWhere('b.billingSource IS NULL')  // not yet paid via RC/LS
       .getMany();
 
     for (const user of expiringUsers) {
@@ -183,22 +187,26 @@ export class TrialCheckerCron {
 
     const expiredUsers = await this.userRepo
       .createQueryBuilder('u')
-      .where('u.plan = :plan', { plan: 'pro' })
+      .leftJoinAndSelect('u.billing', 'b')
+      .where('b.plan = :plan', { plan: 'pro' })
       .andWhere('u.trialUsed = true')
       .andWhere('u.trialEndDate IS NOT NULL')
       .andWhere('u.trialEndDate < :now', { now })
-      .andWhere('u.billingSource IS NULL')          // not paying via RC or LS
+      .andWhere('b.billingSource IS NULL')          // not paying via RC or LS
       .andWhere('u.lemonSqueezyCustomerId IS NULL') // not a LS customer
       .getMany();
 
     let downgraded = 0;
     for (const user of expiredUsers) {
       try {
-        await this.userRepo.update(user.id, {
-          plan: 'free',
-          trialEndDate: undefined as any,
-          billingPeriod: null as any,
-        });
+        // billing fields go through the state machine; trialEndDate is
+        // not state-machine-owned and is cleared via the user repo.
+        await this.userBilling.applyTransition(
+          user.id,
+          { type: 'TRIAL_EXPIRED' },
+          { actor: 'cron_trial' },
+        );
+        await this.userRepo.update(user.id, { trialEndDate: null as any });
         downgraded++;
         this.logger.log(`Downgraded user ${user.email} (${user.id}) from pro trial to free`);
 

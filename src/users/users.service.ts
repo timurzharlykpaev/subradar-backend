@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from './entities/user.entity';
+import { UserBilling } from '../billing/entities/user-billing.entity';
 import { AuditService } from '../common/audit/audit.service';
 
 @Injectable()
@@ -12,6 +13,8 @@ export class UsersService {
 
   constructor(
     @InjectRepository(User) private readonly repo: Repository<User>,
+    @InjectRepository(UserBilling)
+    private readonly billingRepo: Repository<UserBilling>,
     private readonly audit: AuditService,
     private readonly cfg: ConfigService,
   ) {}
@@ -29,6 +32,7 @@ export class UsersService {
   async findByEmailWithPassword(email: string): Promise<User | null> {
     return this.repo
       .createQueryBuilder('user')
+      .leftJoinAndSelect('user.billing', 'billing')
       .addSelect('user.password')
       .where('user.email = :email', { email })
       .getOne();
@@ -43,37 +47,44 @@ export class UsersService {
   }
 
   async create(data: Partial<User>): Promise<User> {
-    // New users start on Free plan — trial is offered later via TrialOfferModal
-    const user = this.repo.create({
-      ...data,
-      plan: 'free',
-      trialUsed: false,
+    // New users start on Free plan — trial is offered later via TrialOfferModal.
+    // billing fields are owned by `user_billing`; create both rows in a single
+    // transaction so the User row never exists without its billing snapshot.
+    return this.repo.manager.transaction(async (m) => {
+      const user = m.create(User, { ...data, trialUsed: false });
+      await m.save(user);
+      await m.insert(UserBilling, {
+        userId: user.id,
+        plan: 'free',
+        billingStatus: 'free',
+        cancelAtPeriodEnd: false,
+      });
+      // Re-load with the eager `billing` relation populated so callers can
+      // immediately read `user.plan` etc. without an extra round-trip.
+      const reloaded = await m.findOne(User, { where: { id: user.id } });
+      return reloaded ?? user;
     });
-    return this.repo.save(user);
   }
 
   async update(id: string, data: Partial<User>): Promise<User> {
     // Whitelist only known User columns to avoid TypeORM "Property not found" errors.
     //
-    // Caveat that bit prod: missing entries here are SILENTLY DROPPED, so
-    // callers calling `usersService.update(id, { billingStatus: 'cancel_at_period_end' })`
-    // saw a successful return and a row that didn't change. The
-    // `reconcileRevenueCat` flow + the `cancelSubscription` snapshot logger
-    // both relied on this. Adding `billingStatus` (and a few neighbours
-    // that were missing for the same reason) so the field actually persists.
+    // The 10 billing fields owned by the state machine are intentionally
+    // NOT listed here — they live behind `UserBillingRepository.applyTransition`
+    // and any direct write would be silently dropped by this whitelist.
+    // The fields are: plan, billingStatus, billingSource, billingPeriod,
+    // currentPeriodStart, currentPeriodEnd, cancelAtPeriodEnd,
+    // gracePeriodEnd, gracePeriodReason, billingIssueAt.
     const ALLOWED_KEYS = new Set([
       'name', 'avatarUrl', 'fcmToken', 'refreshToken', 'refreshTokenIssuedAt',
       'magicLinkToken', 'magicLinkExpiry',
-      'lemonSqueezyCustomerId', 'plan',
-      'billingSource', 'billingStatus', 'billingPeriod',
-      'currentPeriodStart', 'currentPeriodEnd',
+      'lemonSqueezyCustomerId',
       'trialUsed', 'trialStartDate', 'trialEndDate',
       'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'invitedByUserId', 'isActive',
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
       'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore',
       'weeklyDigestEnabled', 'weeklyDigestSentAt',
-      'cancelAtPeriodEnd', 'status', 'downgradedAt',
-      'gracePeriodEnd', 'gracePeriodReason', 'billingIssueAt',
+      'status', 'downgradedAt',
     ]);
     const safe: Partial<User> = {};
     for (const [k, v] of Object.entries(data)) {
