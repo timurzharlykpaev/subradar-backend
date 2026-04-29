@@ -267,4 +267,42 @@ describe('BillingStateMachine.transition', () => {
     expect(next.state).toBe('billing_issue');
     expect(next.billingIssueAt).toBeInstanceOf(Date);
   });
+
+  describe('TRIAL_EXPIRED', () => {
+    it('drops paid trial state to free', () => {
+      const trialing: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'pro',
+        state: 'active',
+        billingSource: null,
+        billingPeriod: 'monthly',
+        currentPeriodEnd: new Date('2099-01-01'),
+      };
+      const next = transition(trialing, { type: 'TRIAL_EXPIRED' });
+      expect(next.plan).toBe('free');
+      expect(next.state).toBe('free');
+      expect(next.billingSource).toBeNull();
+      expect(next.billingPeriod).toBeNull();
+      expect(next.currentPeriodStart).toBeNull();
+      expect(next.currentPeriodEnd).toBeNull();
+      expect(next.cancelAtPeriodEnd).toBe(false);
+    });
+
+    it('is a no-op on free', () => {
+      const free = freeSnapshot();
+      expect(transition(free, { type: 'TRIAL_EXPIRED' })).toEqual(free);
+    });
+
+    it('is a no-op on active RC subscription (trial superseded by real purchase)', () => {
+      const rcActive: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'pro',
+        state: 'active',
+        billingSource: 'revenuecat',
+        billingPeriod: 'monthly',
+        currentPeriodEnd: new Date('2099-01-01'),
+      };
+      expect(transition(rcActive, { type: 'TRIAL_EXPIRED' })).toEqual(rcActive);
+    });
+  });
 });

@@ -195,6 +195,25 @@ export function transition(
         billingSource: null,
       };
 
+    case 'TRIAL_EXPIRED':
+      // Backend-only trial timer ran out. Skip if the user already moved
+      // off trial (RC purchase superseded it, or already on free).
+      if (s.state === 'free') return s;
+      if (s.billingSource === 'revenuecat' || s.billingSource === 'lemon_squeezy') return s;
+      return {
+        ...s,
+        plan: 'free',
+        state: 'free',
+        billingSource: null,
+        billingPeriod: null,
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        graceExpiresAt: null,
+        graceReason: null,
+        billingIssueAt: null,
+      };
+
     case 'LS_SUBSCRIPTION_CREATED':
     case 'LS_SUBSCRIPTION_UPDATED':
       return {
