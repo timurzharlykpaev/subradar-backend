@@ -15,6 +15,7 @@ import { EffectiveAccessModule } from './effective-access/effective-access.modul
 import { OutboxModule } from './outbox/outbox.module';
 import { TrialsModule } from './trials/trials.module';
 import { ReconciliationModule } from './reconciliation/reconciliation.module';
+import { UserBillingRepository } from './user-billing.repository';
 
 @Module({
   imports: [
@@ -28,8 +29,8 @@ import { ReconciliationModule } from './reconciliation/reconciliation.module';
   ],
   // TelegramAlertService is declared globally in AppModule but we re-provide
   // it here so the billing module can run in isolation (tests, migrations).
-  providers: [BillingService, GracePeriodCron, TelegramAlertService],
+  providers: [BillingService, GracePeriodCron, TelegramAlertService, UserBillingRepository],
   controllers: [BillingController, BillingHealthController],
-  exports: [BillingService],
+  exports: [BillingService, UserBillingRepository],
 })
 export class BillingModule {}
