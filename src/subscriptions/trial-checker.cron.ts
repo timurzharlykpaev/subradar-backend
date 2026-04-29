@@ -121,12 +121,13 @@ export class TrialCheckerCron {
     // Users on our backend trial expiring in ~1 day, not yet RC subscribers
     const expiringUsers = await this.userRepo
       .createQueryBuilder('u')
-      .where('u.plan = :plan', { plan: 'pro' })
+      .leftJoinAndSelect('u.billing', 'b')
+      .where('b.plan = :plan', { plan: 'pro' })
       .andWhere('u.trialUsed = true')
       .andWhere('u.trialEndDate IS NOT NULL')
       .andWhere('u.trialEndDate >= :tomorrow', { tomorrow })
       .andWhere('u.trialEndDate < :dayAfter', { dayAfter })
-      .andWhere('u.billingSource IS NULL')  // not yet paid via RC/LS
+      .andWhere('b.billingSource IS NULL')  // not yet paid via RC/LS
       .getMany();
 
     for (const user of expiringUsers) {
@@ -186,11 +187,12 @@ export class TrialCheckerCron {
 
     const expiredUsers = await this.userRepo
       .createQueryBuilder('u')
-      .where('u.plan = :plan', { plan: 'pro' })
+      .leftJoinAndSelect('u.billing', 'b')
+      .where('b.plan = :plan', { plan: 'pro' })
       .andWhere('u.trialUsed = true')
       .andWhere('u.trialEndDate IS NOT NULL')
       .andWhere('u.trialEndDate < :now', { now })
-      .andWhere('u.billingSource IS NULL')          // not paying via RC or LS
+      .andWhere('b.billingSource IS NULL')          // not paying via RC or LS
       .andWhere('u.lemonSqueezyCustomerId IS NULL') // not a LS customer
       .getMany();
 

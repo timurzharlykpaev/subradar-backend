@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { User } from './entities/user.entity';
+import { UserBilling } from '../billing/entities/user-billing.entity';
 import { AuditService } from '../common/audit/audit.service';
 
 const mockUser: Partial<User> = {
@@ -14,9 +15,17 @@ const mockUser: Partial<User> = {
   refreshToken: undefined,
 };
 
+const mockEm: any = {
+  create: jest.fn().mockImplementation((_e, d) => ({ id: 'user-1', ...d })),
+  save: jest.fn().mockImplementation((e) => Promise.resolve(e)),
+  insert: jest.fn().mockResolvedValue(undefined),
+  findOne: jest.fn().mockResolvedValue({ id: 'user-1', plan: 'free' }),
+};
+
 const mockRepo: any = {
   findOne: jest.fn(),
   createQueryBuilder: jest.fn(() => ({
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
     addSelect: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     getOne: jest.fn().mockResolvedValue(mockUser),
@@ -27,6 +36,7 @@ const mockRepo: any = {
   delete: jest.fn().mockResolvedValue({ affected: 1 }),
   manager: {
     query: jest.fn().mockResolvedValue([]),
+    transaction: jest.fn(async (cb: any) => cb(mockEm)),
   },
 };
 
@@ -38,6 +48,10 @@ describe('UsersService', () => {
       providers: [
         UsersService,
         { provide: getRepositoryToken(User), useValue: mockRepo },
+        {
+          provide: getRepositoryToken(UserBilling),
+          useValue: { findOne: jest.fn(), insert: jest.fn() },
+        },
         { provide: AuditService, useValue: { log: jest.fn() } },
         {
           provide: ConfigService,
@@ -88,9 +102,14 @@ describe('UsersService', () => {
   });
 
   describe('create', () => {
-    it('creates and saves user with trial', async () => {
+    it('creates user + user_billing row in a transaction', async () => {
       const result = await service.create({ email: 'new@test.com' });
-      expect(mockRepo.save).toHaveBeenCalled();
+      expect(mockRepo.manager.transaction).toHaveBeenCalled();
+      expect(mockEm.save).toHaveBeenCalled();
+      expect(mockEm.insert).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ plan: 'free', billingStatus: 'free' }),
+      );
       expect(result).toHaveProperty('id');
     });
   });

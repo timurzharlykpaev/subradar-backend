@@ -326,7 +326,8 @@ export class RemindersService {
 
     const users = await this.userRepo
       .createQueryBuilder('u')
-      .where("u.plan = 'pro'")
+      .leftJoinAndSelect('u.billing', 'b')
+      .where("b.plan = 'pro'")
       .andWhere('u.trialUsed = true')
       .andWhere('u.lemonSqueezyCustomerId IS NULL')
       .andWhere('u.trialEndDate IS NOT NULL')
@@ -402,9 +403,10 @@ export class RemindersService {
     // Find users with cancelAtPeriodEnd=true and currentPeriodEnd in the future (or today)
     const users = await this.userRepo
       .createQueryBuilder('u')
-      .where('u.cancelAtPeriodEnd = true')
-      .andWhere('u.currentPeriodEnd IS NOT NULL')
-      .andWhere("u.plan != 'free'")
+      .leftJoinAndSelect('u.billing', 'b')
+      .where('b.cancelAtPeriodEnd = true')
+      .andWhere('b.currentPeriodEnd IS NOT NULL')
+      .andWhere("b.plan != 'free'")
       .getMany();
 
     let sent = 0;
@@ -598,7 +600,8 @@ export class RemindersService {
   private async expireTrialsImpl() {
     const expired = await this.userRepo
       .createQueryBuilder('u')
-      .where("u.plan = 'pro'")
+      .leftJoinAndSelect('u.billing', 'b')
+      .where("b.plan = 'pro'")
       .andWhere('u.trialUsed = true')
       .andWhere('u.trialEndDate < NOW()')
       .andWhere('u.lemonSqueezyCustomerId IS NULL')
@@ -606,7 +609,7 @@ export class RemindersService {
       // legacy trial — their billingSource will be set, and we must not
       // null out their plan. The trial timer is only authoritative for
       // backend-only trials.
-      .andWhere('(u."billingSource" IS NULL)')
+      .andWhere('(b."billingSource" IS NULL)')
       .getMany();
 
     for (const user of expired) {

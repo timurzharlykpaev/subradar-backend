@@ -1,21 +1,21 @@
 import { UserBillingRepository } from './user-billing.repository';
 
 describe('UserBillingRepository', () => {
-  const buildRepo = (fakeUser: any) => {
+  const buildRepo = (fakeRow: any) => {
     const update = jest.fn();
     const txManager: any = {
-      findOne: jest.fn().mockResolvedValue(fakeUser),
+      findOne: jest.fn().mockResolvedValue(fakeRow),
       update,
     };
-    const userRepoMock: any = { findOne: jest.fn().mockResolvedValue(fakeUser) };
+    const billingRepoMock: any = { findOne: jest.fn().mockResolvedValue(fakeRow) };
     const auditMock: any = { log: jest.fn().mockResolvedValue(undefined) };
     const ds: any = { transaction: jest.fn(async (cb: any) => cb(txManager)) };
-    const repo = new UserBillingRepository(userRepoMock, ds, auditMock);
-    return { repo, update, audit: auditMock, ds, txManager, userRepoMock };
+    const repo = new UserBillingRepository(billingRepoMock, ds, auditMock);
+    return { repo, update, audit: auditMock, ds, txManager, billingRepoMock };
   };
 
   const freeUser = (overrides: any = {}) => ({
-    id: 'user-1',
+    userId: 'user-1',
     plan: 'free',
     billingStatus: 'free',
     billingSource: null,
@@ -59,7 +59,7 @@ describe('UserBillingRepository', () => {
       }
       expect(update).toHaveBeenCalledWith(
         expect.anything(),
-        'user-1',
+        { userId: 'user-1' },
         expect.objectContaining({ plan: 'pro', billingStatus: 'active' }),
       );
       expect(audit.log).toHaveBeenCalledWith(

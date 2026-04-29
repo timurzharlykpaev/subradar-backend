@@ -178,6 +178,7 @@ describe('RemindersService', () => {
   describe('expireTrials', () => {
     it('runs without error with no expired trials', async () => {
       (mockUserRepo.createQueryBuilder as jest.Mock).mockReturnValue({
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
         getMany: jest.fn().mockResolvedValue([]),
@@ -188,6 +189,7 @@ describe('RemindersService', () => {
     it('downgrades expired trial users via state machine + clears trialEndDate', async () => {
       const expiredUser = { id: 'user-1', email: 'user@test.com', plan: 'pro' };
       (mockUserRepo.createQueryBuilder as jest.Mock).mockReturnValue({
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
         getMany: jest.fn().mockResolvedValue([expiredUser]),

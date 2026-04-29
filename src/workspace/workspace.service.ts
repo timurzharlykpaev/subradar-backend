@@ -24,6 +24,7 @@ import {
 import { UsersService } from '../users/users.service';
 import { AuditService } from '../common/audit/audit.service';
 import { OutboxService } from '../billing/outbox/outbox.service';
+import { UserBillingRepository } from '../billing/user-billing.repository';
 
 @Injectable()
 export class WorkspaceService {
@@ -42,6 +43,7 @@ export class WorkspaceService {
     private readonly usersService: UsersService,
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
+    private readonly userBilling: UserBillingRepository,
   ) {}
 
   async create(ownerId: string, dto: CreateWorkspaceDto): Promise<Workspace> {
@@ -77,7 +79,12 @@ export class WorkspaceService {
   async findById(id: string): Promise<Workspace> {
     const ws = await this.workspaceRepo.findOne({
       where: { id },
-      relations: ['members', 'members.user'],
+      // 'members.user.billing' is required because TypeORM does NOT
+      // recursively apply eager-relations on nested join targets — a
+      // User loaded as `members.user` would otherwise have
+      // `user.billing === undefined`, which silently makes
+      // getWorkspaceAnalytics report every member as `hasOwnPro: false`.
+      relations: ['members', 'members.user', 'members.user.billing'],
     });
     if (!ws) throw new NotFoundException('Workspace not found');
     return ws;
@@ -90,7 +97,7 @@ export class WorkspaceService {
     if (!member) return null;
     return this.workspaceRepo.findOne({
       where: { id: member.workspaceId },
-      relations: ['members', 'members.user'],
+      relations: ['members', 'members.user', 'members.user.billing'],
     });
   }
 
@@ -156,12 +163,15 @@ export class WorkspaceService {
     await this.memberRepo.delete({ id: memberId, workspaceId });
 
     if (member?.userId) {
-      const leavingUser = await this.usersService.findById(member.userId).catch(() => null);
-      if (leavingUser && (leavingUser.billingSource !== 'revenuecat' || leavingUser.cancelAtPeriodEnd)) {
-        leavingUser.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-        leavingUser.gracePeriodReason = 'team_expired';
-        await this.usersService.save(leavingUser);
-      }
+      // Removed-from-team: if the user has no own RC sub (or it's
+      // already cancel_at_period_end), give them a 7-day grace via the
+      // state machine. The TEAM_MEMBER_REMOVED transition is a no-op
+      // when the user has their own active RC sub.
+      await this.userBilling.applyTransition(
+        member.userId,
+        { type: 'TEAM_MEMBER_REMOVED' },
+        { actor: 'admin_grant' },
+      );
     }
 
     await this.audit.log({
@@ -358,12 +368,11 @@ export class WorkspaceService {
     await this.memberRepo.remove(member);
     this.logger.log(`Member left workspace: userId=${userId} workspaceId=${workspaceId}`);
 
-    const leavingUser = await this.usersService.findById(userId).catch(() => null);
-    if (leavingUser && (leavingUser.billingSource !== 'revenuecat' || leavingUser.cancelAtPeriodEnd)) {
-      leavingUser.gracePeriodEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      leavingUser.gracePeriodReason = 'team_expired';
-      await this.usersService.save(leavingUser);
-    }
+    await this.userBilling.applyTransition(
+      userId,
+      { type: 'TEAM_MEMBER_REMOVED' },
+      { actor: 'admin_grant' },
+    );
   }
 
   /** Owner/Admin can view any member's subscriptions within the workspace */

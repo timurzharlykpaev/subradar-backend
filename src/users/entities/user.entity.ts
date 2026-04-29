@@ -5,10 +5,12 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  OneToOne,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { Subscription } from '../../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../../payment-cards/entities/payment-card.entity';
+import { UserBilling } from '../../billing/entities/user-billing.entity';
 
 export enum AuthProvider {
   LOCAL = 'local',
@@ -74,12 +76,6 @@ export class User {
   @Column({ nullable: true })
   @Exclude({ toPlainOnly: true })
   lemonSqueezyCustomerId: string;
-
-  @Column({ default: 'free' })
-  plan: string;
-
-  @Column({ type: 'varchar', nullable: true, default: null })
-  billingPeriod: string | null;
 
   @Column({ default: false })
   trialUsed: boolean;
@@ -177,54 +173,55 @@ export class User {
   @OneToMany(() => PaymentCard, (c) => c.user)
   paymentCards: PaymentCard[];
 
-  @Column({ nullable: true })
-  billingSource: string;
-
-  @Column({ default: false })
-  cancelAtPeriodEnd: boolean;
-
-  @Column({ nullable: true, type: 'timestamp' })
-  currentPeriodEnd: Date | null;
-
   @Column({ type: 'timestamp', nullable: true, default: null })
-  downgradedAt: Date | null;
+  downgradedAt!: Date | null;
 
-  @Column({ type: 'timestamp', nullable: true })
-  gracePeriodEnd: Date | null;
+  // --- Billing state lives in `user_billing` (Phase 2) ---
+  //
+  // The 10 fields plan, billingStatus, billingSource, billingPeriod,
+  // currentPeriodStart, currentPeriodEnd, cancelAtPeriodEnd,
+  // gracePeriodEnd, gracePeriodReason, billingIssueAt have been moved
+  // to the dedicated `user_billing` table. They're exposed here as
+  // backward-compat getters that read from the eager-loaded relation,
+  // so legacy callers like `user.plan` keep working without touching
+  // every read-site. New code should prefer
+  // `userBilling.read(userId)` for an explicit snapshot.
+  //
+  // Writes never go through these getters — they always go through
+  // `UserBillingRepository.applyTransition`.
+  @OneToOne(() => UserBilling, (b) => b.user, { eager: true })
+  billing!: UserBilling | null;
 
-  @Column({ type: 'varchar', length: 20, nullable: true })
-  gracePeriodReason: 'team_expired' | 'pro_expired' | null;
-
-  @Column({ type: 'timestamp', nullable: true })
-  billingIssueAt: Date | null;
-
-  // --- Billing refactor (state machine) ---
-
-  /**
-   * Canonical billing state. Backfilled from existing flags in
-   * BackfillBillingStatus migration and maintained by the billing
-   * state machine going forward.
-   */
-  @Column({
-    type: 'enum',
-    enum: [
-      'active',
-      'cancel_at_period_end',
-      'billing_issue',
-      'grace_pro',
-      'grace_team',
-      'free',
-    ],
-    default: 'free',
-  })
-  billingStatus: BillingStatus;
-
-  /**
-   * Start of the active paid period. Needed alongside currentPeriodEnd
-   * for RC_RENEWAL transitions + accurate period-over-period analytics.
-   */
-  @Column({ type: 'timestamptz', nullable: true })
-  currentPeriodStart: Date | null;
+  get plan(): string {
+    return this.billing?.plan ?? 'free';
+  }
+  get billingStatus(): BillingStatus {
+    return this.billing?.billingStatus ?? 'free';
+  }
+  get billingSource(): string | null {
+    return this.billing?.billingSource ?? null;
+  }
+  get billingPeriod(): string | null {
+    return this.billing?.billingPeriod ?? null;
+  }
+  get currentPeriodStart(): Date | null {
+    return this.billing?.currentPeriodStart ?? null;
+  }
+  get currentPeriodEnd(): Date | null {
+    return this.billing?.currentPeriodEnd ?? null;
+  }
+  get cancelAtPeriodEnd(): boolean {
+    return this.billing?.cancelAtPeriodEnd ?? false;
+  }
+  get gracePeriodEnd(): Date | null {
+    return this.billing?.gracePeriodEnd ?? null;
+  }
+  get gracePeriodReason(): 'team_expired' | 'pro_expired' | null {
+    return this.billing?.gracePeriodReason ?? null;
+  }
+  get billingIssueAt(): Date | null {
+    return this.billing?.billingIssueAt ?? null;
+  }
 
   /**
    * Pro-invite seat graph: NULL for plan owners; set to the inviter's

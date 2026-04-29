@@ -38,12 +38,14 @@ export class AnalysisCronService {
       let offset = 0;
 
       while (true) {
-        const users = await this.userRepo.find({
-          where: { plan: In(eligiblePlans), isActive: true },
-          take: batchSize,
-          skip: offset,
-          select: ['id', 'plan', 'trialEndDate'],
-        });
+        const users = await this.userRepo
+          .createQueryBuilder('u')
+          .leftJoinAndSelect('u.billing', 'b')
+          .where('b.plan IN (:...eligiblePlans)', { eligiblePlans })
+          .andWhere('u.isActive = true')
+          .take(batchSize)
+          .skip(offset)
+          .getMany();
 
         if (users.length === 0) break;
 
@@ -89,16 +91,15 @@ export class AnalysisCronService {
     let offset = 0;
 
     while (true) {
-      const users = await this.userRepo.find({
-        where: {
-          weeklyDigestEnabled: true,
-          plan: In(eligiblePlans),
-          isActive: true,
-        },
-        take: batchSize,
-        skip: offset,
-        select: ['id', 'email', 'name', 'locale', 'weeklyDigestSentAt'],
-      });
+      const users = await this.userRepo
+        .createQueryBuilder('u')
+        .leftJoinAndSelect('u.billing', 'b')
+        .where('u.weeklyDigestEnabled = true')
+        .andWhere('b.plan IN (:...eligiblePlans)', { eligiblePlans })
+        .andWhere('u.isActive = true')
+        .take(batchSize)
+        .skip(offset)
+        .getMany();
 
       if (users.length === 0) break;
 

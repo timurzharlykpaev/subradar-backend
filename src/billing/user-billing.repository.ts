@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
-import { User } from '../users/entities/user.entity';
+import { UserBilling } from './entities/user-billing.entity';
 import { AuditService } from '../common/audit/audit.service';
 import { transition } from './state-machine/transitions';
 import {
@@ -50,15 +50,20 @@ export class UserBillingRepository {
   private readonly logger = new Logger(UserBillingRepository.name);
 
   constructor(
-    @InjectRepository(User) private readonly userRepo: Repository<User>,
+    @InjectRepository(UserBilling)
+    private readonly billingRepo: Repository<UserBilling>,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly audit: AuditService,
   ) {}
 
   async read(userId: string): Promise<UserBillingSnapshot> {
-    const u = await this.userRepo.findOne({ where: { id: userId } });
-    if (!u) throw new Error(`UserBillingRepository.read: user ${userId} not found`);
-    return this.snapshotFromUser(u);
+    const row = await this.billingRepo.findOne({ where: { userId } });
+    if (!row) {
+      throw new Error(
+        `UserBillingRepository.read: user_billing row missing for ${userId}`,
+      );
+    }
+    return this.snapshotFromRow(row);
   }
 
   async applyTransition(
@@ -67,16 +72,16 @@ export class UserBillingRepository {
     opts: { actor: BillingActor; manager?: EntityManager },
   ): Promise<TransitionResult> {
     const run = async (m: EntityManager): Promise<TransitionResult> => {
-      const user = await m.findOne(User, {
-        where: { id: userId },
+      const row = await m.findOne(UserBilling, {
+        where: { userId },
         lock: { mode: 'pessimistic_write' },
       });
-      if (!user) {
+      if (!row) {
         throw new Error(
-          `UserBillingRepository.applyTransition: user ${userId} not found`,
+          `UserBillingRepository.applyTransition: user_billing row missing for ${userId}`,
         );
       }
-      const current = this.snapshotFromUser(user);
+      const current = this.snapshotFromRow(row);
 
       let next: UserBillingSnapshot;
       try {
@@ -128,7 +133,7 @@ export class UserBillingRepository {
         gracePeriodReason: next.graceReason,
         billingIssueAt: next.billingIssueAt,
       };
-      await m.update(User, userId, updates);
+      await m.update(UserBilling, { userId }, updates);
 
       await this.audit.log({
         userId,
@@ -151,19 +156,19 @@ export class UserBillingRepository {
     return this.dataSource.transaction(run);
   }
 
-  private snapshotFromUser(u: User): UserBillingSnapshot {
+  private snapshotFromRow(row: UserBilling): UserBillingSnapshot {
     return {
-      userId: u.id,
-      plan: (u.plan as Plan) ?? 'free',
-      state: (u.billingStatus as BillingState) ?? 'free',
-      billingSource: (u.billingSource as BillingSource) ?? null,
-      billingPeriod: (u.billingPeriod as BillingPeriod | null) ?? null,
-      currentPeriodStart: u.currentPeriodStart ?? null,
-      currentPeriodEnd: u.currentPeriodEnd ?? null,
-      cancelAtPeriodEnd: !!u.cancelAtPeriodEnd,
-      graceExpiresAt: u.gracePeriodEnd ?? null,
-      graceReason: (u.gracePeriodReason as GraceReason) ?? null,
-      billingIssueAt: u.billingIssueAt ?? null,
+      userId: row.userId,
+      plan: (row.plan as Plan) ?? 'free',
+      state: (row.billingStatus as BillingState) ?? 'free',
+      billingSource: (row.billingSource as BillingSource) ?? null,
+      billingPeriod: (row.billingPeriod as BillingPeriod | null) ?? null,
+      currentPeriodStart: row.currentPeriodStart ?? null,
+      currentPeriodEnd: row.currentPeriodEnd ?? null,
+      cancelAtPeriodEnd: !!row.cancelAtPeriodEnd,
+      graceExpiresAt: row.gracePeriodEnd ?? null,
+      graceReason: (row.gracePeriodReason as GraceReason) ?? null,
+      billingIssueAt: row.billingIssueAt ?? null,
     };
   }
 

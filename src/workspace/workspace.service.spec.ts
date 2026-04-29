@@ -9,6 +9,7 @@ import { InviteCode } from './entities/invite-code.entity';
 import { UsersService } from '../users/users.service';
 import { AuditService } from '../common/audit/audit.service';
 import { OutboxService } from '../billing/outbox/outbox.service';
+import { UserBillingRepository } from '../billing/user-billing.repository';
 
 const mockWorkspaceRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn() };
 const mockMemberRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn(), count: jest.fn(), delete: jest.fn() };
@@ -58,6 +59,13 @@ describe('WorkspaceService', () => {
         {
           provide: OutboxService,
           useValue: { enqueue: jest.fn().mockResolvedValue(undefined) },
+        },
+        {
+          provide: UserBillingRepository,
+          useValue: {
+            read: jest.fn(),
+            applyTransition: jest.fn().mockResolvedValue({ applied: true, from: 'active', to: 'free', snapshot: {} }),
+          },
         },
       ],
     }).compile();
