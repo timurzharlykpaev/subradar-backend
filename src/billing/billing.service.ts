@@ -1291,132 +1291,43 @@ export class BillingService {
     action: 'noop' | 'cancel_at_period_end' | 'downgraded';
     reason: string;
   }> {
-    const user = await this.usersService.findById(userId);
-
-    if (user.billingSource !== 'revenuecat') {
-      return { action: 'noop', reason: `billingSource=${user.billingSource ?? 'null'}` };
+    const current = await this.userBilling.read(userId);
+    if (current.billingSource !== 'revenuecat') {
+      return { action: 'noop', reason: `billingSource=${current.billingSource ?? 'null'}` };
     }
-    if (user.plan === 'free') {
+    if (current.state === 'free') {
       return { action: 'noop', reason: 'already free' };
     }
 
-    const rcApiKey =
-      this.cfg.get<string>('REVENUECAT_API_KEY_SECRET', '') ||
-      this.cfg.get<string>('REVENUECAT_API_KEY', '');
-    if (!rcApiKey) {
-      this.logger.warn('reconcileRevenueCat: RC API key missing — skipping');
-      return { action: 'noop', reason: 'rc_api_key_missing' };
-    }
-
-    let rcRes: Response;
+    let rc: RCSubscriberSnapshot;
     try {
-      rcRes = await fetch(
-        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${rcApiKey}`,
-            Accept: 'application/json',
-          },
-        },
+      rc = await this.fetchRcSubscriberSnapshot(userId);
+    } catch (e: any) {
+      this.logger.warn(
+        `reconcileRevenueCat: RC fetch failed for ${userId}: ${e?.message}`,
       );
-    } catch (e) {
-      this.logger.warn(`reconcileRevenueCat: RC fetch failed for user ${userId}: ${e}`);
       return { action: 'noop', reason: 'rc_fetch_failed' };
     }
 
-    if (!rcRes.ok) {
-      this.logger.warn(`reconcileRevenueCat: RC returned ${rcRes.status} for user ${userId}`);
-      return { action: 'noop', reason: `rc_${rcRes.status}` };
-    }
+    const event = inferEventFromRcSnapshot(rc, current);
+    if (!event) return { action: 'noop', reason: 'rc_in_sync' };
 
-    let rcData: any;
-    try {
-      rcData = await rcRes.json();
-    } catch {
-      return { action: 'noop', reason: 'rc_invalid_json' };
-    }
-
-    const entitlements = rcData?.subscriber?.entitlements ?? {};
-    const subscriptions = rcData?.subscriber?.subscriptions ?? {};
-    const now = Date.now();
-    const hasActiveEntitlement = Object.values(entitlements).some((e: any) => {
-      if (!e) return false;
-      if (e.expires_date == null) return true;
-      const ts = typeof e.expires_date === 'number'
-        ? e.expires_date
-        : Date.parse(String(e.expires_date));
-      return !isNaN(ts) && ts > now;
+    const result = await this.userBilling.applyTransition(userId, event, {
+      actor: 'reconcile',
     });
+    if (!result.applied) return { action: 'noop', reason: result.reason };
 
-    // RC sets `unsubscribe_detected_at` the moment the user cancels, even
-    // though the entitlement remains active until expires_date. Without
-    // honouring this signal, reconcile silently returned `noop` and the
-    // backend stayed on `state='active'` forever — the exact bug behind
-    // production users seeing "Pro" indefinitely after cancelling in the
-    // App Store.
-    const cancelDetected = Object.values(subscriptions).some(
-      (s: any) => s && s.unsubscribe_detected_at,
-    );
-
-    if (hasActiveEntitlement) {
-      // Apple-cancelled but still in the paid period → mirror it onto the
-      // user row so /billing/me can reflect the "cancelling on X" state and
-      // the paywall lets them upgrade to Team. We also re-stamp the row
-      // when only the billingStatus is out of sync (cancelAtPeriodEnd
-      // already true but status stuck on 'active' from an earlier code
-      // path that forgot to update it) — without this the noop branch
-      // would forever leave the user on `state: 'active'` despite the
-      // cancellation flag.
-      const needsCancelStamp =
-        cancelDetected &&
-        (!user.cancelAtPeriodEnd ||
-          user.billingStatus !== 'cancel_at_period_end');
-      if (needsCancelStamp) {
-        const latestExpiresMs = Object.values(subscriptions)
-          .map((s: any) => (s?.expires_date ? Date.parse(String(s.expires_date)) : NaN))
-          .filter((n) => !isNaN(n))
-          .reduce((max, ts) => (ts > max ? ts : max), 0);
-        await this.usersService.update(userId, {
-          cancelAtPeriodEnd: true,
-          billingStatus: 'cancel_at_period_end' as any,
-          ...(latestExpiresMs > 0
-            ? { currentPeriodEnd: new Date(latestExpiresMs) }
-            : {}),
-        });
-        this.logger.log(
-          `reconcileRevenueCat: user ${userId} cancel detected via unsubscribe_detected_at → cancel_at_period_end`,
-        );
-        return { action: 'cancel_at_period_end', reason: 'unsubscribe_detected_at' };
-      }
-      return { action: 'noop', reason: 'rc_has_active_entitlement' };
-    }
-
-    const periodEnd = user.currentPeriodEnd
-      ? new Date(user.currentPeriodEnd).getTime()
-      : null;
-    const periodActive = periodEnd != null && periodEnd > now;
-
-    if (periodActive) {
-      await this.usersService.update(userId, {
-        cancelAtPeriodEnd: true,
-      });
+    if (event.type === 'RC_CANCELLATION') {
       this.logger.log(
-        `reconcileRevenueCat: user ${userId} entitlements empty but period still valid → cancelAtPeriodEnd=true (was plan=${user.plan}, status=${user.billingStatus})`,
+        `reconcileRevenueCat: user ${userId} → cancel_at_period_end`,
       );
-      return { action: 'cancel_at_period_end', reason: 'period_active' };
+      return { action: 'cancel_at_period_end', reason: event.type };
     }
-
-    await this.usersService.update(userId, {
-      plan: 'free',
-      billingStatus: 'free' as any,
-      billingSource: undefined as any,
-      cancelAtPeriodEnd: false,
-      currentPeriodEnd: null as any,
-    });
-    this.logger.log(
-      `reconcileRevenueCat: user ${userId} entitlements empty + period elapsed → free (was plan=${user.plan}, status=${user.billingStatus})`,
-    );
-    return { action: 'downgraded', reason: 'period_elapsed' };
+    if (event.type === 'RC_EXPIRATION') {
+      this.logger.log(`reconcileRevenueCat: user ${userId} → free`);
+      return { action: 'downgraded', reason: event.type };
+    }
+    return { action: 'noop', reason: event.type };
   }
 
   async cancelSubscription(userId: string): Promise<void> {
