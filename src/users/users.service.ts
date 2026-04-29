@@ -142,8 +142,21 @@ export class UsersService {
       this.logger.warn(
         `deleteRevenueCatSubscriber: no RC API key — skipping (id=${userId})`,
       );
+      // Audit even the no-op so the GDPR right-to-erasure trail is complete.
+      await this.audit
+        .log({
+          userId,
+          action: 'rc.subscriber_delete_skipped',
+          resourceType: 'user',
+          resourceId: userId,
+          metadata: { reason: 'rc_api_key_missing' },
+        })
+        .catch(() => undefined);
       return;
     }
+    let status = 0;
+    let success = false;
+    let error: string | null = null;
     try {
       const res = await fetch(
         `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
@@ -156,6 +169,8 @@ export class UsersService {
           },
         },
       );
+      status = res.status;
+      success = res.ok || res.status === 404; // 404 = already gone, treat as ok
       if (res.ok) {
         this.logger.log(`RC subscriber deleted (id=${userId})`);
       } else if (res.status === 404) {
@@ -164,15 +179,33 @@ export class UsersService {
         );
       } else {
         const text = await res.text().catch(() => '');
+        error = text.slice(0, 200);
         this.logger.warn(
-          `RC subscriber delete failed (id=${userId}, status=${res.status}): ${text.slice(0, 200)}`,
+          `RC subscriber delete failed (id=${userId}, status=${res.status}): ${error}`,
         );
       }
     } catch (e: any) {
+      error = e?.message ?? String(e);
       this.logger.warn(
-        `RC subscriber delete error (id=${userId}): ${e?.message ?? e}`,
+        `RC subscriber delete error (id=${userId}): ${error}`,
       );
     }
+    // GDPR/Apple HIG: persist the outcome of the third-party erasure
+    // attempt so the right-to-erasure audit trail survives even when the
+    // RC call failed. The actual local user delete still goes ahead — the
+    // user has explicitly asked for their data gone and we shouldn't
+    // block on a third-party outage.
+    await this.audit
+      .log({
+        userId,
+        action: success
+          ? 'rc.subscriber_deleted'
+          : 'rc.subscriber_delete_failed',
+        resourceType: 'user',
+        resourceId: userId,
+        metadata: { status, error },
+      })
+      .catch(() => undefined);
   }
 
   async deleteAccount(id: string): Promise<void> {

@@ -745,7 +745,16 @@ export class BillingService {
     Object.assign(user, updates);
   }
 
-  private amplitudeEventForRC(rcType: string): string {
+  private amplitudeEventForRC(rcType: string, billingEventType?: string): string {
+    // Refunds enter the webhook handler as `CANCELLATION` (with
+    // cancellation_reason='REFUNDED') and are mapped to RC_REFUND by the
+    // event-mapper. Without honouring the mapped type we'd report all
+    // refunds as plain cancellations in Amplitude — analytics can't
+    // distinguish "user cancelled at period end" from "Apple reversed
+    // the charge", and chargeback rate becomes invisible.
+    if (billingEventType === 'RC_REFUND') {
+      return 'billing.subscription_refunded';
+    }
     const map: Record<string, string> = {
       INITIAL_PURCHASE: 'billing.subscription_purchased',
       RENEWAL: 'billing.subscription_renewed',
@@ -871,7 +880,7 @@ export class BillingService {
         await this.outbox.enqueue(
           'amplitude.track',
           {
-            event: this.amplitudeEventForRC(event.type),
+            event: this.amplitudeEventForRC(event.type, billingEvent.type),
             userId: user.id,
             properties: {
               planBefore: current.plan,

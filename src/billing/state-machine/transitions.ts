@@ -11,7 +11,7 @@ export function transition(
   e: BillingEvent,
 ): UserBillingSnapshot {
   switch (e.type) {
-    case 'RC_INITIAL_PURCHASE':
+    case 'RC_INITIAL_PURCHASE': {
       // Allow from `active`, `cancel_at_period_end`, `billing_issue` too —
       // those happen on Restore Purchases (new device, reinstall) where RC
       // re-emits INITIAL_PURCHASE for an entitlement we already track.
@@ -28,19 +28,32 @@ export function transition(
       ) {
         throw new InvalidTransitionError(s.state, e.type);
       }
+      // If the user is on `cancel_at_period_end` and we're seeing the
+      // *same* subscription replayed (same period end, same plan), keep
+      // the cancellation intent — Restore must not silently un-cancel a
+      // legitimately-cancelling subscription.
+      const sameSubReplayed =
+        s.state === 'cancel_at_period_end' &&
+        s.plan === e.plan &&
+        s.currentPeriodEnd != null &&
+        Math.abs(s.currentPeriodEnd.getTime() - e.periodEnd.getTime()) <
+          24 * 3600_000;
+      const nextCancelAtPeriodEnd = sameSubReplayed ? s.cancelAtPeriodEnd : false;
+      const nextState = sameSubReplayed ? s.state : 'active';
       return {
         ...s,
         plan: e.plan,
-        state: 'active',
+        state: nextState,
         billingSource: 'revenuecat',
         billingPeriod: e.period,
         currentPeriodStart: e.periodStart,
         currentPeriodEnd: e.periodEnd,
-        cancelAtPeriodEnd: false,
+        cancelAtPeriodEnd: nextCancelAtPeriodEnd,
         graceExpiresAt: null,
         graceReason: null,
         billingIssueAt: null,
       };
+    }
 
     case 'RC_RENEWAL':
       // Apple may auto-renew a subscription that was flagged for

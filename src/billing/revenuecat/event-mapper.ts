@@ -98,12 +98,16 @@ export function mapRCEventToBillingEvent(e: RCRawEvent): BillingEvent | null {
         ? { type: 'RC_PRODUCT_CHANGE', newPlan: plan, period, periodStart, periodEnd }
         : null;
     case 'CANCELLATION': {
-      // Refund-style cancellations have a different cancellation_reason
-      // and require an immediate downgrade — Apple already reversed the
-      // charge, the user is no longer entitled to the period. RC has used
-      // both `cancel_reason` and `cancellation_reason` across versions.
+      // Only `REFUNDED` triggers an immediate-downgrade RC_REFUND — Apple
+      // has already reversed the charge so the user is no longer entitled
+      // to the period. `CUSTOMER_SUPPORT` looks similar but RC documents it
+      // as "may include partial refunds where the subscription is still
+      // active" — mapping it to RC_REFUND would strip Pro from a paying
+      // user who got a goodwill refund. Stick with the period-end CANCEL
+      // path for everything except REFUNDED. RC has used both
+      // `cancel_reason` and `cancellation_reason` across versions.
       const reason = (e.cancel_reason ?? e.cancellation_reason ?? '').toUpperCase();
-      if (reason === 'REFUNDED' || reason === 'CUSTOMER_SUPPORT') {
+      if (reason === 'REFUNDED') {
         return { type: 'RC_REFUND' };
       }
       return { type: 'RC_CANCELLATION', periodEnd };
