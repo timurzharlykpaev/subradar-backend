@@ -95,6 +95,7 @@ describe('BillingService.claimWebhookEvent (idempotency)', () => {
     expect(webhookEventRepo.insert).toHaveBeenCalledWith({
       provider: 'revenuecat',
       eventId: 'evt_unique_1',
+      eventType: null,
     });
   });
 
@@ -123,10 +124,12 @@ describe('BillingService.claimWebhookEvent (idempotency)', () => {
     expect(webhookEventRepo.insert).toHaveBeenNthCalledWith(1, {
       provider: 'revenuecat',
       eventId: 'evt_shared',
+      eventType: null,
     });
     expect(webhookEventRepo.insert).toHaveBeenNthCalledWith(2, {
       provider: 'lemon_squeezy',
       eventId: 'evt_shared',
+      eventType: null,
     });
   });
 
