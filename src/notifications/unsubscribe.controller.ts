@@ -53,8 +53,23 @@ export class UnsubscribeController {
         'UNSUBSCRIBE_SECRET not set — falling back to JWT_ACCESS_SECRET (dev only)',
       );
     }
+    // Legacy fallback is opt-in via `ALLOW_LEGACY_UNSUBSCRIBE_SIG=true`.
+    // We only enable it during the transitional window when emails signed
+    // with JWT_ACCESS_SECRET still live in inboxes; after ~14 days it must
+    // be flipped off so a stolen JWT secret can't forge unsubscribe links
+    // for arbitrary users indefinitely.
+    const allowLegacy =
+      (cfg.get<string>('ALLOW_LEGACY_UNSUBSCRIBE_SIG', '') || '').toLowerCase() === 'true';
     const jwtForLegacy = cfg.get<string>('JWT_ACCESS_SECRET', '');
-    this.legacySecret = jwtForLegacy && jwtForLegacy !== this.secret ? jwtForLegacy : null;
+    this.legacySecret =
+      allowLegacy && jwtForLegacy && jwtForLegacy !== this.secret
+        ? jwtForLegacy
+        : null;
+    if (allowLegacy && this.legacySecret) {
+      UnsubscribeController.logger.warn(
+        'ALLOW_LEGACY_UNSUBSCRIBE_SIG=true — accepting JWT-signed unsubscribe links. Disable once the email cohort has expired.',
+      );
+    }
   }
 
   /**

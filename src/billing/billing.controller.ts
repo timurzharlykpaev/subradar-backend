@@ -106,13 +106,14 @@ export class BillingController {
     // The Lemon Squeezy web checkout this endpoint produces is the web
     // app's monetization path; if an iOS client ever calls it (mistakenly
     // or by design) and opens the URL in a WebView/Linking, that's an
-    // App Review reject. Refuse explicitly.
+    // App Review reject.
+    //
+    // Detection is header-only (`X-Client-Platform: ios`, sent by the
+    // mobile axios client). User-Agent regexes were tempting but fire on
+    // iPhone Safari opening the web app, which would 410 a legitimate
+    // web checkout. The web client never sets this header.
     const platform = String(req.headers?.['x-client-platform'] ?? '').toLowerCase();
-    const ua = String(req.headers?.['user-agent'] ?? '');
-    const looksIos =
-      platform === 'ios' ||
-      /\b(CFNetwork|Darwin|iOS|iPhone|iPad)\b/i.test(ua);
-    if (looksIos) {
+    if (platform === 'ios') {
       throw new HttpException(
         'Web checkout is unavailable on iOS — please subscribe via the in-app purchase.',
         HttpStatus.GONE,
