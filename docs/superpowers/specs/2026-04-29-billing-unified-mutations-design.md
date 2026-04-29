@@ -10,12 +10,22 @@ Billing-related fields on the `users` row are written from at least 8 places:
 
 - `processRevenueCatEvent` (RC webhook) — uses `applySnapshot` ✅
 - `processLemonSqueezyEvent` (LS webhook) — uses `applySnapshot` ✅
-- `expireTrials` cron — uses `applySnapshot` ✅
+- `handleTeamOwnerExpiration` cascade — uses `applySnapshot` ✅
+- `RemindersService.expireTrialsImpl` cron — direct `userRepo.update` ❌
 - `syncRevenueCat` (mobile Restore / post-purchase) — direct `usersService.update` ❌
 - `reconcileRevenueCat` (drift healing) — direct ❌
 - `cancelSubscription` (mobile cancel) — direct ❌
-- `activateProInvite` (admin grant) — direct ❌
+- `activateProInvite` / `removeProInvite` (admin invite) — direct ❌
 - `GracePeriodCron.resetExpiredGrace` — direct ❌
+
+Two new state-machine events are introduced to give the existing direct-write
+callers an explicit verb:
+
+- `TRIAL_EXPIRED` — the backend-only trial timer ran out. Drops to `free`,
+  clears `billingSource`, `currentPeriodEnd`, `cancelAtPeriodEnd`. No grace.
+- `ADMIN_GRANT_PRO { plan, invitedByUserId }` — pro-invite activation.
+  Sets `state='active'`, `plan=e.plan`, `billingSource=null`. Allowed from
+  `free` only.
 
 Each direct path writes a slightly different subset of columns; missed columns silently desync the user row from the state machine, producing user-visible bugs:
 
