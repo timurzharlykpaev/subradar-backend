@@ -284,7 +284,45 @@ jobs:
             docker rm -f $(docker ps -aq --filter "name=${CONTAINER}" --filter "status=created") 2>/dev/null || true
             docker rm -f $(docker ps -aq --filter "name=${CONTAINER}" --filter "status=exited") 2>/dev/null || true
 
-            docker compose pull "$CONTAINER"
+            # ──────────────────────────────────────────────────────────────
+            # Resilient image pull.
+            #
+            # Background: containerd's overlayfs snapshotter occasionally
+            # leaves half-extracted snapshots after an interrupted pull
+            # (process killed, OOM, parallel pull racing with itself). The
+            # NEXT pull then trips on the half-written tree with:
+            #
+            #   failed call to UtimesNanoAt for
+            #   /var/lib/containerd/.../snapshots/<id>/fs/app/dist:
+            #   no such file or directory
+            #
+            # The image isn't actually corrupt — Docker just has a stale
+            # local reference whose backing layer files are gone. The fix
+            # is to drop the local image and pull again, which forces
+            # containerd to allocate a fresh snapshot id and re-extract
+            # from registry. Three attempts is enough in practice; we've
+            # never seen a fourth retry succeed if the third didn't.
+            # ──────────────────────────────────────────────────────────────
+            pull_with_retry() {
+              local image="$1"
+              local attempt=1
+              local max=3
+              while [ "$attempt" -le "$max" ]; do
+                if docker compose pull "$CONTAINER"; then
+                  echo "✅ pull succeeded on attempt $attempt"
+                  return 0
+                fi
+                echo "⚠️  pull attempt $attempt/$max failed (likely a stale containerd snapshot); cleaning and retrying"
+                docker rmi -f "$image" 2>/dev/null || true
+                docker image prune -f --filter "dangling=true" 2>/dev/null || true
+                sleep $((attempt * 5))
+                attempt=$((attempt + 1))
+              done
+              echo "❌ pull failed after $max attempts"
+              return 1
+            }
+
+            pull_with_retry "$IMAGE"
             docker compose up -d --force-recreate --no-deps "$CONTAINER"
             echo "🚀 $CONTAINER recreated — waiting for healthcheck…"
 
