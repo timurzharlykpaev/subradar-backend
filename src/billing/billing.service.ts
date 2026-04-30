@@ -1190,8 +1190,21 @@ export class BillingService {
         }
       }
     }
-    const cancelAtPeriodEnd = Object.values(subs).some(
-      (s: any) => s && s.unsubscribe_detected_at,
+    // `cancelAtPeriodEnd` must reflect ONLY the currently-active
+    // entitlement(s). Iterating ALL of `subs` (including products that
+    // already expired or were superseded) tripped on a user's historical
+    // Pro cancellation and falsely flagged a freshly-purchased Team as
+    // cancel_at_period_end — surfacing an expiration banner under a
+    // fully-paid, auto-renewing Team subscription. Restrict the lookup
+    // to product IDs we just confirmed are still active above.
+    const activeProductIds = new Set(
+      Object.values(entitlements)
+        .map((e) => e.productId)
+        .filter((pid): pid is string => !!pid),
+    );
+    const cancelAtPeriodEnd = Object.entries(subs).some(
+      ([pid, s]: [string, any]) =>
+        activeProductIds.has(pid) && s && s.unsubscribe_detected_at,
     );
     const billingIssueDetectedAt = Object.values(subs)
       .map((s: any) => s?.billing_issues_detected_at)
