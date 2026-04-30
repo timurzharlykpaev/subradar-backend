@@ -169,11 +169,12 @@ export class TrialCheckerCron {
 
   /**
    * Auto-downgrade users whose Pro trial has expired.
-   * Runs daily at midnight.
+   * Runs daily at 00:30 UTC — offset from the top-of-hour cron rush so it
+   * doesn't compete with hourly reminders for the small DB connection pool.
    * - Skip users with active RC/LS billing (they paid already)
    * - Send push + email notification about downgrade
    */
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron('30 0 * * *')
   async downgradeExpiredTrials() {
     return runCronHandler('downgradeExpiredTrials', this.logger, this.tg, () =>
       this.downgradeExpiredTrialsImpl(),

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, LessThan } from 'typeorm';
 import { toZonedTime } from 'date-fns-tz';
@@ -99,7 +99,13 @@ export class RemindersService {
   // ── 5 daily/weekly notification crons all run hourly and gate per-user
   // by the user's local clock. Idempotency columns (lastXxxAt, 20h /
   // 6 days windows) make the second hourly tick on the same day a no-op.
-  @Cron(CronExpression.EVERY_HOUR)
+  //
+  // Schedules are deliberately staggered across the hour (minutes
+  // 2/7/12/17/22) to avoid all five firing at the same instant on the same
+  // app instance — the simultaneous bursts overwhelmed our DO managed PG's
+  // small connection budget and triggered "remaining connection slots are
+  // reserved for roles with the SUPERUSER attribute" failures.
+  @Cron('2 * * * *')
   async sendDailyReminders() {
     return runCronHandler('sendDailyReminders', this.logger, this.tg, () =>
       this.sendDailyRemindersImpl(),
@@ -304,7 +310,7 @@ export class RemindersService {
   }
 
   /** Notify users whose trial is about to expire — runs daily at 10:00 */
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron('7 * * * *')
   async sendTrialExpiryReminders() {
     return runCronHandler('sendTrialExpiryReminders', this.logger, this.tg, () =>
       this.sendTrialExpiryRemindersImpl(),
@@ -386,7 +392,7 @@ export class RemindersService {
   }
 
   /** Notify users whose Pro subscription is about to expire — at 10:00 in their local timezone. */
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron('12 * * * *')
   async sendProExpirationReminders() {
     return runCronHandler('sendProExpirationReminders', this.logger, this.tg, () =>
       this.sendProExpirationRemindersImpl(),
@@ -494,7 +500,7 @@ export class RemindersService {
   }
 
   /** Weekly push digest — every Sunday at 11:00 in the user's local timezone. */
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron('17 * * * *')
   async sendWeeklyPushDigest() {
     return runCronHandler('sendWeeklyPushDigest', this.logger, this.tg, () =>
       this.sendWeeklyPushDigestImpl(),
@@ -636,7 +642,7 @@ export class RemindersService {
   }
 
   /** Win-back push for users inactive 7+ days — at 14:00 in their local timezone. */
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron('22 * * * *')
   async sendWinBackPush() {
     return runCronHandler('sendWinBackPush', this.logger, this.tg, () =>
       this.sendWinBackPushImpl(),
