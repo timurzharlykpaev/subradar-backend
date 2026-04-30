@@ -131,5 +131,23 @@ export function inferEventFromRcSnapshot(
     };
   }
 
+  // Lost UNCANCELLATION webhook recovery. Apple lets a user undo a
+  // pending cancellation from iOS Settings → Subscriptions → Resubscribe;
+  // RC then flips `unsubscribe_detected_at` back to null. If we still
+  // have `cancel_at_period_end` stored from the original cancel webhook
+  // and the matching RC entitlement is now renewing, surface an
+  // RC_RENEWAL so transitions clears the cancel flag and snaps the user
+  // back to `active`. Without this, a stuck `cancel_at_period_end` row
+  // can't be repaired by reconcile — inferrer returns null, sync no-ops,
+  // and the user keeps seeing an expiration banner under a fully-paid
+  // auto-renewing subscription.
+  if (current.state === 'cancel_at_period_end') {
+    return {
+      type: 'RC_RENEWAL',
+      periodStart: current.currentPeriodStart ?? new Date(),
+      periodEnd: active.expiresAt,
+    };
+  }
+
   return null;
 }
