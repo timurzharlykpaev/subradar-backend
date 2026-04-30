@@ -561,7 +561,9 @@ export class SubscriptionsService implements OnModuleInit {
     return toUpdate.length;
   }
 
-  @Cron('0 0 * * *')
+  // 01:00 UTC — offset from the 00:00 reminder/outbox cron rush so we don't
+  // compete for the small DO managed-PG connection budget.
+  @Cron('0 1 * * *')
   async dailyNextPaymentUpdate(): Promise<void> {
     await runCronHandler('dailyNextPaymentUpdate', this.logger, this.tg, async () => {
       await this.recalculateNextPaymentDates();

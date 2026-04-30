@@ -90,12 +90,19 @@ import { IdempotencyModule } from './common/idempotency/idempotency.module';
           // If/when we need stricter posture, download DO's CA and set
           // `ssl: { ca: fs.readFileSync(...), rejectUnauthorized: true }`.
           ssl: isProd ? { rejectUnauthorized: false } : undefined,
-          // pg driver pool tuning. Defaults (max:10) are too low for bursts
-          // (AI endpoints hold a connection while awaiting OpenAI). Keeping
-          // min:5 warm avoids cold-start spikes under traffic.
+          // pg driver pool tuning. Hard ceiling is the DO managed-PG cluster's
+          // max_connections (25 on Basic 1GB) minus 3 reserved for SUPERUSER
+          // and ~5 used by DO internals (pghoard, _dodb, system-stats) — so
+          // ~17 usable slots are split across BOTH prod and dev app containers
+          // sharing the same cluster. Previous defaults (max:20) blew through
+          // that ceiling when midnight cron storms tried to grow the pool,
+          // producing "remaining connection slots are reserved for roles with
+          // the SUPERUSER attribute" errors. New defaults: prod 12/2,
+          // dev 3/1 — total worst case 15+5(DO)=20, headroom 2-5 slots.
+          // Override via DB_POOL_MAX / DB_POOL_MIN if the cluster is upgraded.
           extra: {
-            max: 20,
-            min: 5,
+            max: Number(cfg.get('DB_POOL_MAX')) || (isProd ? 12 : 3),
+            min: Number(cfg.get('DB_POOL_MIN')) || (isProd ? 2 : 1),
             idleTimeoutMillis: 30_000,
             connectionTimeoutMillis: 5_000,
           },
