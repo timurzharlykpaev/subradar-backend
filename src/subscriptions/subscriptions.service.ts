@@ -324,22 +324,42 @@ export class SubscriptionsService implements OnModuleInit {
     // (oldest ACTIVE/TRIAL subs by createdAt). Without this, a Free user
     // who saved 5 subs and downgraded could still pull the full list via
     // a direct API call — UI obfuscation is bypassable, server cap isn't.
+    //
+    // Bug fix (2026-05): the cap only applies to ACTIVE/TRIAL — those are
+    // the slots the plan limit actually controls. Previously CANCELLED /
+    // PAUSED subs were also stripped, so the moment a user cancelled a
+    // subscription it disappeared from the list entirely instead of
+    // showing up under the "Cancelled" filter as expected. Terminal /
+    // paused states don't count toward the limit, so we always pass them
+    // through.
     let allowedIds: Set<string> | null = null;
     if (filters?.gateByPlan) {
       const user = await this.usersService.findById(userId);
       const effective = await this.billingService.getEffectiveAccess(user);
       const planConfig = PLANS[effective.plan] ?? PLANS.free;
       if (planConfig.subscriptionLimit !== null) {
-        const oldestActive = await this.repo.find({
-          where: [
-            { userId, status: SubscriptionStatus.ACTIVE },
-            { userId, status: SubscriptionStatus.TRIAL },
-          ],
-          order: { createdAt: 'ASC' },
-          take: planConfig.subscriptionLimit,
-          select: ['id'],
-        });
-        allowedIds = new Set(oldestActive.map((s) => s.id));
+        const [oldestActive, nonActive] = await Promise.all([
+          this.repo.find({
+            where: [
+              { userId, status: SubscriptionStatus.ACTIVE },
+              { userId, status: SubscriptionStatus.TRIAL },
+            ],
+            order: { createdAt: 'ASC' },
+            take: planConfig.subscriptionLimit,
+            select: ['id'],
+          }),
+          this.repo.find({
+            where: [
+              { userId, status: SubscriptionStatus.CANCELLED },
+              { userId, status: SubscriptionStatus.PAUSED },
+            ],
+            select: ['id'],
+          }),
+        ]);
+        allowedIds = new Set([
+          ...oldestActive.map((s) => s.id),
+          ...nonActive.map((s) => s.id),
+        ]);
       }
     }
 
