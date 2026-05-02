@@ -1,12 +1,21 @@
 /**
  * SubRadar email templates
  * All templates use table-based layout for max email client compatibility.
- * Deep link: https://app.subradar.ai (web) / subradar:// (mobile — hardcoded for now)
+ *
+ * URL strategy (env-driven so dev / prod don't drift):
+ *   APP_URL              — web app, used for `/legal/*`, generic logo link.
+ *                          (prod: app.subradar.ai · dev: app-dev.subradar.ai)
+ *   MOBILE_DEEPLINK_URL  — Universal/App-link entry point. iOS/Android open
+ *                          the native app directly (AASA + assetlinks.json
+ *                          configured under subradar.ai/.well-known/);
+ *                          desktop falls back to the App Store via the
+ *                          smart-redirect page hosted at /app/.
  */
 
-const APP_URL = 'https://app.subradar.ai';
-// Mobile deep link (hardcoded until dynamic branch links are set up)
-const MOBILE_URL = 'https://app.subradar.ai';
+const APP_URL = process.env.APP_URL || process.env.FRONTEND_URL || 'https://app.subradar.ai';
+const MOBILE_DEEPLINK_URL = process.env.MOBILE_DEEPLINK_URL || 'https://subradar.ai/app';
+// `MOBILE_URL` kept as an alias for any legacy callers in this file.
+const MOBILE_URL = MOBILE_DEEPLINK_URL;
 
 // CAN-SPAM compliance: physical postal address required in every commercial
 // email. Goalin LLP is the legal entity behind SubRadar.
@@ -457,7 +466,7 @@ function wrap(
   opts: { unsubscribeUrl?: string | null; preheader?: string } = {},
 ): string {
   const unsubHref =
-    opts.unsubscribeUrl || `${APP_URL}/app/settings?tab=notifications`;
+    opts.unsubscribeUrl || `${APP_URL}/settings?tab=notifications`;
   const preheader = opts.preheader
     ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#0a0a16;opacity:0;">${opts.preheader}</div>`
     : '';
@@ -475,10 +484,10 @@ function wrap(
     <tr>
       <td align="center" style="padding:0 16px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
-          <!-- LOGO -->
+          <!-- LOGO — clicks straight into the mobile app via universal link. -->
           <tr>
             <td align="center" style="padding-bottom:28px;">
-              <a href="${APP_URL}" style="text-decoration:none;">
+              <a href="${MOBILE_DEEPLINK_URL}" style="text-decoration:none;">
                 <span style="font-size:26px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
                   Sub<span style="color:#8B5CF6;">Radar</span>
                 </span>
@@ -582,7 +591,7 @@ export function buildMonthlyReportHtml(
   <tr>
     <td style="background:#111128;border:1px solid #1e1e3a;border-radius:16px;padding:24px;text-align:center;">
       <p style="color:#9ca3af;font-size:14px;margin:0 0 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${s.proDesc}</p>
-      <a href="${APP_URL}" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+      <a href="${MOBILE_DEEPLINK_URL}" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
         ${s.ctaText}
       </a>
     </td>
@@ -605,7 +614,10 @@ export function buildWeeklyDigestHtml(
   totalMonthly: number,
   recommendations: Array<{ priority: string; title: string; description: string; estimatedSavingsMonthly: number }>,
   locale = 'ru',
-  appUrl = 'https://app.subradar.ai',
+  // `appUrl` here is the WEB app URL (used for unsubscribe / settings); CTAs
+  // open the mobile app via MOBILE_DEEPLINK_URL so iOS/Android users land
+  // inside the app instead of the marketing site.
+  appUrl = APP_URL,
   unsubscribeUrl: string | null = null,
 ): string {
   const isRu = (locale ?? 'ru').split('-')[0].toLowerCase() === 'ru';
@@ -736,7 +748,7 @@ export function buildWeeklyDigestHtml(
       <p style="color:#c4b5fd;font-size:14px;margin:0 0 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
         ${isRu ? 'Полный анализ и детальные рекомендации — в приложении' : 'Full analysis and detailed recommendations — in the app'}
       </p>
-      <a href="${appUrl}/analytics" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+      <a href="${MOBILE_DEEPLINK_URL}/analytics" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
         ${isRu ? 'Открыть аналитику →' : 'Open analytics →'}
       </a>
     </td>
