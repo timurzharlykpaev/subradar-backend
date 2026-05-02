@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { CacheControlInterceptor } from './common/interceptors/cache-control.interceptor';
 import { TelegramAlertService } from './common/telegram-alert.service';
 
 async function bootstrap() {
@@ -134,7 +135,15 @@ async function bootstrap() {
   // Enforce @Exclude() on entity fields (refreshToken, magicLinkToken,
   // lemonSqueezyCustomerId, password). Without this interceptor, entities
   // returned from controllers leak every column to clients.
-  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
+  // CacheControlInterceptor sets `Cache-Control: private, no-store` as the
+  // default for every response. Routes that want edge caching opt in via
+  // `@Header('Cache-Control', '...')` — see catalog/fx/ai-catalog. Without
+  // this default, CF / browser caches were free to apply their own
+  // heuristics, which is risky for any user-scoped endpoint.
+  app.useGlobalInterceptors(
+    new ClassSerializerInterceptor(app.get(Reflector)),
+    new CacheControlInterceptor(),
+  );
 
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()

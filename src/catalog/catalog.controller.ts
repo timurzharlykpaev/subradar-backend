@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Header, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery, ApiOperation } from '@nestjs/swagger';
 import { DataSource } from 'typeorm';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -35,6 +35,11 @@ export class CatalogController {
   }
 
   @Get('popular')
+  // Catalog content changes ~weekly (new services, regional pricing
+  // refreshes). 5 min browser cache + 1 h CDN with stale-while-revalidate
+  // means most users get an instant edge response and the cold path is
+  // only hit when the catalog is refreshed.
+  @Header('Cache-Control', 'public, max-age=300, s-maxage=3600, stale-while-revalidate=600')
   @ApiQuery({ name: 'region', required: false, example: 'KZ' })
   @ApiQuery({ name: 'currency', required: false, example: 'KZT' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
