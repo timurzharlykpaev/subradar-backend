@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Header,
   Post,
   Body,
   UseGuards,
@@ -323,6 +324,10 @@ export class AiController {
    * Returns: { name, category, iconUrl, serviceUrl, cancelUrl, plans }
    */
   @Get('service-catalog/:serviceName')
+  // Service catalogue is global per-service data — same answer for every
+  // user. 10 min browser, 1 h CDN with stale-while-revalidate cuts the
+  // OpenAI roundtrip cost on popular service names.
+  @Header('Cache-Control', 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400')
   async serviceCatalogLookup(@Param('serviceName') serviceName: string) {
     const normalized = this.marketDataService.normalizeServiceName(serviceName);
     const entry = await this.marketDataService.getMarketData(normalized, false);
