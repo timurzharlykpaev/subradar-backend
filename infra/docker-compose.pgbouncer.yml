@@ -1,0 +1,126 @@
+# PgBouncer overlay for the prod / dev API containers.
+#
+# Why: the managed Postgres (db-s-1vcpu-1gb) caps usable concurrent
+# connections at ~25 once shared_buffers + work_mem eat into RAM. The API
+# (NestJS workers + cron) already brushes that ceiling at midnight, and
+# any spike trips connection_limit_exceeded errors. PgBouncer in
+# transaction-pool mode multiplexes many "logical" client connections
+# onto a small pool of real PG sockets — ~1 real connection serves
+# 5-10 short transactions, so 25 PG sockets become 100-200 effective
+# clients.
+#
+# Two pgbouncer containers — one per environment — so prod and dev never
+# share a connection pool. Each one points at its own managed-PG database
+# (subradar / subradar_dev) and exposes a stable internal hostname the
+# API containers can target via DATABASE_URL.
+#
+# Usage on the server:
+#
+#   cd /opt/subradar
+#   docker compose -f docker-compose.yml -f docker-compose.pgbouncer.yml \
+#     up -d pgbouncer-prod pgbouncer-dev
+#
+# Then update /opt/subradar/.env.prod and .env.dev to point at pgbouncer
+# instead of the managed PG host (see INFRA_UPGRADE_PLAN.md).
+
+version: '3.8'
+
+services:
+  pgbouncer-prod:
+    image: edoburu/pgbouncer:latest
+    container_name: subradar-pgbouncer-prod
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      # Upstream connection — points at managed Postgres directly.
+      # `?sslmode=require` is critical for DO managed PG; pgbouncer
+      # passes through the cert as-is.
+      DATABASE_URL: postgresql://doadmin:${DB_PASSWORD}@dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com:25060/subradar?sslmode=require
+      # Pool mode:
+      #   transaction = pool released back at COMMIT/ROLLBACK. Works with
+      #     TypeORM + node-postgres (no server-side prepared statements,
+      #     no LISTEN/NOTIFY in this codebase). Most efficient.
+      #   session     = released on client disconnect. Safer drop-in but
+      #     loses most of the multiplexing win.
+      # We use transaction; if anything in the app starts depending on
+      # session-level state (advisory locks held across requests, etc.)
+      # the right escape is to drop those queries to direct-PG access via
+      # a separate non-pooled DataSource, not to switch the whole pool.
+      POOL_MODE: transaction
+      # Auth. SCRAM passthrough to managed PG — no md5 fallback needed
+      # because DO PG ≥ 14 default to scram-sha-256.
+      AUTH_TYPE: scram-sha-256
+      # Total inbound client cap. ~ (workers × API replicas × pool_per_request).
+      # 200 leaves headroom for cron + BullMQ + ad-hoc psql sessions
+      # without ever touching the managed-PG ceiling.
+      MAX_CLIENT_CONN: 200
+      # How many real PG sockets pgbouncer is allowed to keep open per
+      # database. 20 is well below the managed-PG soft cap of 25 (DO sets
+      # max_connections=22 on the 1GB tier; admin connections eat 2-3).
+      DEFAULT_POOL_SIZE: 18
+      # Reserve sockets for users who maxed their pool.
+      RESERVE_POOL_SIZE: 4
+      RESERVE_POOL_TIMEOUT: 3
+      # Drop a server connection if idle this long. Keeps idle PG-side
+      # processes from accumulating after traffic dies down at night.
+      SERVER_IDLE_TIMEOUT: 600
+      # Hard ceiling on a single transaction. If the app holds a tx open
+      # this long something is wrong; let pgbouncer GC it.
+      QUERY_WAIT_TIMEOUT: 120
+      # Logging — quieter than default, still keeps connection lifecycle.
+      LOG_CONNECTIONS: 0
+      LOG_DISCONNECTIONS: 0
+      LOG_POOLER_ERRORS: 1
+      # Listen on every IPv4. The container is on the `default` compose
+      # network so only API/cron containers reach it; not exposed to host.
+      LISTEN_ADDR: 0.0.0.0
+      LISTEN_PORT: 6432
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "doadmin"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
+        reservations:
+          memory: 32M
+          cpus: "0.05"
+
+  pgbouncer-dev:
+    image: edoburu/pgbouncer:latest
+    container_name: subradar-pgbouncer-dev
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      DATABASE_URL: postgresql://doadmin:${DB_PASSWORD}@dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com:25060/subradar_dev?sslmode=require
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 8
+      RESERVE_POOL_SIZE: 2
+      SERVER_IDLE_TIMEOUT: 600
+      QUERY_WAIT_TIMEOUT: 120
+      LISTEN_ADDR: 0.0.0.0
+      LISTEN_PORT: 6432
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "doadmin"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.25"
+
+networks:
+  default:
+    name: subradar_default
+    external: true
