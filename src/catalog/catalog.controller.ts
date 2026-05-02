@@ -1,4 +1,5 @@
-import { Controller, ForbiddenException, Get, Header, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth, ApiQuery, ApiOperation } from '@nestjs/swagger';
 import { DataSource } from 'typeorm';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -35,20 +36,32 @@ export class CatalogController {
   }
 
   @Get('popular')
-  // Catalog content changes ~weekly (new services, regional pricing
-  // refreshes). 5 min browser cache + 1 h CDN with stale-while-revalidate
-  // means most users get an instant edge response and the cold path is
-  // only hit when the catalog is refreshed.
-  @Header('Cache-Control', 'public, max-age=300, s-maxage=3600, stale-while-revalidate=600')
   @ApiQuery({ name: 'region', required: false, example: 'KZ' })
   @ApiQuery({ name: 'currency', required: false, example: 'KZT' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   async getPopular(
     @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
     @Query('region') region?: string,
     @Query('currency') currency?: string,
     @Query('limit') limit?: number,
   ) {
+    // Edge caching is only safe when both region and currency are
+    // EXPLICIT in the URL — then the cache key (full URL) deterministically
+    // identifies the response. If either falls back to the JWT user's
+    // saved prefs (`catalog.service.ts` does this when params are
+    // omitted), the response varies per caller and a public CDN entry
+    // would leak one user's regional data to another. Keep the fallback
+    // for backward compatibility with old App Store binaries; just don't
+    // let CF cache that branch.
+    if (region && currency) {
+      res.setHeader(
+        'Cache-Control',
+        'public, max-age=300, s-maxage=3600, stale-while-revalidate=600',
+      );
+    } else {
+      res.setHeader('Cache-Control', 'private, max-age=60');
+    }
     return this.catalog.getPopular(region, currency, limit, req.user);
   }
 
