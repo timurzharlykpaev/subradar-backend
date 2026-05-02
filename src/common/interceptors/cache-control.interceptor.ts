@@ -5,7 +5,6 @@ import {
   NestInterceptor,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
 import type { Response } from 'express';
 
 /**
@@ -21,6 +20,17 @@ import type { Response } from 'express';
  * it at all). Anyone who actually wants edge caching on a specific route
  * sets `@Header('Cache-Control', '...')` and we don't override.
  *
+ * Why we set the header BEFORE next.handle() instead of in tap():
+ *   - tap() only runs on the success path of the observable. If a guard
+ *     (JwtAuthGuard) throws Unauthorized, or a route handler throws a
+ *     domain error, the response leaves through the exception filter
+ *     and tap() never fires — the response goes out without
+ *     Cache-Control, defeating the whole point.
+ *   - Setting it pre-handle puts the default on the response object
+ *     immediately. `@Header(...)` on the route still overrides because
+ *     Nest applies its decorator metadata after the handler returns,
+ *     and the last `setHeader` wins.
+ *
  * Backward compatibility: this is additive header-only — older mobile
  * binaries on the App Store ignore Cache-Control entirely (they manage
  * their own cache via TanStack Query staleTime), so deploying this
@@ -30,15 +40,9 @@ import type { Response } from 'express';
 export class CacheControlInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const res = context.switchToHttp().getResponse<Response>();
-
-    return next.handle().pipe(
-      tap(() => {
-        // Route handler already set Cache-Control (e.g. via `@Header`
-        // decorator on a public read endpoint, or via res.setHeader in
-        // streaming responses) — leave it alone.
-        if (res.getHeader('Cache-Control')) return;
-        res.setHeader('Cache-Control', 'private, no-store');
-      }),
-    );
+    if (!res.getHeader('Cache-Control')) {
+      res.setHeader('Cache-Control', 'private, no-store');
+    }
+    return next.handle();
   }
 }
