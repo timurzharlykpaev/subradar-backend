@@ -160,7 +160,16 @@ export class EffectiveAccessResolver {
 
   private async computeResolve(userId: string): Promise<BillingMeResponse> {
     const user = await this.users.findOne({ where: { id: userId } });
-    if (!user) throw new NotFoundException(`User ${userId} not found`);
+    if (!user) {
+      // Stable client-facing message — mobile (≤ v1.3.20) does an exact-string
+      // match `'User not found'` to detect a stale-JWT (deleted account) and
+      // force-logout. Including the UUID in the message broke that detection,
+      // so the original useless `User <uuid> not found` form is now logged
+      // server-side only. Keep this message wording stable; older clients
+      // still in the App Store rely on it.
+      this.logger.warn(`EffectiveAccess: user ${userId} not found (stale JWT)`);
+      throw new NotFoundException('User not found');
+    }
 
     const [trial, ownedWorkspace, membership, subsCount] = await Promise.all([
       this.trials.findOne({ where: { userId } }),

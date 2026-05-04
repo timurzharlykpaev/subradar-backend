@@ -1298,7 +1298,7 @@ export class BillingService {
       return { action: 'cancel_at_period_end', reason: event.type };
     }
     if (event.type === 'RC_EXPIRATION') {
-      this.logger.log(`reconcileRevenueCat: user ${userId} → free`);
+      this.logger.log(`reconcileRevenueCat: user ${userId} → grace_pro`);
       return { action: 'downgraded', reason: event.type };
     }
     return { action: 'noop', reason: event.type };

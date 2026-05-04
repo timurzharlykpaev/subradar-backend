@@ -1,0 +1,119 @@
+# PgBouncer overlay for subradar API containers.
+#
+# Why: managed Postgres on the 1 GB tier caps `max_connections=25`. The
+# API + cron + BullMQ workers brush that ceiling under load (saw
+# `connection_limit_exceeded` during midnight cron storms). PgBouncer in
+# transaction-pool mode multiplexes many short transactions onto a small
+# pool of real PG sockets, lifting effective concurrency to ~150-200
+# without changing app code.
+#
+# Two pgbouncer instances — one per env — so prod and dev never share a
+# connection pool. Each one connects upstream to its own managed-PG
+# database (subradar / subradar_dev).
+#
+# Deploy on /opt/subradar (assumes /opt/subradar/docker-compose.yml is
+# the existing prod compose with the `subradar` network):
+#
+#   cd /opt/subradar
+#   docker compose --env-file=.env.prod \
+#     -f docker-compose.yml -f docker-compose.pgbouncer.yml \
+#     up -d subradar-pgbouncer-prod
+#   docker compose --env-file=.env.dev \
+#     -f docker-compose.yml -f docker-compose.pgbouncer.yml \
+#     up -d subradar-pgbouncer-dev
+#
+# Then in /opt/subradar/.env.prod (and .env.dev) update:
+#   DB_HOST=subradar-pgbouncer-prod  (or -dev)
+#   DB_PORT=6432
+#   DB_SSL=false   (TLS terminates at pgbouncer; pgbouncer→PG still TLS via SERVER_TLS_SSLMODE)
+#   DATABASE_URL=postgresql://doadmin:${DB_PASSWORD}@subradar-pgbouncer-prod:6432/subradar?sslmode=disable
+#
+# And recreate the API:
+#   docker compose -f docker-compose.yml up -d --force-recreate --no-deps subradar-api-prod
+#
+# `restart: unless-stopped` keeps pgbouncer alive across host reboots.
+# Rollback: revert .env.* (timestamped backups left at .env.prod.before-pgbouncer-*),
+# `docker compose up -d --force-recreate subradar-api-prod`, optionally stop pgbouncer.
+
+services:
+  subradar-pgbouncer-prod:
+    image: edoburu/pgbouncer:latest
+    container_name: subradar-pgbouncer-prod
+    restart: unless-stopped
+    networks: [subradar]
+    environment:
+      DB_HOST: dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com
+      DB_PORT: "25060"
+      DB_USER: doadmin
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: subradar
+      # transaction mode multiplexes connections at COMMIT/ROLLBACK
+      # boundaries. Safe for TypeORM + node-postgres in this codebase
+      # (no LISTEN/NOTIFY, no advisory locks across requests, no
+      # server-side prepared statements). If anything starts depending on
+      # session state, drop that path to a separate non-pooled DataSource
+      # rather than switching the whole pool to `session`.
+      POOL_MODE: transaction
+      # SCRAM passthrough — DO Managed PG ≥ v14 defaults to scram-sha-256.
+      AUTH_TYPE: scram-sha-256
+      # Total concurrent client conns. ~ (workers × replicas × per-request).
+      # 200 leaves headroom for cron + BullMQ + ad-hoc psql sessions
+      # without ever touching the managed-PG max_connections=25 ceiling.
+      MAX_CLIENT_CONN: "200"
+      # Real PG sockets pgbouncer keeps open per database. 18 < the soft
+      # cap (DO sets max_connections=22 on 1GB tier; 2-3 reserved for
+      # admin / replication slots).
+      DEFAULT_POOL_SIZE: "18"
+      RESERVE_POOL_SIZE: "4"
+      RESERVE_POOL_TIMEOUT: "3"
+      # Drop server connections idle this long; keeps server-side process
+      # count flat after night quiet hours.
+      SERVER_IDLE_TIMEOUT: "600"
+      QUERY_WAIT_TIMEOUT: "120"
+      LISTEN_ADDR: 0.0.0.0
+      LISTEN_PORT: "6432"
+      # pgbouncer ↔ managed-PG TLS still required upstream.
+      SERVER_TLS_SSLMODE: require
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "doadmin"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  subradar-pgbouncer-dev:
+    image: edoburu/pgbouncer:latest
+    container_name: subradar-pgbouncer-dev
+    restart: unless-stopped
+    networks: [subradar]
+    environment:
+      DB_HOST: dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com
+      DB_PORT: "25060"
+      DB_USER: doadmin
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: subradar_dev
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "100"
+      DEFAULT_POOL_SIZE: "8"
+      RESERVE_POOL_SIZE: "2"
+      SERVER_IDLE_TIMEOUT: "600"
+      QUERY_WAIT_TIMEOUT: "120"
+      LISTEN_ADDR: 0.0.0.0
+      LISTEN_PORT: "6432"
+      SERVER_TLS_SSLMODE: require
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "doadmin"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  # Joins the network created by /opt/subradar/docker-compose.yml. The
+  # actual network name is the project name + service-network — when
+  # compose runs in /opt/subradar/, the project defaults to `subradar`,
+  # so the network resolves to `subradar_subradar`.
+  subradar:
+    external: true
+    name: subradar_subradar
