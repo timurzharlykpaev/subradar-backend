@@ -11,6 +11,9 @@ import { UsersModule } from '../users/users.module';
 import { GuardsModule } from '../common/guards/guards.module';
 import { OutboxModule } from '../billing/outbox/outbox.module';
 import { BillingModule } from '../billing/billing.module';
+import { ReportsModule } from '../reports/reports.module';
+import { FxModule } from '../fx/fx.module';
+import { RedisModule } from '../common/redis.module';
 
 @Module({
   imports: [
@@ -20,6 +23,9 @@ import { BillingModule } from '../billing/billing.module';
     GuardsModule,
     OutboxModule,
     forwardRef(() => BillingModule),
+    forwardRef(() => ReportsModule),
+    FxModule,
+    RedisModule,
   ],
   controllers: [WorkspaceController],
   providers: [WorkspaceService],

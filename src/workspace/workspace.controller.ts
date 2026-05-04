@@ -6,19 +6,48 @@ import {
   Patch,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   ForbiddenException,
   NotFoundException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags, ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
+import { IsEnum, IsOptional, IsDateString, IsString, IsInt, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PlanGuard } from '../common/guards/plan.guard';
 import { RequirePlanCapability } from '../common/decorators/require-plan-capability.decorator';
 import { WorkspaceService } from './workspace.service';
 import { AnalysisService } from '../analysis/analysis.service';
+import { ReportsService } from '../reports/reports.service';
+import { ReportType } from '../reports/entities/report.entity';
+import { AuditService } from '../common/audit/audit.service';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
 import { InviteMemberDto } from './dto/invite-member.dto';
+
+class GenerateTeamReportDto {
+  @ApiProperty({ enum: ReportType }) @IsEnum(ReportType) type: ReportType;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() from?: string;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() to?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
+}
+
+class ListMembersDto {
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ default: 20 })
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100)
+  limit?: number;
+
+  @ApiPropertyOptional({ enum: ['spend', 'name', 'role'], default: 'spend' })
+  @IsOptional() @IsString()
+  sort?: 'spend' | 'name' | 'role';
+}
 
 @ApiTags('workspace')
 @ApiBearerAuth()
@@ -28,6 +57,8 @@ export class WorkspaceController {
   constructor(
     private readonly service: WorkspaceService,
     private readonly analysisService: AnalysisService,
+    private readonly reportsService: ReportsService,
+    private readonly audit: AuditService,
   ) {}
 
   // Creating a workspace is an Organization-plan capability. We repeat
@@ -167,5 +198,83 @@ export class WorkspaceController {
     const workspace = await this.service.getMyWorkspace(req.user.id);
     if (!workspace) throw new NotFoundException('No workspace found');
     return this.analysisService.run(req.user.id, 'MANUAL' as any, workspace.id);
+  }
+
+  /**
+   * Owner-only paginated members list with sort. Used by the mobile
+   * Reports / Team-overview screens — the legacy `/me/analytics`
+   * embeds members[] inline which scales poorly past ~20 members.
+   */
+  @Get('me/members')
+  async listMembers(@Request() req: any, @Query() query: ListMembersDto) {
+    const workspace = await this.service.getMyWorkspace(req.user.id);
+    if (!workspace) throw new NotFoundException('No workspace found');
+    return this.service.listMembersPaginated(workspace.id, req.user.id, {
+      page: query.page ?? 1,
+      limit: query.limit ?? 20,
+      sort: query.sort ?? 'spend',
+    });
+  }
+
+  /**
+   * Owner-only — surface the most recent AI-detected duplicate
+   * services across the workspace, with computed potential savings.
+   * Reads from the analysis result so it's free (no fresh AI call).
+   *
+   * Owner-only is enforced both here (controller) and inside the
+   * service — keep the check symmetric with `generateTeamReport` so
+   * a partial code change can't accidentally widen access.
+   */
+  @Get('me/overlaps')
+  async getOverlaps(@Request() req: any) {
+    const workspace = await this.service.getMyWorkspace(req.user.id);
+    if (!workspace) throw new NotFoundException('No workspace found');
+    if (workspace.ownerId !== req.user.id) {
+      throw new ForbiddenException('Only the workspace owner can view team overlaps');
+    }
+    return this.service.getTeamOverlaps(workspace.id, req.user.id);
+  }
+
+  /**
+   * Owner-only team report — kicks off async PDF generation that
+   * aggregates subscriptions across every active workspace member.
+   * The PDF file lives in the same Redis bucket as personal reports
+   * (`report:pdf:{id}`) and is fetched via the existing
+   * `GET /reports/{id}/download` endpoint, so no new download path
+   * is needed on the mobile side.
+   */
+  @Post('me/reports/generate')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async generateTeamReport(
+    @Request() req: any,
+    @Body() dto: GenerateTeamReportDto,
+  ) {
+    const workspace = await this.service.getMyWorkspace(req.user.id);
+    if (!workspace) throw new NotFoundException('No workspace found');
+    if (workspace.ownerId !== req.user.id) {
+      throw new ForbiddenException('Only the workspace owner can generate team reports');
+    }
+    const from = dto.from || new Date(Date.now() - 30 * 86_400_000).toISOString().split('T')[0];
+    const to = dto.to || new Date().toISOString().split('T')[0];
+    const report = await this.reportsService.generateTeam(
+      req.user.id,
+      workspace.id,
+      from,
+      to,
+      dto.type,
+      dto.locale,
+    );
+    // Compliance trail: team reports include per-member name + email,
+    // so we record who pulled the data and when. Required for the
+    // "data exports" audit pattern most B2B saas adopt under GDPR /
+    // SOC 2.
+    await this.audit.log({
+      userId: req.user.id,
+      action: 'workspace.team_report_generated',
+      resourceType: 'workspace',
+      resourceId: workspace.id,
+      metadata: { reportId: report.id, type: dto.type, from, to },
+    });
+    return report;
   }
 }

@@ -2,9 +2,17 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { WorkspaceController } from './workspace.controller';
 import { WorkspaceService } from './workspace.service';
 import { AnalysisService } from '../analysis/analysis.service';
+import { ReportsService } from '../reports/reports.service';
+import { AuditService } from '../common/audit/audit.service';
 
-const mockService = { create: jest.fn(), findById: jest.fn(), getMyWorkspace: jest.fn(), invite: jest.fn(), removeMember: jest.fn(), getWorkspaceAnalytics: jest.fn() };
+const mockService = {
+  create: jest.fn(), findById: jest.fn(), getMyWorkspace: jest.fn(),
+  invite: jest.fn(), removeMember: jest.fn(), getWorkspaceAnalytics: jest.fn(),
+  listMembersPaginated: jest.fn(), getTeamOverlaps: jest.fn(),
+};
 const mockAnalysisService = { getLatest: jest.fn(), run: jest.fn() };
+const mockReportsService = { generateTeam: jest.fn() };
+const mockAudit = { log: jest.fn().mockResolvedValue(undefined) };
 const mockReq = { user: { id: 'user-1' } };
 
 describe('WorkspaceController', () => {
@@ -16,6 +24,8 @@ describe('WorkspaceController', () => {
       providers: [
         { provide: WorkspaceService, useValue: mockService },
         { provide: AnalysisService, useValue: mockAnalysisService },
+        { provide: ReportsService, useValue: mockReportsService },
+        { provide: AuditService, useValue: mockAudit },
       ],
     })
       .overrideGuard(require('../auth/guards/jwt-auth.guard').JwtAuthGuard).useValue({ canActivate: () => true })
