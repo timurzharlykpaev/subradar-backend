@@ -25,6 +25,16 @@ import { pdfL, ReportI18n } from './pdf-i18n';
 
 const PDF_TTL_SECONDS = 3600;
 
+/**
+ * Reject anything that isn't a clean ISO-4217 3-letter code so a typo in
+ * the request can't poison the FX layer or PDF labels.
+ */
+function normalizeCurrencyOverride(input: string | null | undefined): string | null {
+  if (!input) return null;
+  const upper = input.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(upper) ? upper : null;
+}
+
 // ─── Colors ───────────────────────────────────────────────────────────────
 const C = {
   primary: '#6C47FF',
@@ -91,7 +101,14 @@ export class ReportsService {
   // Public API
   // ────────────────────────────────────────────────────────────
 
-  async generate(userId: string, from: string, to: string, type: ReportType, locale?: string): Promise<Report> {
+  async generate(
+    userId: string,
+    from: string,
+    to: string,
+    type: ReportType,
+    locale?: string,
+    displayCurrencyOverride?: string,
+  ): Promise<Report> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (user && user.plan === 'free') {
       const now = new Date();
@@ -107,6 +124,7 @@ export class ReportsService {
       reportId: saved.id,
       userId,
       locale: locale || user?.locale || 'en',
+      displayCurrency: normalizeCurrencyOverride(displayCurrencyOverride),
     });
     return saved;
   }
@@ -130,6 +148,7 @@ export class ReportsService {
     to: string,
     type: ReportType,
     locale?: string,
+    displayCurrencyOverride?: string,
   ): Promise<Report> {
     const user = await this.userRepo.findOne({ where: { id: requesterId } });
     // Whitelist team-eligible plans rather than blacklisting `free` —
@@ -156,6 +175,7 @@ export class ReportsService {
       reportId: saved.id,
       userId: requesterId,
       locale: locale || user?.locale || 'en',
+      displayCurrency: normalizeCurrencyOverride(displayCurrencyOverride),
     });
     return saved;
   }
@@ -183,10 +203,15 @@ export class ReportsService {
   // Processor entry point
   // ────────────────────────────────────────────────────────────
 
-  async buildAndStorePdf(userId: string, reportId: string, locale = 'en'): Promise<void> {
+  async buildAndStorePdf(
+    userId: string,
+    reportId: string,
+    locale = 'en',
+    displayCurrencyOverride?: string,
+  ): Promise<void> {
     await this.reportRepo.update(reportId, { status: ReportStatus.GENERATING, error: null });
     try {
-      const buffer = await this.buildPdf(userId, reportId, locale);
+      const buffer = await this.buildPdf(userId, reportId, locale, displayCurrencyOverride);
       await this.redis.set(`report:pdf:${reportId}`, buffer.toString('base64'), 'EX', PDF_TTL_SECONDS);
       await this.reportRepo.update(reportId, { status: ReportStatus.READY });
       this.logger.log(`PDF ready: report ${reportId}`);
@@ -201,7 +226,12 @@ export class ReportsService {
   // PDF Builder
   // ────────────────────────────────────────────────────────────
 
-  private async buildPdf(userId: string, id: string, locale: string): Promise<Buffer> {
+  private async buildPdf(
+    userId: string,
+    id: string,
+    locale: string,
+    displayCurrencyOverride?: string,
+  ): Promise<Buffer> {
     const report = await this.findOne(userId, id);
     const user = await this.userRepo.findOne({ where: { id: userId } });
 
@@ -249,9 +279,16 @@ export class ReportsService {
       if (buf) iconMap.set(s.id, buf);
     }));
 
-    // Display currency: prefer user.displayCurrency, then the most-used
-    // subscription currency, then USD as last resort.
-    const displayCurrency = user?.displayCurrency || this.dominantCurrency(subsRaw) || 'USD';
+    // Display currency priority: explicit override from the request (e.g.
+    // mobile passes the live `?displayCurrency=KZT` even before the user's
+    // backend row has caught up), then user's persisted preference, then
+    // dominant subscription currency, then USD. Without the override branch
+    // the user could pick KZT in the app and still get a USD PDF.
+    const displayCurrency =
+      normalizeCurrencyOverride(displayCurrencyOverride) ||
+      user?.displayCurrency ||
+      this.dominantCurrency(subsRaw) ||
+      'USD';
 
     // FX conversion — fetch once, attach `monthlyConverted` and
     // `amountConverted` to each sub. Failures fall back to 0 with a logged

@@ -512,18 +512,25 @@ export class WorkspaceService {
     return map[period] ?? amount;
   }
 
-  async getWorkspaceAnalytics(userId: string) {
+  async getWorkspaceAnalytics(userId: string, displayCurrencyOverride?: string) {
     const workspace = await this.getMyWorkspace(userId);
     if (!workspace) throw new NotFoundException('Workspace not found');
 
-    // Display currency = the requesting user's preference. We cache by
-    // (workspace, currency) tuple so each member's view stays warm
-    // independently. 5-minute TTL is the same window Notion uses for
-    // workspace analytics — fast enough that aggressive subscription
-    // edits are visible within a coffee break, cheap enough that we
-    // don't recompute on every single tab switch.
-    const owner = await this.usersService.findById(userId);
-    const displayCurrency = (owner?.displayCurrency as string) || 'USD';
+    // Display currency resolution priority:
+    //   1. explicit `?displayCurrency=` query param from the client (lets the
+    //      mobile UI render in whatever the user just picked, even before
+    //      their backend `users.displayCurrency` row catches up — fixes the
+    //      stale-USD bug seen on KZT switches)
+    //   2. requesting user's persisted preference
+    //   3. USD fallback
+    // Cache key includes the resolved currency so each variant stays warm
+    // independently (5-min TTL).
+    const requesting = await this.usersService.findById(userId);
+    const overrideUpper = (displayCurrencyOverride || '').trim().toUpperCase();
+    // Defend against junk input — only honour an ISO-4217-shaped 3-letter code.
+    const validOverride = /^[A-Z]{3}$/.test(overrideUpper) ? overrideUpper : null;
+    const displayCurrency =
+      validOverride || (requesting?.displayCurrency as string) || 'USD';
 
     const cacheKey = `ws:${workspace.id}:analytics:${displayCurrency}`;
     try {
