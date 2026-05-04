@@ -33,6 +33,7 @@ class GenerateTeamReportDto {
   @ApiPropertyOptional() @IsOptional() @IsDateString() from?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() to?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() displayCurrency?: string;
 }
 
 class ListMembersDto {
@@ -73,8 +74,11 @@ export class WorkspaceController {
   }
 
   @Get('me/analytics')
-  getMyWorkspaceAnalytics(@Request() req) {
-    return this.service.getWorkspaceAnalytics(req.user.id);
+  getMyWorkspaceAnalytics(
+    @Request() req,
+    @Query('displayCurrency') displayCurrency?: string,
+  ) {
+    return this.service.getWorkspaceAnalytics(req.user.id, displayCurrency);
   }
 
   @Get('me')
@@ -263,6 +267,7 @@ export class WorkspaceController {
       to,
       dto.type,
       dto.locale,
+      dto.displayCurrency,
     );
     // Compliance trail: team reports include per-member name + email,
     // so we record who pulled the data and when. Required for the

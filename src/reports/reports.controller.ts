@@ -32,6 +32,8 @@ class GenerateReportDto {
   @ApiPropertyOptional() @IsOptional() @IsString() format?: string;
   /** Locale for PDF (e.g. 'ru', 'en') — defaults to user locale */
   @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
+  /** ISO-4217 currency override (e.g. 'KZT'). Falls back to user.displayCurrency. */
+  @ApiPropertyOptional() @IsOptional() @IsString() displayCurrency?: string;
 }
 
 @ApiTags('reports')
@@ -50,7 +52,14 @@ export class ReportsController {
   generate(@Request() req, @Body() dto: GenerateReportDto) {
     const from = dto.from || dto.startDate || '';
     const to = dto.to || dto.endDate || '';
-    return this.service.generate(req.user.id, from, to, dto.type, dto.locale);
+    return this.service.generate(
+      req.user.id,
+      from,
+      to,
+      dto.type,
+      dto.locale,
+      dto.displayCurrency,
+    );
   }
 
   @Get()
