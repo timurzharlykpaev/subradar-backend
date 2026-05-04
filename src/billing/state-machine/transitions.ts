@@ -128,9 +128,13 @@ export function transition(
 
     case 'RC_EXPIRATION':
       if (s.state === 'free' || s.state === 'grace_pro' || s.state === 'grace_team') return s;
+      // Keep `plan` (pro/organization) while in grace — the user's tier is
+      // unchanged during the win-back window and the
+      // `billing_state_plan_consistent` CHECK constraint requires
+      // state!='free' rows to also have plan!='free'. GRACE_EXPIRED is the
+      // transition that drops both to 'free' once the grace window closes.
       return {
         ...s,
-        plan: 'free',
         state: 'grace_pro',
         graceExpiresAt: addDays(GRACE_PERIOD_DAYS),
         graceReason: 'pro_expired',
@@ -166,6 +170,10 @@ export function transition(
 
     case 'TEAM_OWNER_EXPIRED':
       if (e.memberHasOwnSub) return s;
+      // Free-plan members never had paid access of their own — there's
+      // nothing to grace, and writing (state='grace_team', plan='free')
+      // would violate billing_state_plan_consistent. Leave the row alone.
+      if (s.plan === 'free') return s;
       return {
         ...s,
         state: 'grace_team',
@@ -177,6 +185,10 @@ export function transition(
       if (s.billingSource === 'revenuecat' && !s.cancelAtPeriodEnd && s.state === 'active') {
         return s; // member had own sub — keep
       }
+      // Same constraint guard as TEAM_OWNER_EXPIRED: free-plan members
+      // shouldn't be moved to grace_team (no paid access to grace, and the
+      // CHECK constraint forbids state!='free' with plan='free').
+      if (s.plan === 'free') return s;
       return {
         ...s,
         state: 'grace_team',

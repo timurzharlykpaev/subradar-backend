@@ -58,6 +58,15 @@ export class User {
   @Column({ nullable: true })
   fcmToken: string;
 
+  @Column({ type: 'timestamp', name: 'gmail_connected_at', nullable: true })
+  gmailConnectedAt: Date | null;
+
+  @Column({ type: 'timestamp', name: 'gmail_last_scan_at', nullable: true })
+  gmailLastScanAt: Date | null;
+
+  @Column({ type: 'int', name: 'gmail_last_import_count', nullable: true })
+  gmailLastImportCount: number | null;
+
   @Column({ default: true })
   isActive: boolean;
 

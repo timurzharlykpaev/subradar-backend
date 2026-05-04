@@ -75,7 +75,11 @@ describe('BillingStateMachine.transition', () => {
     };
     const next = transition(active, { type: 'RC_EXPIRATION' });
     expect(next.state).toBe('grace_pro');
-    expect(next.plan).toBe('free');
+    // Plan stays 'pro' through grace — both because the user's tier hasn't
+    // semantically changed yet and because the billing_state_plan_consistent
+    // DB CHECK rejects (state='grace_pro', plan='free'). GRACE_EXPIRED is
+    // what drops both to free once the win-back window closes.
+    expect(next.plan).toBe('pro');
     expect(next.graceReason).toBe('pro_expired');
     expect(next.graceExpiresAt).toBeInstanceOf(Date);
     const delta = next.graceExpiresAt!.getTime() - Date.now();
@@ -161,6 +165,21 @@ describe('BillingStateMachine.transition', () => {
     const next = transition(member, { type: 'TEAM_OWNER_EXPIRED', memberHasOwnSub: true });
     expect(next.state).toBe('active');
     expect(next.plan).toBe('pro');
+  });
+
+  it('free-plan member stays free on TEAM_OWNER_EXPIRED (no paid access to grace)', () => {
+    // Most team members are on plan='free' — they get access via the owner,
+    // not their own sub. Pre-fix this transition wrote (grace_team, free)
+    // and tripped the billing_state_plan_consistent CHECK constraint.
+    const free: UserBillingSnapshot = freeSnapshot();
+    const next = transition(free, { type: 'TEAM_OWNER_EXPIRED', memberHasOwnSub: false });
+    expect(next).toEqual(free);
+  });
+
+  it('free-plan member stays free on TEAM_MEMBER_REMOVED (no paid access to grace)', () => {
+    const free: UserBillingSnapshot = freeSnapshot();
+    const next = transition(free, { type: 'TEAM_MEMBER_REMOVED' });
+    expect(next).toEqual(free);
   });
 
   it('throws InvalidTransitionError on free + RC_RENEWAL', () => {
