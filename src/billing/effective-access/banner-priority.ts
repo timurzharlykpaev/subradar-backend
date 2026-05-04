@@ -12,7 +12,21 @@ import { BannerPriority } from './billing-me.types';
  */
 export interface BannerInput {
   state: BillingState;
+  /**
+   * Raw `user.plan` column — the row-level plan the user purchased and
+   * whose lifecycle (cancel_at_period_end, currentPeriodEnd) lives on the
+   * User record. May lag behind reality after a plan switch / sandbox
+   * replay; use `effectivePlan` for what the user actually has access to.
+   */
   plan: Plan;
+  /**
+   * Resolved effective plan (own + team + trial + grace combined). Used
+   * by the expiration guard to detect "this cancellation is stale,
+   * the user already has different active access" — without this we
+   * surfaced a "Pro expired" banner to users who'd just been replayed
+   * onto Team in sandbox / family-shared into a team.
+   */
+  effectivePlan: Plan;
   billingPeriod: BillingPeriod | null;
   cancelAtPeriodEnd: boolean;
   billingIssueAt: Date | null;
@@ -83,7 +97,24 @@ export function computeBannerPriority(input: BannerInput): BannerResult {
 
   if (input.state === 'cancel_at_period_end' && input.currentPeriodEnd) {
     const daysLeft = daysBetween(input.currentPeriodEnd, now);
-    if (daysLeft <= 7) {
+    // Stale-cancellation guard: only surface the expiration banner when
+    // the cancellation is about the plan the user CURRENTLY has access
+    // to. Two real-world cases this prevents a false "Pro expired" on:
+    //
+    //  1. Sandbox replay — user with a still-cancelling Pro tapped Buy,
+    //     Apple replayed an active Team transaction, and the User row
+    //     ended up with `plan='organization'` while the `billingStatus`
+    //     and `currentPeriodEnd` from the prior Pro lifecycle lingered.
+    //  2. Owner upgrade — Pro owner upgrades to Team mid-cycle; the
+    //     old cancel_at_period_end on the Pro row is meaningless once
+    //     Team kicks in via the new transaction.
+    //
+    // We also skip when access flows from a team membership (someone
+    // else's plan) — there's nothing for the user to "reactivate" since
+    // they don't own the plan that's expiring.
+    const planMismatch = input.plan !== input.effectivePlan;
+    const accessThroughTeam = input.isTeamMember && !input.hasOwnPaidPlan;
+    if (!planMismatch && !accessThroughTeam && daysLeft <= 7) {
       return {
         priority: 'expiration',
         payload: {

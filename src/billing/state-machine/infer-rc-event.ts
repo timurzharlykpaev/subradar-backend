@@ -111,7 +111,19 @@ export function inferEventFromRcSnapshot(
     return { type: 'RC_CANCELLATION', periodEnd: active.expiresAt };
   }
 
-  if (current.state === 'free') {
+  // From `free` OR a grace state, treat any active RC entitlement as a
+  // fresh INITIAL_PURCHASE — INITIAL_PURCHASE clears graceExpiresAt /
+  // graceReason and lands the user on `active`. Without this, a user
+  // who lapsed into grace_pro and then bought a new subscription
+  // (Team or another Pro cycle) on the App Store could not exit grace
+  // via reconcile: PRODUCT_CHANGE rejected grace as an invalid source
+  // state, and "same plan, grace state" returned null and noop'd. The
+  // user observed a forever "Pro expired" banner under a paid Team sub.
+  if (
+    current.state === 'free' ||
+    current.state === 'grace_pro' ||
+    current.state === 'grace_team'
+  ) {
     return {
       type: 'RC_INITIAL_PURCHASE',
       plan: active.plan,
