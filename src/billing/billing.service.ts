@@ -1262,16 +1262,21 @@ export class BillingService {
    * - RC empty + period elapsed / unknown               → wipe paid state to free
    */
   async reconcileRevenueCat(userId: string): Promise<{
-    action: 'noop' | 'cancel_at_period_end' | 'downgraded';
+    // 'upgraded' added for forward-compat — old mobile clients only branch
+    // on `ran = action !== 'noop'`, so a new value is safe and additive.
+    action: 'noop' | 'cancel_at_period_end' | 'downgraded' | 'upgraded';
     reason: string;
   }> {
     const current = await this.userBilling.read(userId);
     if (current.billingSource !== 'revenuecat') {
       return { action: 'noop', reason: `billingSource=${current.billingSource ?? 'null'}` };
     }
-    if (current.state === 'free') {
-      return { action: 'noop', reason: 'already free' };
-    }
+    // Removed the `state === 'free'` short-circuit. Apple is the source
+    // of truth: a user can be on `free` locally but have a fresh active
+    // entitlement on the App Store (e.g. Restore Purchases hasn't fired
+    // yet, or a webhook was lost). Letting `inferEventFromRcSnapshot`
+    // run lets us emit RC_INITIAL_PURCHASE in those cases. Same goes
+    // for grace states (handled in the inferrer).
 
     let rc: RCSubscriberSnapshot;
     try {
@@ -1300,6 +1305,16 @@ export class BillingService {
     if (event.type === 'RC_EXPIRATION') {
       this.logger.log(`reconcileRevenueCat: user ${userId} → grace_pro`);
       return { action: 'downgraded', reason: event.type };
+    }
+    if (
+      event.type === 'RC_INITIAL_PURCHASE' ||
+      event.type === 'RC_PRODUCT_CHANGE' ||
+      event.type === 'RC_RENEWAL'
+    ) {
+      this.logger.log(
+        `reconcileRevenueCat: user ${userId} synced from RC (${event.type})`,
+      );
+      return { action: 'upgraded', reason: event.type };
     }
     return { action: 'noop', reason: event.type };
   }

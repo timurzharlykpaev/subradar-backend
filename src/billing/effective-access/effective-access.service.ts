@@ -10,7 +10,7 @@ import {
 } from '../../workspace/entities/workspace-member.entity';
 import { UserTrial } from '../trials/entities/user-trial.entity';
 import { PLANS } from '../plans.config';
-import { BillingState, BillingPeriod } from '../state-machine/types';
+import { BillingState, BillingPeriod, Plan } from '../state-machine/types';
 import { BillingMeResponse } from './billing-me.types';
 import { computeBannerPriority } from './banner-priority';
 
@@ -313,9 +313,17 @@ export class EffectiveAccessResolver {
       ? null
       : user.currentPeriodEnd;
 
+    // Pass both the raw row plan (`user.plan` — what's actually scheduled
+    // to expire on the User record) and the resolved effective plan
+    // separately. The expiration-banner guard inside computeBannerPriority
+    // compares them to detect stale cancellations after a plan switch /
+    // sandbox replay (e.g. row says "Pro is cancelling" but user is now
+    // effectively on Team via a fresh transaction — banner is meaningless).
+    const rowPlan: Plan = (user.plan as Plan) ?? 'free';
     const banner = computeBannerPriority({
       state: billingStatus,
-      plan: effectivePlan,
+      plan: rowPlan,
+      effectivePlan,
       billingPeriod,
       cancelAtPeriodEnd: user.cancelAtPeriodEnd,
       billingIssueAt: user.billingIssueAt,

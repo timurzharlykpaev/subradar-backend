@@ -4,6 +4,7 @@ describe('computeBannerPriority', () => {
   const base: BannerInput = {
     state: 'active',
     plan: 'pro',
+    effectivePlan: 'pro',
     billingPeriod: 'monthly',
     cancelAtPeriodEnd: false,
     billingIssueAt: null,
@@ -50,6 +51,43 @@ describe('computeBannerPriority', () => {
     });
     expect(r.priority).toBe('expiration');
     expect(r.payload).toMatchObject({ daysLeft: 5 });
+  });
+
+  it('expiration suppressed when row plan diverges from effective plan (sandbox replay)', () => {
+    // User row still has a cancelling Pro lifecycle in DB, but a fresh
+    // Team transaction has flipped effective access to organization.
+    // Banner should NOT show "Pro expired" since user has working access.
+    const end = new Date(Date.now() + 5 * 86_400_000);
+    const r = computeBannerPriority({
+      ...base,
+      state: 'cancel_at_period_end',
+      plan: 'pro',
+      effectivePlan: 'organization',
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: end,
+      hasOwnPaidPlan: true,
+      isTeamOwner: true,
+    });
+    expect(r.priority).not.toBe('expiration');
+  });
+
+  it('expiration suppressed when access flows from team membership only', () => {
+    // Edge case: user row has a stale cancel_at_period_end on their own
+    // Pro plan, but they're now using a team membership (someone else's
+    // plan). Reactivating "their" expiring sub doesn't help — they
+    // already have working access.
+    const end = new Date(Date.now() + 3 * 86_400_000);
+    const r = computeBannerPriority({
+      ...base,
+      state: 'cancel_at_period_end',
+      plan: 'pro',
+      effectivePlan: 'organization',
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: end,
+      hasOwnPaidPlan: false,
+      isTeamMember: true,
+    });
+    expect(r.priority).not.toBe('expiration');
   });
 
   it('double_pay when hasOwnPaidPlan and team member (not owner)', () => {
