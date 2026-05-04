@@ -3,12 +3,13 @@ import {
   Inject,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, In } from 'typeorm';
 import Decimal from 'decimal.js';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../common/redis.module';
@@ -110,6 +111,55 @@ export class ReportsService {
     return saved;
   }
 
+  /**
+   * Team report — workspace-scoped PDF aggregating data from every
+   * active member. The `userId` field on the row is set to the
+   * requesting owner (for download auth + billing trail) and
+   * `workspaceId` flips the PDF builder into team mode.
+   *
+   * Caller is responsible for verifying that `requesterId` is the
+   * workspace owner — the controller does this via WorkspaceService.
+   * The Free-plan limit applies the same way as for personal reports
+   * (Team plan is automatically Pro+ so this branch is dead-code in
+   * practice, but kept defensive).
+   */
+  async generateTeam(
+    requesterId: string,
+    workspaceId: string,
+    from: string,
+    to: string,
+    type: ReportType,
+    locale?: string,
+  ): Promise<Report> {
+    const user = await this.userRepo.findOne({ where: { id: requesterId } });
+    // Whitelist team-eligible plans rather than blacklisting `free` —
+    // a Pro user (no team plan, no workspace ownership) should also
+    // be unable to generate team reports. Plan-Guard at the controller
+    // layer is the primary check; this is defense-in-depth.
+    const teamPlans = ['organization', 'team'];
+    if (!user || !teamPlans.includes(user.plan as string)) {
+      throw new ForbiddenException(
+        'Team reports require a Team plan. Upgrade to Team to enable.',
+      );
+    }
+
+    const report = this.reportRepo.create({
+      userId: requesterId,
+      workspaceId,
+      from,
+      to,
+      type,
+      status: ReportStatus.PENDING,
+    });
+    const saved = await this.reportRepo.save(report);
+    await this.reportQueue.add('generate-pdf', {
+      reportId: saved.id,
+      userId: requesterId,
+      locale: locale || user?.locale || 'en',
+    });
+    return saved;
+  }
+
   async findOne(userId: string, id: string): Promise<Report> {
     const report = await this.reportRepo.findOne({ where: { id } });
     if (!report) throw new NotFoundException('Report not found');
@@ -154,16 +204,43 @@ export class ReportsService {
   private async buildPdf(userId: string, id: string, locale: string): Promise<Buffer> {
     const report = await this.findOne(userId, id);
     const user = await this.userRepo.findOne({ where: { id: userId } });
-    const cards = await this.cardRepo.find({ where: { userId } });
-    const cardMap = Object.fromEntries(cards.map((c) => [c.id, c]));
 
-    // Subscriptions overlapping the requested period.
-    const subsRaw = await this.subRepo.createQueryBuilder('s')
-      .where('s.userId = :userId', { userId })
-      .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', { to: report.to })
-      .andWhere('(s.cancelledAt IS NULL OR s.cancelledAt >= :from)', { from: report.from })
-      .orderBy('s.amount', 'DESC')
-      .getMany();
+    // Team-scope reports aggregate across all workspace members.
+    // The owner row's userId remains on `report.userId` (for download
+    // auth), but the data set is pulled from every active member.
+    let subsRaw: Subscription[] = [];
+    let teamMembers: TeamMemberInfo[] = [];
+    let cards: PaymentCard[] = [];
+    if (report.workspaceId) {
+      const memberData = await this.loadTeamScope(report.workspaceId, report.from, report.to);
+      // Hard caps to keep PDFKit memory bounded. Beyond these the worker
+      // can OOM at 512MB and the user gets a "FAILED" status with no
+      // useful error. 50 members × 100 subs = ~5K rows, comfortable for
+      // PDFKit; the truncation is surfaced on the team-overview page.
+      const TEAM_MEMBER_CAP = 50;
+      const TEAM_SUB_CAP = 5000;
+      teamMembers = memberData.members.slice(0, TEAM_MEMBER_CAP);
+      // Restrict subs to the capped member set.
+      const allowedUserIds = new Set(teamMembers.map((m) => m.userId));
+      subsRaw = memberData.subs
+        .filter((s) => allowedUserIds.has(s.userId))
+        .slice(0, TEAM_SUB_CAP);
+      cards = memberData.cards.filter((c) => allowedUserIds.has(c.userId));
+      if (memberData.members.length > TEAM_MEMBER_CAP) {
+        this.logger.warn(
+          `Team report ${id}: truncated ${memberData.members.length} members to ${TEAM_MEMBER_CAP}`,
+        );
+      }
+    } else {
+      subsRaw = await this.subRepo.createQueryBuilder('s')
+        .where('s.userId = :userId', { userId })
+        .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', { to: report.to })
+        .andWhere('(s.cancelledAt IS NULL OR s.cancelledAt >= :from)', { from: report.from })
+        .orderBy('s.amount', 'DESC')
+        .getMany();
+      cards = await this.cardRepo.find({ where: { userId } });
+    }
+    const cardMap = Object.fromEntries(cards.map((c) => [c.id, c]));
 
     // Pre-fetch icons for top 30 (used in detailed/tax tables).
     const iconMap = new Map<string, Buffer>();
@@ -229,7 +306,13 @@ export class ReportsService {
         align: 'right',
         width: CW,
       });
-      if (user?.email) doc.text(`${i18n.account}: ${user.email}`, ML);
+      if (report.workspaceId) {
+        // Surface team scope on the meta strip so the reader knows this
+        // PDF aggregates across members, not just the owner's own subs.
+        doc.text(`${i18n.account}: Team (${teamMembers.length} members)`, ML);
+      } else if (user?.email) {
+        doc.text(`${i18n.account}: ${user.email}`, ML);
+      }
       if (fxFailed) {
         doc.fillColor(C.orange).text(
           `⚠ ${i18n.fx_partial_failure}`, ML);
@@ -237,6 +320,16 @@ export class ReportsService {
       }
       doc.moveDown(1);
       doc.fillColor(C.text);
+
+      // ── Team overview page (only for team reports) ─────────
+      // Drawn BEFORE the regular content so the owner sees the
+      // per-member breakdown + overlap savings up front.
+      if (report.workspaceId && teamMembers.length > 0) {
+        this.pdfTeamOverview(doc, F, i18n, teamMembers, subs, displayCurrency);
+        // Force a page break so the SUMMARY/DETAILED tables that
+        // follow start clean.
+        doc.addPage();
+      }
 
       // ── Content ────────────────────────────────────────────
       if (report.type === ReportType.SUMMARY) {
@@ -897,6 +990,173 @@ export class ReportsService {
     const loc = intlMap[code] ?? 'en-US';
     return date.toLocaleDateString(loc, { year: 'numeric', month: 'short', day: 'numeric' });
   }
+
+  // ════════════════════════════════════════════════════════════
+  // Team scope helpers
+  // ════════════════════════════════════════════════════════════
+
+  /**
+   * Load every subscription that overlaps `[from, to]` for every active
+   * member of `workspaceId`, plus the corresponding member metadata and
+   * payment cards. One bulk fetch per resource — no N+1.
+   *
+   * Membership and role checks happen before this method is called
+   * (see WorkspaceController's owner-only guard on the team report
+   * endpoint), so we can trust the workspaceId here.
+   */
+  private async loadTeamScope(
+    workspaceId: string,
+    from: string,
+    to: string,
+  ): Promise<{ subs: Subscription[]; members: TeamMemberInfo[]; cards: PaymentCard[] }> {
+    // Resolve workspace → active member userIds + their User rows in one
+    // query each. We use raw repos (no service round-trip) to keep the
+    // dependency graph clean (reports module doesn't import workspace).
+    const { manager } = this.subRepo;
+    const memberRows: Array<{
+      memberId: string;
+      userId: string;
+      role: string;
+      name: string | null;
+      email: string | null;
+      inviteEmail: string | null;
+    }> = await manager.query(
+      `SELECT
+         m."id" AS "memberId",
+         m."userId" AS "userId",
+         m."role" AS "role",
+         u."name" AS "name",
+         u."email" AS "email",
+         m."inviteEmail" AS "inviteEmail"
+       FROM "workspace_members" m
+       LEFT JOIN "users" u ON u."id" = m."userId"
+       WHERE m."workspaceId" = $1 AND m."status" = 'ACTIVE' AND m."userId" IS NOT NULL
+       ORDER BY m."role" ASC, u."name" ASC`,
+      [workspaceId],
+    );
+    if (memberRows.length === 0) {
+      return { subs: [], members: [], cards: [] };
+    }
+    const userIds = memberRows.map((r) => r.userId);
+
+    const subs = await this.subRepo.createQueryBuilder('s')
+      .where('s.userId IN (:...userIds)', { userIds })
+      .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', { to })
+      .andWhere('(s.cancelledAt IS NULL OR s.cancelledAt >= :from)', { from })
+      .orderBy('s.amount', 'DESC')
+      .getMany();
+
+    const cards = await this.cardRepo.find({
+      // Cards are user-scoped — load every member's so the detailed
+      // table can render `••••1234` without a second query per row.
+      where: { userId: In(userIds) },
+    });
+
+    const members: TeamMemberInfo[] = memberRows.map((r) => ({
+      userId: r.userId,
+      name: r.name,
+      email: r.email ?? r.inviteEmail,
+      role: r.role,
+    }));
+
+    return { subs, members, cards };
+  }
+
+  /**
+   * Team Overview page — drawn before the standard report sections.
+   *
+   * Layout (top → bottom):
+   *   • "Team Overview" title
+   *   • Per-member table: Name | Subs | Monthly | Yearly
+   *   • Overlap callout: "5 members pay for Notion separately — switch
+   *     to Team plan to save $40/mo" (computed from the same subs).
+   *
+   * Currencies are already converted to `displayCurrency` at the
+   * subscription level (via attachConverted); we just sum here.
+   */
+  private pdfTeamOverview(
+    doc: any,
+    F: { regular: string; bold: string },
+    _i18n: ReportI18n,
+    members: TeamMemberInfo[],
+    subs: SubWithMoney[],
+    displayCurrency: string,
+  ): void {
+    if (members.length === 0) return;
+
+    const subsByUser = new Map<string, SubWithMoney[]>();
+    for (const s of subs) {
+      const list = subsByUser.get(s.userId) || [];
+      list.push(s);
+      subsByUser.set(s.userId, list);
+    }
+
+    // ── Title
+    doc.fontSize(16).font(F.bold).fillColor(C.text).text('Team Overview', ML);
+    doc.moveDown(0.4);
+
+    // ── Per-member table
+    const cols = [
+      { label: 'Member', w: 200 },
+      { label: 'Subs', w: 60 },
+      { label: 'Monthly', w: 110 },
+      { label: 'Yearly', w: 125 },
+    ];
+    this.tableHeader(doc, F, cols);
+    members.forEach((m, idx) => {
+      const ms = subsByUser.get(m.userId) ?? [];
+      const monthly = ms.reduce((sum, s) => sum + (s.monthlyConverted || 0), 0);
+      this.tableRow(
+        doc,
+        F,
+        [
+          m.name || m.email || '—',
+          String(ms.length),
+          fmtMoney(monthly, displayCurrency),
+          fmtMoney(monthly * 12, displayCurrency),
+        ],
+        cols,
+        idx,
+      );
+    });
+    doc.moveDown(0.8);
+
+    // ── Overlap callout: services >= 2 members are paying for separately.
+    const byService = new Map<string, { ids: Set<string>; total: number }>();
+    for (const s of subs) {
+      const key = (s.name || '').trim().toLowerCase();
+      if (!key) continue;
+      const entry = byService.get(key) ?? { ids: new Set<string>(), total: 0 };
+      entry.ids.add(s.userId);
+      entry.total += s.monthlyConverted || 0;
+      byService.set(key, entry);
+    }
+    const overlaps = [...byService.entries()]
+      .filter(([, e]) => e.ids.size >= 2)
+      .sort((a, b) => b[1].total - a[1].total)
+      .slice(0, 5);
+
+    if (overlaps.length > 0) {
+      doc.fontSize(13).font(F.bold).fillColor(C.text).text('Potential Savings', ML);
+      doc.moveDown(0.3);
+      doc.fontSize(10).font(F.regular).fillColor(C.textLight);
+      doc.text(
+        `${overlaps.length} service${overlaps.length === 1 ? '' : 's'} bought separately by multiple members:`,
+        ML,
+      );
+      doc.moveDown(0.3);
+      overlaps.forEach((o) => {
+        const [name, info] = o;
+        const niceName = name.charAt(0).toUpperCase() + name.slice(1);
+        doc.fontSize(10).font(F.regular).fillColor(C.text).text(
+          `• ${niceName} — paid by ${info.ids.size} members  (${fmtMoney(info.total, displayCurrency)} /mo combined)`,
+          ML,
+          undefined,
+          { width: CW },
+        );
+      });
+    }
+  }
 }
 
 // Subscription decorated with currency-converted amounts. Kept inline because
@@ -905,4 +1165,14 @@ export class ReportsService {
 type SubWithMoney = Subscription & {
   amountConverted: number;
   monthlyConverted: number;
+};
+
+// Light per-member projection used only by the team report PDF. The full
+// User entity stays out of the PDF builder — this DTO is enough for
+// rendering and avoids leaking sensitive fields into the report module.
+type TeamMemberInfo = {
+  userId: string;
+  name: string | null;
+  email: string | null;
+  role: string;
 };

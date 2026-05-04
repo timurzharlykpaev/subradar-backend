@@ -10,6 +10,9 @@ import { UsersService } from '../users/users.service';
 import { AuditService } from '../common/audit/audit.service';
 import { OutboxService } from '../billing/outbox/outbox.service';
 import { UserBillingRepository } from '../billing/user-billing.repository';
+import { FxService } from '../fx/fx.service';
+import { AnalysisService } from '../analysis/analysis.service';
+import { REDIS_CLIENT } from '../common/redis.module';
 
 const mockWorkspaceRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn() };
 const mockMemberRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn(), count: jest.fn(), delete: jest.fn() };
@@ -65,6 +68,34 @@ describe('WorkspaceService', () => {
           useValue: {
             read: jest.fn(),
             applyTransition: jest.fn().mockResolvedValue({ applied: true, from: 'active', to: 'free', snapshot: {} }),
+          },
+        },
+        {
+          provide: FxService,
+          useValue: {
+            getRates: jest.fn().mockResolvedValue({ rates: {} }),
+            convert: jest.fn(),
+          },
+        },
+        {
+          provide: AnalysisService,
+          useValue: {
+            getLatest: jest.fn().mockResolvedValue(null),
+            run: jest.fn(),
+          },
+        },
+        {
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            setex: jest.fn().mockResolvedValue('OK'),
+            del: jest.fn().mockResolvedValue(0),
+            scanStream: jest.fn().mockReturnValue({
+              on: (evt: string, cb: any) => {
+                if (evt === 'end') setImmediate(cb);
+                return { on: jest.fn() };
+              },
+            }),
           },
         },
       ],

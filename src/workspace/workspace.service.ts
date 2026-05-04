@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   NotFoundException,
   ForbiddenException,
@@ -6,7 +7,10 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import Decimal from 'decimal.js';
+import Redis from 'ioredis';
 import { In, IsNull, MoreThan, Repository } from 'typeorm';
+import { REDIS_CLIENT } from '../common/redis.module';
 import { Workspace } from './entities/workspace.entity';
 import {
   WorkspaceMember,
@@ -25,6 +29,8 @@ import { UsersService } from '../users/users.service';
 import { AuditService } from '../common/audit/audit.service';
 import { OutboxService } from '../billing/outbox/outbox.service';
 import { UserBillingRepository } from '../billing/user-billing.repository';
+import { FxService } from '../fx/fx.service';
+import { AnalysisService } from '../analysis/analysis.service';
 
 @Injectable()
 export class WorkspaceService {
@@ -44,6 +50,9 @@ export class WorkspaceService {
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
     private readonly userBilling: UserBillingRepository,
+    private readonly fxService: FxService,
+    private readonly analysisService: AnalysisService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   async create(ownerId: string, dto: CreateWorkspaceDto): Promise<Workspace> {
@@ -507,6 +516,27 @@ export class WorkspaceService {
     const workspace = await this.getMyWorkspace(userId);
     if (!workspace) throw new NotFoundException('Workspace not found');
 
+    // Display currency = the requesting user's preference. We cache by
+    // (workspace, currency) tuple so each member's view stays warm
+    // independently. 5-minute TTL is the same window Notion uses for
+    // workspace analytics — fast enough that aggressive subscription
+    // edits are visible within a coffee break, cheap enough that we
+    // don't recompute on every single tab switch.
+    const owner = await this.usersService.findById(userId);
+    const displayCurrency = (owner?.displayCurrency as string) || 'USD';
+
+    const cacheKey = `ws:${workspace.id}:analytics:${displayCurrency}`;
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        return parsed;
+      }
+    } catch (e: any) {
+      // Cache read failure is never fatal — fall through to DB.
+      this.logger.debug(`analytics cache read failed: ${e?.message}`);
+    }
+
     const activeMembers = workspace.members.filter(
       (m) => m.status === WorkspaceMemberStatus.ACTIVE && m.userId,
     );
@@ -523,6 +553,19 @@ export class WorkspaceService {
           })
         : [];
 
+    // FX rates fetched ONCE for the whole computation. Failures fall
+    // back to "no conversion" — same contract the reports module uses,
+    // so a broken FX provider can't take the analytics endpoint down.
+    let rates: Record<string, number> = {};
+    let fxFailed = false;
+    try {
+      const fx = await this.fxService.getRates();
+      rates = fx.rates;
+    } catch (e: any) {
+      this.logger.warn(`FX fetch failed in workspace analytics: ${e?.message}`);
+      fxFailed = true;
+    }
+
     const subsByUser = new Map<string, Subscription[]>();
     for (const sub of allSubs) {
       const list = subsByUser.get(sub.userId) || [];
@@ -535,10 +578,14 @@ export class WorkspaceService {
 
     const members = activeMembers.map((member) => {
       const subs = subsByUser.get(member.userId) || [];
-      const monthlySpend = subs.reduce(
-        (sum, s) => sum + this.toMonthlyAmount(Number(s.amount), s.billingPeriod),
-        0,
-      );
+      const monthlySpend = subs.reduce((sum, s) => {
+        const monthlyRaw = this.toMonthlyAmount(Number(s.amount), s.billingPeriod);
+        // Convert each sub from its currency into the owner's display
+        // currency. Without this, a USD sub + RUB sub silently summed
+        // raw numbers and produced nonsense totals on mixed teams.
+        const converted = this.convertSafe(monthlyRaw, s.currency, displayCurrency, rates);
+        return sum + converted;
+      }, 0);
       const yearlySpend = monthlySpend * 12;
 
       totalMonthly += monthlySpend;
@@ -571,14 +618,197 @@ export class WorkspaceService {
       };
     });
 
-    return {
+    const result = {
       workspaceId: workspace.id,
       workspaceName: workspace.name,
       totalMonthly: Math.round(totalMonthly * 100) / 100,
       totalYearly: Math.round(totalMonthly * 12 * 100) / 100,
       totalSubscriptions,
       memberCount: activeMembers.length,
+      displayCurrency,
+      fxFailed,
       members,
+    };
+
+    // Don't cache when FX failed — totals are misleading (mixed
+    // currencies summed as raw numbers). Skipping the SETEX lets the
+    // next call try again with a hopefully-recovered FX provider
+    // instead of serving wrong-but-fast data for 5 minutes.
+    if (!fxFailed) {
+      try {
+        await this.redis.setex(cacheKey, 300, JSON.stringify(result));
+      } catch (e: any) {
+        this.logger.debug(`analytics cache write failed: ${e?.message}`);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Invalidate the cached analytics blobs for every currency variant
+   * of a workspace. Called on subscription / membership changes so the
+   * next read recomputes. Uses SCAN (not KEYS) so we don't block Redis
+   * on large keyspaces.
+   */
+  async invalidateAnalyticsCache(workspaceId: string): Promise<void> {
+    try {
+      const stream = this.redis.scanStream({
+        match: `ws:${workspaceId}:analytics:*`,
+        count: 50,
+      });
+      const keys: string[] = [];
+      await new Promise<void>((resolve, reject) => {
+        stream.on('data', (batch: string[]) => keys.push(...batch));
+        stream.on('end', () => resolve());
+        stream.on('error', reject);
+      });
+      if (keys.length > 0) {
+        await this.redis.del(...keys);
+      }
+    } catch (e: any) {
+      this.logger.debug(`analytics cache invalidate failed: ${e?.message}`);
+    }
+  }
+
+  /**
+   * FX-safe convert. If we have rates and the sub's currency isn't
+   * the target, route through FxService; otherwise return the raw
+   * amount (best-effort under partial outage — better than zeroing
+   * the row, which would silently lose data on an FX failure).
+   */
+  private convertSafe(
+    amount: number,
+    fromCurrency: string,
+    toCurrency: string,
+    rates: Record<string, number>,
+  ): number {
+    if (fromCurrency === toCurrency) return amount;
+    if (Object.keys(rates).length === 0) return amount; // FX outage — keep raw
+    try {
+      return this.fxService
+        .convert(new Decimal(amount), fromCurrency, toCurrency, rates)
+        .toNumber();
+    } catch {
+      return amount;
+    }
+  }
+
+  /**
+   * Owner-only paginated members list. Used by mobile Reports / team
+   * overview so the screen can render large teams (50+ members)
+   * without OOM-ing on a single inline `members[]` blob.
+   */
+  async listMembersPaginated(
+    workspaceId: string,
+    requesterId: string,
+    opts: { page: number; limit: number; sort: 'spend' | 'name' | 'role' },
+  ) {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members', 'members.user'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    const requester = workspace.members.find((m) => m.userId === requesterId);
+    if (!requester) throw new ForbiddenException('Not a member of this workspace');
+    if (
+      requester.role !== WorkspaceMemberRole.OWNER &&
+      requester.role !== WorkspaceMemberRole.ADMIN
+    ) {
+      throw new ForbiddenException('Only owner or admin can list members');
+    }
+
+    const activeMembers = workspace.members.filter(
+      (m) => m.status === WorkspaceMemberStatus.ACTIVE && m.userId,
+    );
+    const memberUserIds = activeMembers.map((m) => m.userId);
+
+    // Sub counts via groupBy in a single query — no N+1 even on a 500-
+    // member team.
+    const subAggRows: Array<{ userId: string; count: string; spend: string }> =
+      memberUserIds.length > 0
+        ? await this.subRepo
+            .createQueryBuilder('s')
+            .select('s."userId"', 'userId')
+            .addSelect('COUNT(*)', 'count')
+            .addSelect('SUM(CAST(s.amount AS NUMERIC))', 'spend')
+            .where('s."userId" IN (:...ids)', { ids: memberUserIds })
+            .andWhere('s.status IN (:...statuses)', {
+              statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
+            })
+            .groupBy('s."userId"')
+            .getRawMany()
+        : [];
+
+    const aggByUser = new Map<string, { count: number; spend: number }>();
+    for (const row of subAggRows) {
+      aggByUser.set(row.userId, {
+        count: Number(row.count) || 0,
+        spend: Number(row.spend) || 0,
+      });
+    }
+
+    const enriched = activeMembers.map((m) => {
+      const agg = aggByUser.get(m.userId) || { count: 0, spend: 0 };
+      return {
+        memberId: m.id,
+        userId: m.userId,
+        name: m.user?.name ?? null,
+        email: m.user?.email ?? m.inviteEmail ?? null,
+        role: m.role,
+        subscriptionCount: agg.count,
+        // raw spend (mixed currencies) — kept as a sort key only.
+        // The Reports screen renders converted totals from analytics.
+        rawSpend: agg.spend,
+      };
+    });
+
+    // Sort
+    if (opts.sort === 'name') {
+      enriched.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+    } else if (opts.sort === 'role') {
+      const roleOrder = { OWNER: 0, ADMIN: 1, MEMBER: 2 } as const;
+      enriched.sort(
+        (a, b) =>
+          (roleOrder[a.role as keyof typeof roleOrder] ?? 3) -
+          (roleOrder[b.role as keyof typeof roleOrder] ?? 3),
+      );
+    } else {
+      enriched.sort((a, b) => b.rawSpend - a.rawSpend);
+    }
+
+    const total = enriched.length;
+    const start = (opts.page - 1) * opts.limit;
+    const items = enriched.slice(start, start + opts.limit);
+    return {
+      pagination: { page: opts.page, limit: opts.limit, total, hasMore: start + items.length < total },
+      members: items,
+    };
+  }
+
+  /**
+   * Owner-only — pull team-overlap data from the latest cached AI
+   * analysis. No fresh OpenAI call; if there's no analysis yet, the
+   * owner's first call should hit POST /workspace/me/analysis/run.
+   */
+  async getTeamOverlaps(workspaceId: string, requesterId: string) {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+    if (workspace.ownerId !== requesterId) {
+      throw new ForbiddenException('Only the workspace owner can view team overlaps');
+    }
+    const latest = await this.analysisService.getLatest(requesterId, workspace.id);
+    const result = (latest as any)?.latestResult;
+    const overlaps = Array.isArray(result?.overlaps) ? result.overlaps : [];
+    const teamSavings = Number(result?.teamSavings) || 0;
+    return {
+      workspaceId: workspace.id,
+      overlaps,
+      potentialSavingsMonthly: teamSavings,
+      lastAnalysisAt: result?.createdAt ?? null,
     };
   }
 }

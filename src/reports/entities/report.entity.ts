@@ -34,6 +34,15 @@ export class Report {
   @JoinColumn({ name: 'userId' })
   user: User;
 
+  /**
+   * When set, this is a team report scoped to a workspace — the row's
+   * `userId` becomes the requesting owner (for billing/auth) and the
+   * PDF aggregates data across every active workspace member.
+   * Null for personal reports (the long-standing default).
+   */
+  @Column({ type: 'uuid', nullable: true })
+  workspaceId: string | null;
+
   @Column({ type: 'enum', enum: ReportType })
   type: ReportType;
 

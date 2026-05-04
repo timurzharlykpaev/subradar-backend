@@ -18,5 +18,8 @@ import { FxModule } from '../fx/fx.module';
   ],
   providers: [ReportsService, ReportsProcessor],
   controllers: [ReportsController],
+  // Exported so WorkspaceController can call generateTeam() without
+  // a circular dep through a separate facade.
+  exports: [ReportsService],
 })
 export class ReportsModule {}
