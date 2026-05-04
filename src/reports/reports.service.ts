@@ -16,7 +16,7 @@ import { REDIS_CLIENT } from '../common/redis.module';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const PDFDocument = require('pdfkit');
 import { Report, ReportType, ReportStatus } from './entities/report.entity';
-import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
 import { User } from '../users/entities/user.entity';
 import { FxService } from '../fx/fx.service';
@@ -968,7 +968,13 @@ export class ReportsService {
       let amountConverted = 0;
       try {
         if (Object.keys(rates).length === 0) {
-          amountConverted = s.currency === targetCurrency ? raw.toNumber() : 0;
+          // No FX rates available — fall back to the raw amount instead of
+          // dropping the row to 0. Workspace analytics already does this
+          // (convertSafe), and on FX outage a too-low PDF total looked like
+          // money was missing rather than "we couldn't convert"; the
+          // fxFailed flag is still set so callers can surface the warning.
+          amountConverted = raw.toNumber();
+          if (s.currency !== targetCurrency) fxFailed = true;
         } else {
           amountConverted = this.fxService
             .convert(raw, s.currency, targetCurrency, rates)
@@ -976,7 +982,9 @@ export class ReportsService {
         }
       } catch (e) {
         this.logger.debug(`FX convert failed ${s.currency}→${targetCurrency}: ${(e as Error).message}`);
-        amountConverted = s.currency === targetCurrency ? raw.toNumber() : 0;
+        // Same fallback rationale — keep the raw number visible so the
+        // total stays in the same ballpark as the analytics view.
+        amountConverted = raw.toNumber();
         fxFailed = true;
       }
       const monthlyConverted = this.toMonthly(amountConverted, s.billingPeriod);
@@ -1076,8 +1084,17 @@ export class ReportsService {
     }
     const userIds = memberRows.map((r) => r.userId);
 
+    // Mirror the workspace-analytics filter (status IN ACTIVE/TRIAL) so the
+    // PDF Team Overview total agrees with what the user sees on the
+    // workspace screen. Without the status filter the query also pulled
+    // CANCELLED / PAUSED rows whose date window happened to overlap the
+    // report period, inflating (or sometimes deflating) the PDF total
+    // versus the live "Team Spend" card — even on single-member teams.
     const subs = await this.subRepo.createQueryBuilder('s')
       .where('s.userId IN (:...userIds)', { userIds })
+      .andWhere('s.status IN (:...statuses)', {
+        statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
+      })
       .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', { to })
       .andWhere('(s.cancelledAt IS NULL OR s.cancelledAt >= :from)', { from })
       .orderBy('s.amount', 'DESC')
