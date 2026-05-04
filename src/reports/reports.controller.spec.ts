@@ -44,20 +44,26 @@ describe('ReportsController', () => {
   it('generate → calls service.generate with from/to/type', async () => {
     const dto = { from: '2024-01-01', to: '2024-01-31', type: ReportType.SUMMARY } as any;
     const result = await controller.generate(req, dto);
-    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-01-01', '2024-01-31', ReportType.SUMMARY, undefined);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-01-01', '2024-01-31', ReportType.SUMMARY, undefined, undefined);
     expect(result).toHaveProperty('id');
   });
 
   it('generate → uses startDate/endDate aliases', async () => {
     const dto = { startDate: '2024-02-01', endDate: '2024-02-29', type: ReportType.DETAILED } as any;
     await controller.generate(req, dto);
-    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-02-01', '2024-02-29', ReportType.DETAILED, undefined);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-02-01', '2024-02-29', ReportType.DETAILED, undefined, undefined);
   });
 
   it('generate → falls back to empty strings when no dates', async () => {
     const dto = { type: ReportType.SUMMARY } as any;
     await controller.generate(req, dto);
-    expect(mockService.generate).toHaveBeenCalledWith('user-1', '', '', ReportType.SUMMARY, undefined);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '', '', ReportType.SUMMARY, undefined, undefined);
+  });
+
+  it('generate → forwards displayCurrency override', async () => {
+    const dto = { from: '2024-01-01', to: '2024-01-31', type: ReportType.SUMMARY, displayCurrency: 'KZT' } as any;
+    await controller.generate(req, dto);
+    expect(mockService.generate).toHaveBeenCalledWith('user-1', '2024-01-01', '2024-01-31', ReportType.SUMMARY, undefined, 'KZT');
   });
 
   it('findAll → returns array of reports', async () => {
