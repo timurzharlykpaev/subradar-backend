@@ -15,12 +15,10 @@ import { AnalysisModule } from '../analysis/analysis.module';
 import { BillingModule } from '../billing/billing.module';
 import { FxModule } from '../fx/fx.module';
 import { CatalogPlan } from '../catalog/entities/catalog-plan.entity';
-import { KnownBillingSender } from './email-import/known-billing-sender.entity';
-import { RequireProGuard } from '../auth/guards/require-pro.guard';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Subscription, User, CatalogPlan, KnownBillingSender]),
+    TypeOrmModule.forFeature([Subscription, User, CatalogPlan]),
     ReceiptsModule,
     UsersModule,
     NotificationsModule,
@@ -29,7 +27,7 @@ import { RequireProGuard } from '../auth/guards/require-pro.guard';
     forwardRef(() => AnalysisModule),
     forwardRef(() => BillingModule),
   ],
-  providers: [SubscriptionsService, TrialCheckerCron, SubscriptionLimitGuard, RequireProGuard],
+  providers: [SubscriptionsService, TrialCheckerCron, SubscriptionLimitGuard],
   controllers: [SubscriptionsController, EmailImportController],
   exports: [SubscriptionsService],
 })
