@@ -14,6 +14,7 @@ import { Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { User } from '../users/entities/user.entity';
 import { AiService, EmailCandidate } from '../ai/ai.service';
+import { MarketDataService } from '../analysis/market-data.service';
 import { AuditService } from '../common/audit/audit.service';
 import { REDIS_CLIENT } from '../common/redis.module';
 import { maskEmail } from '../common/utils/pii';
@@ -55,9 +56,82 @@ export class GmailScanService {
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly cfg: ConfigService,
     private readonly ai: AiService,
+    private readonly market: MarketDataService,
     private readonly audit: AuditService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  /**
+   * Enrich each AI-extracted candidate with catalog data: brand-correct
+   * category, icon URL, service homepage, cancel URL, and the full plan
+   * list so the user can switch tier in the bulk-confirm UI.
+   *
+   * The AI prompt is told NOT to guess prices that aren't printed in
+   * the email; instead it returns `amount: null` (coerced to 0 here)
+   * and we backfill with the cheapest catalog plan. Prices that DID
+   * appear in the email take precedence — that's the actual charge the
+   * user will see on their card. We never overwrite an
+   * `amountFromEmail = true` value with a catalog default.
+   *
+   * `allowWebSearch = false` keeps catalog lookups DB-only — we don't
+   * burn an OpenAI call here because (a) the catalog is large enough
+   * that most popular services are already cached, and (b) the user's
+   * scan latency is more important than catalog completeness.
+   */
+  private async enrichWithCatalog(
+    candidates: EmailCandidate[],
+  ): Promise<EmailCandidate[]> {
+    if (candidates.length === 0) return candidates;
+    return Promise.all(
+      candidates.map(async (c) => {
+        try {
+          const normalized = this.market.normalizeServiceName(c.name);
+          const entry = await this.market.getMarketData(normalized, false);
+          if (!entry) return c;
+
+          const plans = (entry.plans ?? []).map((p: any) => ({
+            name: String(p.name ?? ''),
+            amount: Number(p.priceMonthly ?? p.amount ?? 0),
+            currency: String(p.currency ?? c.currency ?? 'USD').toUpperCase(),
+            billingPeriod: 'MONTHLY' as const,
+          }));
+
+          // Pick the cheapest plan as the default fallback. The user can
+          // switch in the review UI; cheapest is the safest guess (most
+          // people start on the entry-tier subscription).
+          const defaultPlan = plans
+            .filter((p) => p.amount > 0)
+            .sort((a, b) => a.amount - b.amount)[0];
+
+          const enriched: EmailCandidate = {
+            ...c,
+            // Prefer email-extracted amount (real charge). Fall back to
+            // catalog default only when the email had no number.
+            amount: c.amountFromEmail && c.amount > 0
+              ? c.amount
+              : defaultPlan?.amount ?? c.amount,
+            currency: c.amountFromEmail
+              ? c.currency
+              : defaultPlan?.currency ?? c.currency,
+            // Catalog category is brand-curated; trust over AI guess
+            // unless the catalog returns a meaningless 'OTHER'.
+            category:
+              entry.category && entry.category !== 'OTHER'
+                ? entry.category
+                : c.category,
+            iconUrl: entry.logoUrl ?? undefined,
+            availablePlans: plans.length > 0 ? plans : undefined,
+          };
+          return enriched;
+        } catch (err: any) {
+          this.logger.warn(
+            `enrichWithCatalog: ${c.name}: ${err?.message ?? err}`,
+          );
+          return c;
+        }
+      }),
+    );
+  }
 
   private requireConfig(): { clientId: string; clientSecret: string } {
     const clientId =
@@ -338,7 +412,8 @@ export class GmailScanService {
         }
       }
 
-      const candidates = await this.ai.parseBulkEmails(messages, locale);
+      const rawCandidates = await this.ai.parseBulkEmails(messages, locale);
+      const candidates = await this.enrichWithCatalog(rawCandidates);
 
       const durationMs = Date.now() - startedAt;
       await this.audit.log({
@@ -349,6 +424,8 @@ export class GmailScanService {
         metadata: {
           scanned: messages.length,
           candidates: candidates.length,
+          enriched: candidates.filter((c) => c.iconUrl || c.availablePlans)
+            .length,
           durationMs,
         },
       });

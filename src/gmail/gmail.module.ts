@@ -5,6 +5,7 @@ import { GmailService } from './gmail.service';
 import { GmailScanService } from './gmail-scan.service';
 import { GmailController } from './gmail.controller';
 import { AiModule } from '../ai/ai.module';
+import { AnalysisModule } from '../analysis/analysis.module';
 import { BillingModule } from '../billing/billing.module';
 import { UsersModule } from '../users/users.module';
 
@@ -12,6 +13,7 @@ import { UsersModule } from '../users/users.module';
   imports: [
     TypeOrmModule.forFeature([User]),
     AiModule,
+    AnalysisModule,
     forwardRef(() => BillingModule),
     UsersModule,
   ],

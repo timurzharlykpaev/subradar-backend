@@ -793,15 +793,16 @@ For EACH input message decide:
 
 Then extract:
 - sourceMessageId (echo input id)
-- name (canonical service: "Netflix", "ChatGPT Plus", not "no-reply@netflix.com")
-- amount (number; if currency printed without amount → omit)
+- name: canonical brand-only name. Strip tier suffixes ("Netflix" not "Netflix Premium Membership"; "ChatGPT" not "ChatGPT Plus Subscription"). NEVER use sender email as name ("no-reply@netflix.com" → "Netflix"). Capitalise like the brand does.
+- amount: number IF the email explicitly prints a number (e.g. "$15.49 charged", "billed 1500 ₸"). If the email mentions only currency without a number, or no money figure at all → use null. DO NOT guess from training data — the post-processor will fill defaults from a catalog.
+- amountFromEmail: TRUE only when amount was extracted from explicit text in the email; FALSE if you guessed.
 - currency (ISO 4217: USD, EUR, RUB, KZT, GBP, JPY, ...)
-- billingPeriod (MONTHLY|YEARLY|WEEKLY|QUARTERLY|LIFETIME|ONE_TIME)
-- category (STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|OTHER)
+- billingPeriod: MONTHLY|YEARLY|WEEKLY|QUARTERLY|LIFETIME|ONE_TIME. Heuristics: "annual"/"yearly"/"per year"/12-month price → YEARLY. "monthly"/"per month"/single small charge → MONTHLY. If ambiguous → MONTHLY (most common).
+- category (STREAMING|AI_SERVICES|INFRASTRUCTURE|PRODUCTIVITY|MUSIC|GAMING|NEWS|HEALTH|OTHER). The post-processor overrides with catalog category when available, so a guess is fine here.
 - status (ACTIVE or TRIAL)
 - nextPaymentDate (ISO date if explicit in receipt)
 - trialEndDate (ISO date if trial)
-- confidence (0..1, honest self-assessment)
+- confidence (0..1, honest self-assessment based on signal clarity, not on data completeness — missing amount is fine, post-processor handles it)
 
 Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown.
 
@@ -901,6 +902,24 @@ export interface EmailCandidate {
   isCancellation: boolean;
   isTrial: boolean;
   aggregatedFrom: string[];
+  // ── Catalog-enriched fields (set by GmailScanService after AI parse) ─────
+  // amountFromEmail = true means `amount` was lifted directly from the
+  // receipt body (most accurate); false means it was filled in from the
+  // service catalog as a default. UI uses this to decide whether to show
+  // a "verify amount" hint to the user before saving.
+  amountFromEmail?: boolean;
+  iconUrl?: string;
+  serviceUrl?: string;
+  cancelUrl?: string;
+  // Available plans from the catalog so the user can switch tier in the
+  // bulk-confirm UI (e.g. "ChatGPT Plus" → "ChatGPT Pro") without re-
+  // looking-up.
+  availablePlans?: Array<{
+    name: string;
+    amount: number;
+    currency: string;
+    billingPeriod: string;
+  }>;
 }
 
 const VALID_PERIODS = new Set([
@@ -947,8 +966,21 @@ function validateAndCoerceCandidate(item: any): EmailCandidate | null {
     .slice(0, 100);
   if (!rawName || /[<>{}]/.test(rawName)) return null;
 
-  const amount = Number(item.amount);
-  if (!Number.isFinite(amount) || amount < 0 || amount > 100_000) return null;
+  // Amount is optional now: when the email doesn't print an explicit
+  // figure, the AI returns null and the catalog-enrichment pass fills
+  // a default plan price. Reject only nonsensical numbers (negative,
+  // huge), not absence.
+  let amount = 0;
+  let amountFromEmail = false;
+  if (item.amount != null) {
+    const parsed = Number(item.amount);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100_000) {
+      amount = parsed;
+      amountFromEmail = parsed > 0 && item.amountFromEmail !== false;
+    } else if (parsed < 0 || parsed > 100_000) {
+      return null;
+    }
+  }
 
   const currency = String(item.currency ?? 'USD').toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) return null;
@@ -987,6 +1019,7 @@ function validateAndCoerceCandidate(item: any): EmailCandidate | null {
     isCancellation: !!item.isCancellation,
     isTrial: !!item.isTrial,
     aggregatedFrom: [sourceMessageId],
+    amountFromEmail,
   };
 }
 
