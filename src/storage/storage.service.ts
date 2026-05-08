@@ -48,6 +48,7 @@ export class StorageService {
         Key: key,
         Body: buffer,
         ContentType: mimetype,
+        ServerSideEncryption: 'AES256',
         ACL: isPublic ? 'public-read' : 'private',
       }),
     );

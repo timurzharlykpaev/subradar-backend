@@ -1,3 +1,23 @@
+// Fail-closed in production: refuse to boot without secrets that materially
+// affect security. CASA / ASVS V2.10 forbids predictable default values for
+// credential-bearing config. We still allow dev defaults so local startup
+// works without a fully provisioned .env, but production must be explicit.
+function requireSecret(...names: string[]): string {
+  for (const name of names) {
+    const v = process.env[name];
+    if (v && v.length > 0) return v;
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      `Missing required secret: one of [${names.join(', ')}] must be set in production`,
+    );
+  }
+  // Dev-only sentinel — DIFFERENT for access vs refresh so a leaked dev token
+  // can never be replayed against a refresh code path. NEVER ship a build with
+  // these in NODE_ENV=production.
+  return `dev-only-${names[0].toLowerCase()}-do-not-use-in-prod`;
+}
+
 export default () => ({
   port: parseInt(process.env.PORT || '3000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -20,9 +40,8 @@ export default () => ({
   },
 
   jwt: {
-    secret: process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'jwt-secret-change-me',
-    refreshSecret:
-      process.env.JWT_REFRESH_SECRET || 'jwt-refresh-secret-change-me',
+    secret: requireSecret('JWT_ACCESS_SECRET', 'JWT_SECRET'),
+    refreshSecret: requireSecret('JWT_REFRESH_SECRET'),
     expiresIn: process.env.JWT_EXPIRES_IN || '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
   },

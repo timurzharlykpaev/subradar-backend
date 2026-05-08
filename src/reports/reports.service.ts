@@ -16,7 +16,10 @@ import { REDIS_CLIENT } from '../common/redis.module';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const PDFDocument = require('pdfkit');
 import { Report, ReportType, ReportStatus } from './entities/report.entity';
-import { Subscription, SubscriptionStatus } from '../subscriptions/entities/subscription.entity';
+import {
+  Subscription,
+  SubscriptionStatus,
+} from '../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
 import { User } from '../users/entities/user.entity';
 import { FxService } from '../fx/fx.service';
@@ -29,7 +32,9 @@ const PDF_TTL_SECONDS = 3600;
  * Reject anything that isn't a clean ISO-4217 3-letter code so a typo in
  * the request can't poison the FX layer or PDF labels.
  */
-function normalizeCurrencyOverride(input: string | null | undefined): string | null {
+function normalizeCurrencyOverride(
+  input: string | null | undefined,
+): string | null {
   if (!input) return null;
   const upper = input.trim().toUpperCase();
   return /^[A-Z]{3}$/.test(upper) ? upper : null;
@@ -53,10 +58,22 @@ const C = {
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
-  STREAMING: '#E50914', MUSIC: '#1DB954', AI_SERVICES: '#10A37F', PRODUCTIVITY: '#3B82F6',
-  GAMING: '#8B5CF6', DESIGN: '#A259FF', EDUCATION: '#F59E0B', FINANCE: '#059669',
-  INFRASTRUCTURE: '#0071E3', SECURITY: '#4687FF', HEALTH: '#EF4444', SPORT: '#22C55E',
-  DEVELOPER: '#24292E', NEWS: '#1A1A1A', BUSINESS: '#6366F1', OTHER: '#9CA3AF',
+  STREAMING: '#E50914',
+  MUSIC: '#1DB954',
+  AI_SERVICES: '#10A37F',
+  PRODUCTIVITY: '#3B82F6',
+  GAMING: '#8B5CF6',
+  DESIGN: '#A259FF',
+  EDUCATION: '#F59E0B',
+  FINANCE: '#059669',
+  INFRASTRUCTURE: '#0071E3',
+  SECURITY: '#4687FF',
+  HEALTH: '#EF4444',
+  SPORT: '#22C55E',
+  DEVELOPER: '#24292E',
+  NEWS: '#1A1A1A',
+  BUSINESS: '#6366F1',
+  OTHER: '#9CA3AF',
 };
 
 // Page geometry (A4 portrait)
@@ -89,8 +106,10 @@ export class ReportsService {
 
   constructor(
     @InjectRepository(Report) private readonly reportRepo: Repository<Report>,
-    @InjectRepository(Subscription) private readonly subRepo: Repository<Subscription>,
-    @InjectRepository(PaymentCard) private readonly cardRepo: Repository<PaymentCard>,
+    @InjectRepository(Subscription)
+    private readonly subRepo: Repository<Subscription>,
+    @InjectRepository(PaymentCard)
+    private readonly cardRepo: Repository<PaymentCard>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     @InjectQueue('reports') private readonly reportQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -113,12 +132,31 @@ export class ReportsService {
     if (user && user.plan === 'free') {
       const now = new Date();
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-      const count = await this.reportRepo.count({ where: { userId, createdAt: Between(monthStart, monthEnd) } });
-      if (count >= 1) throw new ForbiddenException('Free plan allows 1 report per month. Upgrade to Pro for unlimited reports.');
+      const monthEnd = new Date(
+        now.getFullYear(),
+        now.getMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+        999,
+      );
+      const count = await this.reportRepo.count({
+        where: { userId, createdAt: Between(monthStart, monthEnd) },
+      });
+      if (count >= 1)
+        throw new ForbiddenException(
+          'Free plan allows 1 report per month. Upgrade to Pro for unlimited reports.',
+        );
     }
 
-    const report = this.reportRepo.create({ userId, from, to, type, status: ReportStatus.PENDING });
+    const report = this.reportRepo.create({
+      userId,
+      from,
+      to,
+      type,
+      status: ReportStatus.PENDING,
+    });
     const saved = await this.reportRepo.save(report);
     await this.reportQueue.add('generate-pdf', {
       reportId: saved.id,
@@ -188,12 +226,18 @@ export class ReportsService {
   }
 
   async findAll(userId: string): Promise<Report[]> {
-    return this.reportRepo.find({ where: { userId }, order: { createdAt: 'DESC' } });
+    return this.reportRepo.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+    });
   }
 
   async downloadPdf(userId: string, id: string): Promise<Buffer> {
     const report = await this.findOne(userId, id);
-    if (report.status !== ReportStatus.READY) throw new NotFoundException(`Report is not ready yet (status: ${report.status})`);
+    if (report.status !== ReportStatus.READY)
+      throw new NotFoundException(
+        `Report is not ready yet (status: ${report.status})`,
+      );
     const base64 = await this.redis.get(`report:pdf:${id}`);
     if (!base64) throw new NotFoundException('PDF expired. Please regenerate.');
     return Buffer.from(base64, 'base64');
@@ -209,15 +253,31 @@ export class ReportsService {
     locale = 'en',
     displayCurrencyOverride?: string,
   ): Promise<void> {
-    await this.reportRepo.update(reportId, { status: ReportStatus.GENERATING, error: null });
+    await this.reportRepo.update(reportId, {
+      status: ReportStatus.GENERATING,
+      error: null,
+    });
     try {
-      const buffer = await this.buildPdf(userId, reportId, locale, displayCurrencyOverride);
-      await this.redis.set(`report:pdf:${reportId}`, buffer.toString('base64'), 'EX', PDF_TTL_SECONDS);
+      const buffer = await this.buildPdf(
+        userId,
+        reportId,
+        locale,
+        displayCurrencyOverride,
+      );
+      await this.redis.set(
+        `report:pdf:${reportId}`,
+        buffer.toString('base64'),
+        'EX',
+        PDF_TTL_SECONDS,
+      );
       await this.reportRepo.update(reportId, { status: ReportStatus.READY });
       this.logger.log(`PDF ready: report ${reportId}`);
     } catch (error) {
       this.logger.error(`PDF failed: report ${reportId}: ${error.message}`);
-      await this.reportRepo.update(reportId, { status: ReportStatus.FAILED, error: error.message?.substring(0, 500) });
+      await this.reportRepo.update(reportId, {
+        status: ReportStatus.FAILED,
+        error: error.message?.substring(0, 500),
+      });
       throw error;
     }
   }
@@ -242,7 +302,11 @@ export class ReportsService {
     let teamMembers: TeamMemberInfo[] = [];
     let cards: PaymentCard[] = [];
     if (report.workspaceId) {
-      const memberData = await this.loadTeamScope(report.workspaceId, report.from, report.to);
+      const memberData = await this.loadTeamScope(
+        report.workspaceId,
+        report.from,
+        report.to,
+      );
       // Hard caps to keep PDFKit memory bounded. Beyond these the worker
       // can OOM at 512MB and the user gets a "FAILED" status with no
       // useful error. 50 members × 100 subs = ~5K rows, comfortable for
@@ -262,10 +326,15 @@ export class ReportsService {
         );
       }
     } else {
-      subsRaw = await this.subRepo.createQueryBuilder('s')
+      subsRaw = await this.subRepo
+        .createQueryBuilder('s')
         .where('s.userId = :userId', { userId })
-        .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', { to: report.to })
-        .andWhere('(s.cancelledAt IS NULL OR s.cancelledAt >= :from)', { from: report.from })
+        .andWhere('(s.startDate IS NULL OR s.startDate <= :to)', {
+          to: report.to,
+        })
+        .andWhere('(s.cancelledAt IS NULL OR s.cancelledAt >= :from)', {
+          from: report.from,
+        })
         .orderBy('s.amount', 'DESC')
         .getMany();
       cards = await this.cardRepo.find({ where: { userId } });
@@ -274,10 +343,15 @@ export class ReportsService {
 
     // Pre-fetch icons for top 30 (used in detailed/tax tables).
     const iconMap = new Map<string, Buffer>();
-    await Promise.all(subsRaw.filter((s) => s.iconUrl).slice(0, 30).map(async (s) => {
-      const buf = await this.fetchIcon(s.iconUrl);
-      if (buf) iconMap.set(s.id, buf);
-    }));
+    await Promise.all(
+      subsRaw
+        .filter((s) => s.iconUrl)
+        .slice(0, 30)
+        .map(async (s) => {
+          const buf = await this.fetchIcon(s.iconUrl);
+          if (buf) iconMap.set(s.id, buf);
+        }),
+    );
 
     // Display currency priority: explicit override from the request (e.g.
     // mobile passes the live `?displayCurrency=KZT` even before the user's
@@ -338,11 +412,20 @@ export class ReportsService {
 
       // ── Meta strip ─────────────────────────────────────────
       doc.fontSize(9).font(F.regular).fillColor(C.textMuted);
-      doc.text(`${i18n.period}: ${this.fmtDate(report.from, locale)} — ${this.fmtDate(report.to, locale)}`, ML, doc.y);
-      doc.text(`${i18n.generated}: ${this.fmtDate(new Date().toISOString(), locale)}`, ML, doc.y - 11, {
-        align: 'right',
-        width: CW,
-      });
+      doc.text(
+        `${i18n.period}: ${this.fmtDate(report.from, locale)} — ${this.fmtDate(report.to, locale)}`,
+        ML,
+        doc.y,
+      );
+      doc.text(
+        `${i18n.generated}: ${this.fmtDate(new Date().toISOString(), locale)}`,
+        ML,
+        doc.y - 11,
+        {
+          align: 'right',
+          width: CW,
+        },
+      );
       if (report.workspaceId) {
         // Surface team scope on the meta strip so the reader knows this
         // PDF aggregates across members, not just the owner's own subs.
@@ -351,8 +434,7 @@ export class ReportsService {
         doc.text(`${i18n.account}: ${user.email}`, ML);
       }
       if (fxFailed) {
-        doc.fillColor(C.orange).text(
-          `⚠ ${i18n.fx_partial_failure}`, ML);
+        doc.fillColor(C.orange).text(`⚠ ${i18n.fx_partial_failure}`, ML);
         doc.fillColor(C.textMuted);
       }
       doc.moveDown(1);
@@ -372,9 +454,27 @@ export class ReportsService {
       if (report.type === ReportType.SUMMARY) {
         this.pdfSummary(doc, F, i18n, subs, displayCurrency, locale);
       } else if (report.type === ReportType.DETAILED) {
-        this.pdfDetailed(doc, F, i18n, subs, cardMap, iconMap, displayCurrency, locale);
+        this.pdfDetailed(
+          doc,
+          F,
+          i18n,
+          subs,
+          cardMap,
+          iconMap,
+          displayCurrency,
+          locale,
+        );
       } else if (report.type === ReportType.TAX) {
-        this.pdfTax(doc, F, i18n, subs, cardMap, iconMap, displayCurrency, locale);
+        this.pdfTax(
+          doc,
+          F,
+          i18n,
+          subs,
+          cardMap,
+          iconMap,
+          displayCurrency,
+          locale,
+        );
       } else {
         this.pdfSummary(doc, F, i18n, subs, displayCurrency, locale);
       }
@@ -390,17 +490,37 @@ export class ReportsService {
   // Header / footer
   // ════════════════════════════════════════════════════════════
 
-  private drawHeader(doc: any, F: { regular: string; bold: string }, i18n: ReportI18n, report: Report, user: User | null) {
-    const reportTitle = (i18n as any)[`${report.type.toLowerCase()}_report`] ?? i18n.summary_report;
+  private drawHeader(
+    doc: any,
+    F: { regular: string; bold: string },
+    i18n: ReportI18n,
+    report: Report,
+    user: User | null,
+  ) {
+    const reportTitle =
+      (i18n as any)[`${report.type.toLowerCase()}_report`] ??
+      i18n.summary_report;
     doc.rect(0, 0, PW, 90).fill(C.headerBg);
     // PDFKit fillColor() ignores `rgba(...)` strings — we have to call
     // fillColor with an opacity argument to get translucency. Using hex
     // strings here keeps the visual hierarchy we wanted (faded "AI" suffix,
     // semi-transparent metadata) without falling back to opaque white.
-    doc.fontSize(24).font(F.bold).fillColor(C.white).text('SubRadar', ML, 22, { continued: true });
+    doc
+      .fontSize(24)
+      .font(F.bold)
+      .fillColor(C.white)
+      .text('SubRadar', ML, 22, { continued: true });
     doc.fontSize(24).fillColor(C.white, 0.5).text(' AI');
-    doc.fontSize(12).font(F.regular).fillColor(C.white, 0.9).text(reportTitle, ML, 52);
-    if (user) doc.fontSize(9).fillColor(C.white, 0.7).text(user.name || user.email, ML, 70, { align: 'right', width: CW });
+    doc
+      .fontSize(12)
+      .font(F.regular)
+      .fillColor(C.white, 0.9)
+      .text(reportTitle, ML, 52);
+    if (user)
+      doc
+        .fontSize(9)
+        .fillColor(C.white, 0.7)
+        .text(user.name || user.email, ML, 70, { align: 'right', width: CW });
     doc.fillColor(C.text);
     doc.fillOpacity(1);
     doc.y = 105;
@@ -411,7 +531,11 @@ export class ReportsService {
    * page. Must be called AFTER all content is laid out — that's when
    * `bufferedPageRange()` knows the final page count.
    */
-  private drawPaginationFooter(doc: any, F: { regular: string; bold: string }, i18n: ReportI18n) {
+  private drawPaginationFooter(
+    doc: any,
+    F: { regular: string; bold: string },
+    i18n: ReportI18n,
+  ) {
     const range = doc.bufferedPageRange();
     const total = range.count;
     for (let i = 0; i < total; i++) {
@@ -445,20 +569,43 @@ export class ReportsService {
     cur: string,
     locale: string,
   ) {
-    const active = subs.filter((s) => s.status === 'ACTIVE' || s.status === 'TRIAL');
+    const active = subs.filter(
+      (s) => s.status === 'ACTIVE' || s.status === 'TRIAL',
+    );
     const totalMonthly = subs.reduce((s, sub) => s + sub.monthlyConverted, 0);
     const yearly = totalMonthly * 12;
 
     // ── Overview hero box ─────────────────
     const boxTop = doc.y;
-    doc.rect(ML, boxTop, CW, 70).lineWidth(1).strokeColor(C.border).fillAndStroke(C.rowEven, C.border);
-    doc.fontSize(11).font(F.bold).fillColor(C.text).text(i18n.overview, ML + 14, boxTop + 8);
-    doc.fontSize(24).font(F.bold).fillColor(C.primary).text(fmtMoney(totalMonthly, cur), ML + 14, boxTop + 22);
-    doc.fontSize(10).font(F.regular).fillColor(C.textLight).text(i18n.per_month, ML + 14, boxTop + 52);
-    doc.fontSize(10).fillColor(C.textMuted).text(
-      `${active.length} ${i18n.active_subs}  |  ${fmtMoneyCompact(yearly, cur)} ${i18n.per_year}`,
-      ML + 14, boxTop + 52, { align: 'right', width: CW - 28 },
-    );
+    doc
+      .rect(ML, boxTop, CW, 70)
+      .lineWidth(1)
+      .strokeColor(C.border)
+      .fillAndStroke(C.rowEven, C.border);
+    doc
+      .fontSize(11)
+      .font(F.bold)
+      .fillColor(C.text)
+      .text(i18n.overview, ML + 14, boxTop + 8);
+    doc
+      .fontSize(24)
+      .font(F.bold)
+      .fillColor(C.primary)
+      .text(fmtMoney(totalMonthly, cur), ML + 14, boxTop + 22);
+    doc
+      .fontSize(10)
+      .font(F.regular)
+      .fillColor(C.textLight)
+      .text(i18n.per_month, ML + 14, boxTop + 52);
+    doc
+      .fontSize(10)
+      .fillColor(C.textMuted)
+      .text(
+        `${active.length} ${i18n.active_subs}  |  ${fmtMoneyCompact(yearly, cur)} ${i18n.per_year}`,
+        ML + 14,
+        boxTop + 52,
+        { align: 'right', width: CW - 28 },
+      );
     doc.y = boxTop + 80;
 
     // ── Insights ──────────────────────────
@@ -473,7 +620,9 @@ export class ReportsService {
       byCat[s.category].count++;
       byCat[s.category].amount += s.monthlyConverted;
     });
-    const catSorted = Object.entries(byCat).sort((a, b) => b[1].amount - a[1].amount);
+    const catSorted = Object.entries(byCat).sort(
+      (a, b) => b[1].amount - a[1].amount,
+    );
     const maxAmt = catSorted[0]?.[1].amount || 1;
 
     if (catSorted.length > 0) {
@@ -486,16 +635,28 @@ export class ReportsService {
 
       catSorted.slice(0, 8).forEach(([cat, data], i) => {
         const y = chartTop + i * (barH + barGap);
-        if (this.needsPage(doc, y + barH)) { doc.addPage(); }
+        if (this.needsPage(doc, y + barH)) {
+          doc.addPage();
+        }
         const barW = Math.max(4, (data.amount / maxAmt) * barMaxW);
         const color = CATEGORY_COLORS[cat] || C.textMuted;
         const pct = totalMonthly > 0 ? (data.amount / totalMonthly) * 100 : 0;
-        doc.fontSize(9).font(F.regular).fillColor(C.text).text(this.localizeCategory(cat, i18n), ML, y + 3, { width: labelW - 4 });
+        doc
+          .fontSize(9)
+          .font(F.regular)
+          .fillColor(C.text)
+          .text(this.localizeCategory(cat, i18n), ML, y + 3, {
+            width: labelW - 4,
+          });
         doc.rect(ML + labelW, y, barW, barH).fill(color);
-        doc.fontSize(9).fillColor(C.textLight).text(
-          `${fmtMoneyCompact(data.amount, cur)}  (${pct.toFixed(0)}%)`,
-          ML + labelW + barW + 6, y + 3,
-        );
+        doc
+          .fontSize(9)
+          .fillColor(C.textLight)
+          .text(
+            `${fmtMoneyCompact(data.amount, cur)}  (${pct.toFixed(0)}%)`,
+            ML + labelW + barW + 6,
+            y + 3,
+          );
       });
       doc.y = chartTop + Math.min(catSorted.length, 8) * (barH + barGap) + 10;
     }
@@ -511,13 +672,22 @@ export class ReportsService {
       ];
       this.tableHeader(doc, F, cols);
       subs.slice(0, 10).forEach((s, i) => {
-        if (this.needsPage(doc, doc.y + 18)) { doc.addPage(); this.tableHeader(doc, F, cols); }
-        this.tableRow(doc, F, [
-          `${i + 1}`,
-          s.name,
-          this.localizeCategory(s.category, i18n),
-          fmtMoney(s.monthlyConverted, cur),
-        ], cols, i);
+        if (this.needsPage(doc, doc.y + 18)) {
+          doc.addPage();
+          this.tableHeader(doc, F, cols);
+        }
+        this.tableRow(
+          doc,
+          F,
+          [
+            `${i + 1}`,
+            s.name,
+            this.localizeCategory(s.category, i18n),
+            fmtMoney(s.monthlyConverted, cur),
+          ],
+          cols,
+          i,
+        );
       });
     }
 
@@ -525,21 +695,33 @@ export class ReportsService {
     doc.moveDown(1);
     this.sectionTitle(doc, F, i18n.by_status);
     const byStatus: Record<string, number> = {};
-    subs.forEach((s) => { byStatus[s.status] = (byStatus[s.status] || 0) + 1; });
+    subs.forEach((s) => {
+      byStatus[s.status] = (byStatus[s.status] || 0) + 1;
+    });
     const totalCount = subs.length || 1;
     doc.fontSize(10).font(F.regular);
     Object.entries(byStatus).forEach(([status, count]) => {
-      const color = status === 'ACTIVE' ? C.green : status === 'TRIAL' ? C.orange : status === 'CANCELLED' ? C.red : C.textMuted;
+      const color =
+        status === 'ACTIVE'
+          ? C.green
+          : status === 'TRIAL'
+            ? C.orange
+            : status === 'CANCELLED'
+              ? C.red
+              : C.textMuted;
       // Reserve room for this status row BEFORE drawing — earlier code did
       // `addPage(); return;` which silently dropped the row entirely.
       if (this.needsPage(doc, doc.y + 14)) doc.addPage();
       const y = doc.y;
       doc.circle(ML + 4, y + 5, 3).fill(color);
       const pct = ((count / totalCount) * 100).toFixed(0);
-      doc.fillColor(C.text).text(
-        `  ${this.localizeStatus(status, i18n)}: ${count} (${pct}%)`,
-        ML + 10, y,
-      );
+      doc
+        .fillColor(C.text)
+        .text(
+          `  ${this.localizeStatus(status, i18n)}: ${count} (${pct}%)`,
+          ML + 10,
+          y,
+        );
     });
   }
 
@@ -552,16 +734,22 @@ export class ReportsService {
   ) {
     const totalMonthly = subs.reduce((s, sub) => s + sub.monthlyConverted, 0);
     const byCat: Record<string, number> = {};
-    subs.forEach((s) => { byCat[s.category] = (byCat[s.category] || 0) + s.monthlyConverted; });
+    subs.forEach((s) => {
+      byCat[s.category] = (byCat[s.category] || 0) + s.monthlyConverted;
+    });
     const topCat = Object.entries(byCat).sort((a, b) => b[1] - a[1])[0];
     const avg = subs.length ? totalMonthly / subs.length : 0;
     const yearly = totalMonthly * 12;
-    const largest = [...subs].sort((a, b) => b.monthlyConverted - a.monthlyConverted)[0];
+    const largest = [...subs].sort(
+      (a, b) => b.monthlyConverted - a.monthlyConverted,
+    )[0];
 
     this.sectionTitle(doc, F, i18n.insights);
     const startY = doc.y;
     const boxH = 92;
-    if (this.needsPage(doc, startY + boxH)) { doc.addPage(); }
+    if (this.needsPage(doc, startY + boxH)) {
+      doc.addPage();
+    }
     const y = doc.y;
     doc.rect(ML, y, CW, boxH).fill(C.insightBg);
 
@@ -572,25 +760,33 @@ export class ReportsService {
     if (topCat) {
       doc.text(
         `▸ ${i18n.insight_top_category(this.localizeCategory(topCat[0], i18n), fmtMoneyCompact(topCat[1], cur))}`,
-        ML + 14, row, { width: CW - 28 },
+        ML + 14,
+        row,
+        { width: CW - 28 },
       );
       row += lh;
     }
     if (largest) {
       doc.text(
         `▸ ${i18n.insight_largest(largest.name, fmtMoney(largest.monthlyConverted, cur))}`,
-        ML + 14, row, { width: CW - 28 },
+        ML + 14,
+        row,
+        { width: CW - 28 },
       );
       row += lh;
     }
     doc.text(
       `▸ ${i18n.insight_avg_payment(fmtMoney(avg, cur))}`,
-      ML + 14, row, { width: CW - 28 },
+      ML + 14,
+      row,
+      { width: CW - 28 },
     );
     row += lh;
     doc.text(
       `▸ ${i18n.insight_yearly_forecast(fmtMoneyCompact(yearly, cur))}`,
-      ML + 14, row, { width: CW - 28 },
+      ML + 14,
+      row,
+      { width: CW - 28 },
     );
 
     doc.y = y + boxH + 10;
@@ -661,7 +857,11 @@ export class ReportsService {
         s.nextPaymentDate ? this.fmtDate(s.nextPaymentDate, locale) : '—',
       ];
       cols.slice(1).forEach((col, j) => {
-        doc.text(values[j], x + 6, rowY + 6, { width: col.w - 12, lineBreak: false, ellipsis: true });
+        doc.text(values[j], x + 6, rowY + 6, {
+          width: col.w - 12,
+          lineBreak: false,
+          ellipsis: true,
+        });
         x += col.w;
       });
       doc.y = rowY + 22;
@@ -675,7 +875,9 @@ export class ReportsService {
     doc.text(i18n.total, ML + 6, doc.y - 18, { width: 130, lineBreak: false });
     doc.text(
       `${fmtMoney(totalMonthly, cur)}${i18n.monthly}`,
-      ML + CW - 200, doc.y - 14, { width: 190, align: 'right', lineBreak: false },
+      ML + CW - 200,
+      doc.y - 14,
+      { width: 190, align: 'right', lineBreak: false },
     );
     doc.y = doc.y + 10;
     doc.fillColor(C.text);
@@ -702,7 +904,10 @@ export class ReportsService {
     // already-normalized `monthlyConverted` so totals match the rest of the
     // report and reflect real monthly cash flow.
     const bizMonthly = business.reduce((s, sub) => s + sub.monthlyConverted, 0);
-    const persMonthly = personal.reduce((s, sub) => s + sub.monthlyConverted, 0);
+    const persMonthly = personal.reduce(
+      (s, sub) => s + sub.monthlyConverted,
+      0,
+    );
     const bizYearly = bizMonthly * 12;
     const persYearly = persMonthly * 12;
 
@@ -712,14 +917,54 @@ export class ReportsService {
     doc.rect(ML, boxTop, CW, 78).fillAndStroke(C.rowEven, C.border);
 
     // Business (deductible)
-    doc.fontSize(10).font(F.regular).fillColor(C.textLight).text(`${i18n.business_expenses} (${business.length})`, ML + 14, boxTop + 12);
-    doc.fontSize(18).font(F.bold).fillColor(C.green).text(fmtMoney(bizMonthly, cur), ML + 14, boxTop + 24);
-    doc.fontSize(9).font(F.regular).fillColor(C.textMuted).text(`${i18n.monthly} · ${fmtMoneyCompact(bizYearly, cur)} ${i18n.yearly}`, ML + 14, boxTop + 50);
+    doc
+      .fontSize(10)
+      .font(F.regular)
+      .fillColor(C.textLight)
+      .text(
+        `${i18n.business_expenses} (${business.length})`,
+        ML + 14,
+        boxTop + 12,
+      );
+    doc
+      .fontSize(18)
+      .font(F.bold)
+      .fillColor(C.green)
+      .text(fmtMoney(bizMonthly, cur), ML + 14, boxTop + 24);
+    doc
+      .fontSize(9)
+      .font(F.regular)
+      .fillColor(C.textMuted)
+      .text(
+        `${i18n.monthly} · ${fmtMoneyCompact(bizYearly, cur)} ${i18n.yearly}`,
+        ML + 14,
+        boxTop + 50,
+      );
 
     // Personal
-    doc.fontSize(10).font(F.regular).fillColor(C.textLight).text(`${i18n.personal_expenses} (${personal.length})`, ML + CW / 2, boxTop + 12);
-    doc.fontSize(18).font(F.bold).fillColor(C.text).text(fmtMoney(persMonthly, cur), ML + CW / 2, boxTop + 24);
-    doc.fontSize(9).font(F.regular).fillColor(C.textMuted).text(`${i18n.monthly} · ${fmtMoneyCompact(persYearly, cur)} ${i18n.yearly}`, ML + CW / 2, boxTop + 50);
+    doc
+      .fontSize(10)
+      .font(F.regular)
+      .fillColor(C.textLight)
+      .text(
+        `${i18n.personal_expenses} (${personal.length})`,
+        ML + CW / 2,
+        boxTop + 12,
+      );
+    doc
+      .fontSize(18)
+      .font(F.bold)
+      .fillColor(C.text)
+      .text(fmtMoney(persMonthly, cur), ML + CW / 2, boxTop + 24);
+    doc
+      .fontSize(9)
+      .font(F.regular)
+      .fillColor(C.textMuted)
+      .text(
+        `${i18n.monthly} · ${fmtMoneyCompact(persYearly, cur)} ${i18n.yearly}`,
+        ML + CW / 2,
+        boxTop + 50,
+      );
 
     doc.y = boxTop + 90;
     doc.fillColor(C.text);
@@ -732,7 +977,9 @@ export class ReportsService {
         byCat[s.category].count++;
         byCat[s.category].amount += s.monthlyConverted;
       });
-      const catRows = Object.entries(byCat).sort((a, b) => b[1].amount - a[1].amount);
+      const catRows = Object.entries(byCat).sort(
+        (a, b) => b[1].amount - a[1].amount,
+      );
 
       this.sectionTitle(doc, F, i18n.by_category_breakdown);
       const cols = [
@@ -742,12 +989,21 @@ export class ReportsService {
       ];
       this.tableHeader(doc, F, cols);
       catRows.forEach(([cat, data], i) => {
-        if (this.needsPage(doc, doc.y + 18)) { doc.addPage(); this.tableHeader(doc, F, cols); }
-        this.tableRow(doc, F, [
-          this.localizeCategory(cat, i18n),
-          `${data.count}`,
-          fmtMoney(data.amount, cur),
-        ], cols, i);
+        if (this.needsPage(doc, doc.y + 18)) {
+          doc.addPage();
+          this.tableHeader(doc, F, cols);
+        }
+        this.tableRow(
+          doc,
+          F,
+          [
+            this.localizeCategory(cat, i18n),
+            `${data.count}`,
+            fmtMoney(data.amount, cur),
+          ],
+          cols,
+          i,
+        );
       });
       doc.moveDown(0.5);
     }
@@ -765,13 +1021,18 @@ export class ReportsService {
       ];
       this.tableHeader(doc, F, cols);
       business.forEach((s, i) => {
-        if (this.needsPage(doc, doc.y + 22)) { doc.addPage(); this.tableHeader(doc, F, cols); }
+        if (this.needsPage(doc, doc.y + 22)) {
+          doc.addPage();
+          this.tableHeader(doc, F, cols);
+        }
         const card = s.paymentCardId ? cardMap[s.paymentCardId] : null;
         const rowY = doc.y;
         if (i % 2 === 0) doc.rect(ML, rowY, CW, 22).fill(C.rowEven);
         const icon = iconMap.get(s.id);
         if (icon) {
-          try { doc.image(icon, ML + 4, rowY + 3, { width: 16, height: 16 }); } catch {}
+          try {
+            doc.image(icon, ML + 4, rowY + 3, { width: 16, height: 16 });
+          } catch {}
         }
         doc.fontSize(9).font(F.regular).fillColor(C.text);
         let x = ML + 22;
@@ -783,7 +1044,11 @@ export class ReportsService {
           card ? `••••${card.last4}` : '—',
         ];
         cols.slice(1).forEach((col, j) => {
-          doc.text(values[j], x + 6, rowY + 6, { width: col.w - 12, lineBreak: false, ellipsis: true });
+          doc.text(values[j], x + 6, rowY + 6, {
+            width: col.w - 12,
+            lineBreak: false,
+            ellipsis: true,
+          });
           x += col.w;
         });
         doc.y = rowY + 22;
@@ -792,10 +1057,16 @@ export class ReportsService {
       // Total deductible row
       if (this.needsPage(doc, doc.y + 24)) doc.addPage();
       doc.rect(ML, doc.y, CW, 24).fill(C.green);
-      doc.fontSize(11).font(F.bold).fillColor(C.white).text(
-        `${i18n.total_deductible}: ${fmtMoney(bizMonthly, cur)}${i18n.monthly}  ·  ${fmtMoneyCompact(bizYearly, cur)} ${i18n.yearly}`,
-        ML + 6, doc.y - 18, { width: CW - 12 },
-      );
+      doc
+        .fontSize(11)
+        .font(F.bold)
+        .fillColor(C.white)
+        .text(
+          `${i18n.total_deductible}: ${fmtMoney(bizMonthly, cur)}${i18n.monthly}  ·  ${fmtMoneyCompact(bizYearly, cur)} ${i18n.yearly}`,
+          ML + 6,
+          doc.y - 18,
+          { width: CW - 12 },
+        );
       doc.y = doc.y + 10;
       doc.fillColor(C.text);
     }
@@ -814,13 +1085,18 @@ export class ReportsService {
       ];
       this.tableHeader(doc, F, cols);
       personal.forEach((s, i) => {
-        if (this.needsPage(doc, doc.y + 22)) { doc.addPage(); this.tableHeader(doc, F, cols); }
+        if (this.needsPage(doc, doc.y + 22)) {
+          doc.addPage();
+          this.tableHeader(doc, F, cols);
+        }
         const card = s.paymentCardId ? cardMap[s.paymentCardId] : null;
         const rowY = doc.y;
         if (i % 2 === 0) doc.rect(ML, rowY, CW, 22).fill(C.rowEven);
         const icon = iconMap.get(s.id);
         if (icon) {
-          try { doc.image(icon, ML + 4, rowY + 3, { width: 16, height: 16 }); } catch {}
+          try {
+            doc.image(icon, ML + 4, rowY + 3, { width: 16, height: 16 });
+          } catch {}
         }
         doc.fontSize(9).font(F.regular).fillColor(C.text);
         let x = ML + 22;
@@ -832,7 +1108,11 @@ export class ReportsService {
           card ? `••••${card.last4}` : '—',
         ];
         cols.slice(1).forEach((col, j) => {
-          doc.text(values[j], x + 6, rowY + 6, { width: col.w - 12, lineBreak: false, ellipsis: true });
+          doc.text(values[j], x + 6, rowY + 6, {
+            width: col.w - 12,
+            lineBreak: false,
+            ellipsis: true,
+          });
           x += col.w;
         });
         doc.y = rowY + 22;
@@ -844,20 +1124,38 @@ export class ReportsService {
   // Drawing helpers
   // ════════════════════════════════════════════════════════════
 
-  private sectionTitle(doc: any, F: { regular: string; bold: string }, title: string) {
+  private sectionTitle(
+    doc: any,
+    F: { regular: string; bold: string },
+    title: string,
+  ) {
     if (this.needsPage(doc, doc.y + 24)) doc.addPage();
     doc.moveDown(0.5);
     doc.fontSize(13).font(F.bold).fillColor(C.text).text(title, ML);
     doc.moveDown(0.4);
   }
 
-  private tableHeader(doc: any, F: { regular: string; bold: string }, cols: { label: string; w: number }[]) {
+  private tableHeader(
+    doc: any,
+    F: { regular: string; bold: string },
+    cols: { label: string; w: number }[],
+  ) {
     const y = doc.y;
-    doc.rect(ML, y, cols.reduce((s, c) => s + c.w, 0), 20).fill('#EEEEF5');
+    doc
+      .rect(
+        ML,
+        y,
+        cols.reduce((s, c) => s + c.w, 0),
+        20,
+      )
+      .fill('#EEEEF5');
     doc.fontSize(8).font(F.bold).fillColor(C.textLight);
     let x = ML;
     cols.forEach((col) => {
-      doc.text(col.label.toUpperCase(), x + 6, y + 6, { width: col.w - 12, lineBreak: false });
+      doc.text(col.label.toUpperCase(), x + 6, y + 6, {
+        width: col.w - 12,
+        lineBreak: false,
+      });
       x += col.w;
     });
     doc.y = y + 22;
@@ -876,7 +1174,11 @@ export class ReportsService {
     doc.fontSize(9).font(F.regular).fillColor(C.text);
     let x = ML;
     values.forEach((val, i) => {
-      doc.text(val, x + 6, y + 4, { width: cols[i].w - 12, lineBreak: false, ellipsis: true });
+      doc.text(val, x + 6, y + 4, {
+        width: cols[i].w - 12,
+        lineBreak: false,
+        ellipsis: true,
+      });
       x += cols[i].w;
     });
     doc.y = y + 18;
@@ -910,8 +1212,12 @@ export class ReportsService {
   /** Compact period suffix (e.g. "/mo", "/мес"). */
   private periodLabel(p: string, i18n: ReportI18n): string {
     const map: Record<string, keyof ReportI18n> = {
-      MONTHLY: 'monthly', YEARLY: 'yearly', WEEKLY: 'weekly',
-      QUARTERLY: 'quarterly', LIFETIME: 'lifetime', ONE_TIME: 'one_time',
+      MONTHLY: 'monthly',
+      YEARLY: 'yearly',
+      WEEKLY: 'weekly',
+      QUARTERLY: 'quarterly',
+      LIFETIME: 'lifetime',
+      ONE_TIME: 'one_time',
     };
     const key = map[p];
     if (!key) return '';
@@ -937,7 +1243,9 @@ export class ReportsService {
   private dominantCurrency(subs: Subscription[]): string | null {
     if (subs.length === 0) return null;
     const counts: Record<string, number> = {};
-    subs.forEach((s) => { counts[s.currency] = (counts[s.currency] || 0) + 1; });
+    subs.forEach((s) => {
+      counts[s.currency] = (counts[s.currency] || 0) + 1;
+    });
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
   }
 
@@ -981,7 +1289,9 @@ export class ReportsService {
             .toNumber();
         }
       } catch (e) {
-        this.logger.debug(`FX convert failed ${s.currency}→${targetCurrency}: ${(e as Error).message}`);
+        this.logger.debug(
+          `FX convert failed ${s.currency}→${targetCurrency}: ${(e as Error).message}`,
+        );
         // Same fallback rationale — keep the raw number visible so the
         // total stays in the same ballpark as the analytics view.
         amountConverted = raw.toNumber();
@@ -996,13 +1306,17 @@ export class ReportsService {
 
   private toMonthly(amount: number, billingPeriod: string): number {
     switch (billingPeriod) {
-      case 'YEARLY': return amount / 12;
-      case 'QUARTERLY': return amount / 3;
-      case 'WEEKLY': return amount * 4.33;
+      case 'YEARLY':
+        return amount / 12;
+      case 'QUARTERLY':
+        return amount / 3;
+      case 'WEEKLY':
+        return amount * 4.33;
       case 'LIFETIME':
       case 'ONE_TIME':
         return 0; // Not a recurring charge — exclude from monthly totals
-      default: return amount; // MONTHLY (and unknown)
+      default:
+        return amount; // MONTHLY (and unknown)
     }
   }
 
@@ -1010,17 +1324,68 @@ export class ReportsService {
   // Misc utilities
   // ════════════════════════════════════════════════════════════
 
+  // SSRF allowlist for outbound icon fetches. iconUrl is user-controlled
+  // (subscriptions.iconUrl is writable via CreateSubscriptionDto), so
+  // without this the report-PDF generator could be coerced into reaching
+  // cloud metadata (169.254.169.254), the Postgres host, internal Redis,
+  // or other RFC1918 services. ASVS V5.3.10 / V12.4.1.
+  private isPrivateOrLoopbackHost(hostname: string): boolean {
+    const lower = hostname.toLowerCase();
+    if (lower === 'localhost' || lower.endsWith('.localhost')) return true;
+    // IPv6 loopback / unspecified / link-local / unique-local.
+    if (
+      lower === '::1' ||
+      lower === '::' ||
+      lower.startsWith('fe80:') ||
+      lower.startsWith('fc') ||
+      lower.startsWith('fd')
+    ) {
+      return true;
+    }
+    // IPv4 dotted-quad checks.
+    const m = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!m) return false;
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (a === 10) return true; // 10.0.0.0/8
+    if (a === 127) return true; // 127.0.0.0/8 loopback
+    if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local + AWS/GCP metadata
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+    if (a === 192 && b === 168) return true; // 192.168.0.0/16
+    if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
+    if (a === 0) return true; // 0.0.0.0/8
+    return false;
+  }
+
   private async fetchIcon(url: string): Promise<Buffer | null> {
+    let parsed: URL;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      parsed = new URL(url);
+    } catch {
+      return null;
+    }
+    if (parsed.protocol !== 'https:') return null;
+    if (this.isPrivateOrLoopbackHost(parsed.hostname)) {
+      this.logger.warn(
+        `fetchIcon refused: private/loopback host ${parsed.hostname}`,
+      );
+      return null;
+    }
+    try {
+      const res = await fetch(parsed.toString(), {
+        signal: AbortSignal.timeout(3000),
+        redirect: 'error', // refuse redirects so we can't be bounced into private space
+      });
       if (!res.ok) return null;
       const ct = res.headers.get('content-type') || '';
       if (!ct.startsWith('image/')) return null;
       // PDFKit accepts JPEG/PNG bytes directly. SVG would need rasterization
       // which we skip to keep the dependency surface small.
-      if (!ct.includes('jpeg') && !ct.includes('jpg') && !ct.includes('png')) return null;
+      if (!ct.includes('jpeg') && !ct.includes('jpg') && !ct.includes('png'))
+        return null;
       return Buffer.from(await res.arrayBuffer());
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   private fmtDate(d?: string | Date | null, locale = 'en'): string {
@@ -1029,11 +1394,22 @@ export class ReportsService {
     if (isNaN(date.getTime())) return '—';
     const code = (locale ?? 'en').split(/[-_]/)[0].toLowerCase();
     const intlMap: Record<string, string> = {
-      ru: 'ru-RU', kk: 'kk-KZ', es: 'es-ES', de: 'de-DE',
-      fr: 'fr-FR', pt: 'pt-BR', zh: 'zh-CN', ja: 'ja-JP', ko: 'ko-KR',
+      ru: 'ru-RU',
+      kk: 'kk-KZ',
+      es: 'es-ES',
+      de: 'de-DE',
+      fr: 'fr-FR',
+      pt: 'pt-BR',
+      zh: 'zh-CN',
+      ja: 'ja-JP',
+      ko: 'ko-KR',
     };
     const loc = intlMap[code] ?? 'en-US';
-    return date.toLocaleDateString(loc, { year: 'numeric', month: 'short', day: 'numeric' });
+    return date.toLocaleDateString(loc, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
   }
 
   // ════════════════════════════════════════════════════════════
@@ -1053,7 +1429,11 @@ export class ReportsService {
     workspaceId: string,
     from: string,
     to: string,
-  ): Promise<{ subs: Subscription[]; members: TeamMemberInfo[]; cards: PaymentCard[] }> {
+  ): Promise<{
+    subs: Subscription[];
+    members: TeamMemberInfo[];
+    cards: PaymentCard[];
+  }> {
     // Resolve workspace → active member userIds + their User rows in one
     // query each. We use raw repos (no service round-trip) to keep the
     // dependency graph clean (reports module doesn't import workspace).
@@ -1090,7 +1470,8 @@ export class ReportsService {
     // CANCELLED / PAUSED rows whose date window happened to overlap the
     // report period, inflating (or sometimes deflating) the PDF total
     // versus the live "Team Spend" card — even on single-member teams.
-    const subs = await this.subRepo.createQueryBuilder('s')
+    const subs = await this.subRepo
+      .createQueryBuilder('s')
       .where('s.userId IN (:...userIds)', { userIds })
       .andWhere('s.status IN (:...statuses)', {
         statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
@@ -1191,7 +1572,11 @@ export class ReportsService {
       .slice(0, 5);
 
     if (overlaps.length > 0) {
-      doc.fontSize(13).font(F.bold).fillColor(C.text).text('Potential Savings', ML);
+      doc
+        .fontSize(13)
+        .font(F.bold)
+        .fillColor(C.text)
+        .text('Potential Savings', ML);
       doc.moveDown(0.3);
       doc.fontSize(10).font(F.regular).fillColor(C.textLight);
       doc.text(
@@ -1202,12 +1587,16 @@ export class ReportsService {
       overlaps.forEach((o) => {
         const [name, info] = o;
         const niceName = name.charAt(0).toUpperCase() + name.slice(1);
-        doc.fontSize(10).font(F.regular).fillColor(C.text).text(
-          `• ${niceName} — paid by ${info.ids.size} members  (${fmtMoney(info.total, displayCurrency)} /mo combined)`,
-          ML,
-          undefined,
-          { width: CW },
-        );
+        doc
+          .fontSize(10)
+          .font(F.regular)
+          .fillColor(C.text)
+          .text(
+            `• ${niceName} — paid by ${info.ids.size} members  (${fmtMoney(info.total, displayCurrency)} /mo combined)`,
+            ML,
+            undefined,
+            { width: CW },
+          );
       });
     }
   }

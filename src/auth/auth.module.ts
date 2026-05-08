@@ -16,10 +16,28 @@ import { NotificationsModule } from '../notifications/notifications.module';
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (cfg: ConfigService) => ({
-        secret: cfg.get('JWT_ACCESS_SECRET') || cfg.get('JWT_SECRET', 'secret'),
-        signOptions: { expiresIn: cfg.get('JWT_EXPIRES_IN', '7d') },
-      }),
+      useFactory: (cfg: ConfigService) => {
+        // Mirror the fail-closed behaviour from configuration.ts. A `'secret'`
+        // fallback here defeats the entire JWT signature scheme.
+        const secret =
+          cfg.get<string>('JWT_ACCESS_SECRET') || cfg.get<string>('JWT_SECRET');
+        if (!secret) {
+          if (process.env.NODE_ENV === 'production') {
+            throw new Error(
+              'JWT_ACCESS_SECRET (or legacy JWT_SECRET) must be set in production',
+            );
+          }
+          // Dev-only sentinel — kept distinct from any other secret in the project.
+          return {
+            secret: 'dev-only-jwt-access-do-not-use-in-prod',
+            signOptions: { expiresIn: cfg.get('JWT_EXPIRES_IN', '7d') },
+          };
+        }
+        return {
+          secret,
+          signOptions: { expiresIn: cfg.get('JWT_EXPIRES_IN', '7d') },
+        };
+      },
       inject: [ConfigService],
     }),
   ],
