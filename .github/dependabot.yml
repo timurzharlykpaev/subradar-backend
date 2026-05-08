@@ -45,7 +45,9 @@ updates:
     #   - typescript@6: enabled `strictPropertyInitialization` by
     #     default, broke entity files repo-wide.
     #   - uuid@14: ESM-only, breaks CommonJS imports.
-    #   - eslint@10: flat-config-only, breaks legacy .eslintrc setups.
+    #   - eslint@10 / @eslint/js@10: peer-pinned to eslint@^10, so
+    #     bumping @eslint/js while eslint stays at 9.x makes
+    #     `npm ci` fail with ERESOLVE on the deploy runner.
     #   - @types/node@25: forced types/lib mismatches that fired
     #     strict-mode errors in TS 5/6.
     ignore:
@@ -54,6 +56,8 @@ updates:
       - dependency-name: uuid
         update-types: ['version-update:semver-major']
       - dependency-name: eslint
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@eslint/js'
         update-types: ['version-update:semver-major']
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
