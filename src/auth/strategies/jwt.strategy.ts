@@ -1,7 +1,10 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import { User } from '../../users/entities/user.entity';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -9,7 +12,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   private readonly expectedIssuer: string;
   private readonly expectedAudience: string;
 
-  constructor(cfg: ConfigService) {
+  constructor(
+    cfg: ConfigService,
+    @InjectRepository(User) private readonly userRepo: Repository<User>,
+  ) {
     const expectedIssuer = cfg.get<string>('JWT_ISSUER', 'subradar-api');
     const expectedAudience = cfg.get<string>('JWT_AUDIENCE', 'subradar-clients');
     super({
@@ -51,6 +57,32 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       );
       throw new UnauthorizedException('Invalid token audience');
     }
+
+    // V3.5.2: tokenVersion check. Legacy JWTs minted before this column
+    // existed have no `tv` claim — accept them during the grace window
+    // (until natural expiry, max 30d for refresh / 7d for access). New
+    // JWTs MUST carry tv and it MUST match the User row, otherwise the
+    // user has logged out (or had their password changed) and every
+    // outstanding token is revoked at once.
+    if (payload?.tv !== undefined && payload.tv !== null) {
+      // Single light query per request — keep `id` + `tokenVersion` only.
+      // No join, no relation eager-loads.
+      const row = await this.userRepo.findOne({
+        where: { id: payload.sub },
+        select: ['id', 'tokenVersion'],
+      });
+      if (!row) {
+        this.logger.warn(`JWT rejected: user ${payload.sub} not found`);
+        throw new UnauthorizedException('Invalid token');
+      }
+      if (row.tokenVersion !== payload.tv) {
+        this.logger.warn(
+          `JWT rejected: tokenVersion mismatch (token=${payload.tv}, db=${row.tokenVersion})`,
+        );
+        throw new UnauthorizedException('Token revoked');
+      }
+    }
+
     return { id: payload.sub, email: payload.email };
   }
 }

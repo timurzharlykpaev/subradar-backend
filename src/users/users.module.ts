@@ -9,6 +9,10 @@ import { UsersController } from './users.controller';
   imports: [TypeOrmModule.forFeature([User, UserBilling])],
   providers: [UsersService],
   controllers: [UsersController],
-  exports: [UsersService],
+  // Re-export TypeOrmModule so AuthModule's JwtStrategy can inject
+  // Repository<User> directly (it needs a per-request light SELECT for
+  // tokenVersion check; injecting UsersService would create a circular
+  // dependency since UsersService doesn't expose tokenVersion read).
+  exports: [UsersService, TypeOrmModule],
 })
 export class UsersModule {}

@@ -1,0 +1,53 @@
+# Dependabot config — closes ASVS V14.1.1 / V14.1.3.
+#
+# Weekly cadence keeps the noise down (security advisories already trigger
+# out-of-cycle PRs) while still hitting routine point-releases. CASA
+# reviewers want evidence that vulnerable dependencies are picked up in a
+# bounded time window — weekly + automatic security alerts satisfies that.
+#
+# Grouping: lockfile-only updates land as one PR per week per ecosystem
+# instead of one PR per package, so the team review burden stays sane.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - security
+    groups:
+      # Keep all minor + patch updates in a single weekly PR.
+      production-deps:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      dev-deps:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+    # Major updates still come as individual PRs so we can review them
+    # one-by-one (semver-major is where breaking changes happen).
+    versioning-strategy: increase
+    commit-message:
+      prefix: chore(deps)
+      prefix-development: chore(deps-dev)
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: chore(actions)

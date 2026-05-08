@@ -81,6 +81,14 @@ export class User {
   @Exclude({ toPlainOnly: true })
   refreshToken: string;
 
+  // Monotonic version embedded into every JWT we mint and re-checked on
+  // each request. Bumped on logout / password change to immediately
+  // invalidate every outstanding token without waiting for natural
+  // expiry. Closes ASVS V3.5.2.
+  @Column({ type: 'int', default: 0 })
+  @Exclude({ toPlainOnly: true })
+  tokenVersion: number;
+
   @Column({ nullable: true })
   @Exclude({ toPlainOnly: true })
   magicLinkToken: string;

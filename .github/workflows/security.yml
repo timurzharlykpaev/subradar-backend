@@ -1,0 +1,104 @@
+# Security CI — closes ASVS V14.1.1 (out-of-date warnings),
+# V14.1.2 (SAST in pipeline), V14.1.3 (SCA in pipeline). Runs on every
+# push to dev/main and every PR; weekly cron picks up advisories that
+# emerge after merge.
+#
+# All tools chosen are first-party / OSS with generous free tiers so this
+# costs nothing to operate at SubRadar's scale:
+#   - Semgrep CE: SAST against the OWASP Top 10 + TypeScript rules
+#   - CodeQL: GitHub's built-in deeper analysis
+#   - gitleaks: secrets scanning across the full git history
+#   - npm audit (gate): fail the build on high/critical advisories
+name: Security
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  schedule:
+    # Mondays 03:00 UTC — picks up advisories filed over the weekend.
+    - cron: "0 3 * * 1"
+
+jobs:
+  npm-audit:
+    name: npm audit (gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # Fail the run on high/critical CVEs. Moderate/low are reported but
+      # don't block (the long tail of moderate transitive advisories
+      # rarely rises to "stop the line" severity).
+      - name: npm audit (high/critical only)
+        run: npm audit --omit=dev --audit-level=high
+
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - run: |
+          semgrep \
+            --config p/owasp-top-ten \
+            --config p/typescript \
+            --config p/nodejs \
+            --error \
+            --severity ERROR \
+            --severity WARNING \
+            --sarif \
+            --output semgrep.sarif \
+            src/
+      - name: Upload SARIF to GitHub code-scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # `security-and-quality` covers more than `security-extended` and
+          # CASA reviewers like to see depth, not just defaults.
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  gitleaks:
+    name: gitleaks (secrets scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          # Full history so leaked-then-removed secrets in old commits
+          # don't slip through (`fetch-depth: 1` would miss them).
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        # `gitleaks-action` is GPL-3 and free for public repos. For
+        # private repos a license key is needed — we set GITLEAKS_LICENSE
+        # if available; otherwise the action runs in `--no-banner` mode
+        # and still scans (rate-limited).
+        continue-on-error: false
