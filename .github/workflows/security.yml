@@ -32,7 +32,7 @@ jobs:
     name: npm audit (gate)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -51,7 +51,7 @@ jobs:
     container:
       image: returntocorp/semgrep
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
       # Report-only mode. `--severity ERROR --severity WARNING` would
       # fail on every WARNING level finding which is too aggressive
       # for a baseline; we run without `--error` so the workflow
@@ -95,7 +95,7 @@ jobs:
       matrix:
         language: [javascript-typescript]
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
       - uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
@@ -111,7 +111,7 @@ jobs:
     name: gitleaks (secrets scan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
         with:
           # Full history so leaked-then-removed secrets in old commits
           # don't slip through (`fetch-depth: 1` would miss them).
