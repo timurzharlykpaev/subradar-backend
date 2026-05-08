@@ -15,6 +15,7 @@ import Redis from 'ioredis';
 import { User } from '../users/entities/user.entity';
 import { AiService, EmailCandidate } from '../ai/ai.service';
 import { MarketDataService } from '../analysis/market-data.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { AuditService } from '../common/audit/audit.service';
 import { REDIS_CLIENT } from '../common/redis.module';
 import { maskEmail } from '../common/utils/pii';
@@ -69,9 +70,102 @@ export class GmailScanService {
     private readonly cfg: ConfigService,
     private readonly ai: AiService,
     private readonly market: MarketDataService,
+    private readonly subscriptions: SubscriptionsService,
     private readonly audit: AuditService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  /**
+   * Drop candidates that are clearly noise so the user doesn't have to
+   * uncheck twenty Amazon-shipping-confirmation rows. Keep the bar low
+   * enough that legitimate but slightly-ambiguous receipts (e.g. AI's
+   * confidence was 0.45 but the brand IS in our catalog) still surface.
+   *
+   * Filters:
+   *   - cancellations: handled separately by the unsubscribe-flow, not
+   *     by the import-into-tracker flow.
+   *   - non-recurring with no catalog match: AI guessed wrong about
+   *     the email being a subscription, and the brand isn't even
+   *     known — almost certainly a one-off (Amazon order, ticket
+   *     purchase, etc.).
+   *   - confidence < 0.3 with no enrichment: the AI itself isn't sure
+   *     and we have no independent signal that this is real.
+   */
+  private filterNoise(candidates: EmailCandidate[]): EmailCandidate[] {
+    return candidates.filter((c) => {
+      if (c.isCancellation) return false;
+      const enriched = !!c.iconUrl || (c.availablePlans?.length ?? 0) > 0;
+      if (!c.isRecurring && !enriched) return false;
+      if (c.confidence < 0.3 && !enriched) return false;
+      return true;
+    });
+  }
+
+  /**
+   * Drop candidates that match a subscription the user already has in
+   * SubRadar — they presumably added that one previously (manually,
+   * via voice, via screenshot, or in a prior scan) and re-importing
+   * would create a duplicate row in their dashboard.
+   *
+   * Match key uses `MarketDataService.normalizeServiceName` on BOTH
+   * sides so "Netflix" in the user's existing subs cancels out a
+   * fresh "Netflix Premium" candidate from the scan (same brand,
+   * different tier wording — without normalisation we'd present the
+   * user a duplicate to uncheck every scan).
+   *
+   * We exclude existing CANCELLED rows so a re-subscription after a
+   * past cancellation surfaces correctly. Likewise we skip subs with
+   * missing currency/period rather than collapsing them into an empty
+   * key (which would over-dedupe other candidates that happen to have
+   * empty strings on the candidate side).
+   *
+   * Read failure is non-fatal: the user gets the full candidate list
+   * and can uncheck duplicates manually.
+   */
+  private async filterDuplicates(
+    userId: string,
+    candidates: EmailCandidate[],
+  ): Promise<EmailCandidate[]> {
+    if (candidates.length === 0) return candidates;
+    const existing = await this.subscriptions
+      .findAllForUser(userId)
+      .catch((err) => {
+        this.logger.warn(
+          `filterDuplicates: subscriptions read failed: ${err?.message ?? err}`,
+        );
+        return [] as Array<{
+          name: string;
+          currency: string;
+          billingPeriod: string;
+          status?: string;
+        }>;
+      });
+    const seen = new Set<string>();
+    for (const sub of existing) {
+      // Don't dedupe against cancelled subscriptions — user re-
+      // subscribing after a cancel is exactly the case scan should
+      // catch. Same for missing currency/period (legacy rows from
+      // before those fields became required).
+      if (sub.status === 'CANCELLED') continue;
+      if (!sub.currency || !sub.billingPeriod) continue;
+      const normalized = this.market.normalizeServiceName(sub.name ?? '');
+      if (!normalized) continue;
+      const key = `${normalized}|${sub.currency.toUpperCase()}|${sub.billingPeriod.toUpperCase()}`;
+      seen.add(key);
+    }
+    return candidates.filter((c) => {
+      const normalized = this.market.normalizeServiceName(c.name);
+      const key = `${normalized}|${c.currency.toUpperCase()}|${c.billingPeriod.toUpperCase()}`;
+      return !seen.has(key);
+    });
+  }
+
+  /** Cap on OpenAI web-search calls per single scan. Catalog hits are
+   * cached forever in `service_catalog`, so subsequent users for the
+   * same brand pay zero — but a *first* scan over a pathological inbox
+   * with 200 unknown brands could otherwise fan out hundreds of
+   * parallel `gpt-4o-mini` calls and burn the OpenAI budget. */
+  private readonly MAX_WEB_SEARCHES_PER_SCAN = 20;
 
   /**
    * Enrich each AI-extracted candidate with catalog data: brand-correct
@@ -85,72 +179,73 @@ export class GmailScanService {
    * user will see on their card. We never overwrite an
    * `amountFromEmail = true` value with a catalog default.
    *
-   * Web search is enabled (`allowWebSearch = true`) so unknown services
-   * trigger an OpenAI lookup to populate the catalog. Cost matters,
-   * but the lookup result is persisted to `service_catalog` — the next
-   * user scanning the same brand pays $0 for it. The MarketDataService
-   * also caches a normalised-name lookup for 7 days. Per-scan cost cap:
-   * we only web-search candidates that are clearly recurring billable
-   * subscriptions (isRecurring && !isCancellation) so one-off
-   * "thank you for your order" mentions don't burn API calls.
+   * Lookup uses `MarketDataService.batchLookup`, which sequences calls
+   * and caps OpenAI web searches at MAX_WEB_SEARCHES_PER_SCAN. Without
+   * this cap, a 500-message inbox with many unknown brands would
+   * Promise.all into hundreds of parallel OpenAI calls (cost runaway).
+   * Web-searched results persist to the catalog table, so the next
+   * user scanning the same brand pays $0.
    */
   private async enrichWithCatalog(
     candidates: EmailCandidate[],
   ): Promise<EmailCandidate[]> {
     if (candidates.length === 0) return candidates;
-    return Promise.all(
-      candidates.map(async (c) => {
-        try {
-          const normalized = this.market.normalizeServiceName(c.name);
-          const allowWebSearch = c.isRecurring && !c.isCancellation;
-          const entry = await this.market.getMarketData(
-            normalized,
-            allowWebSearch,
-          );
-          if (!entry) return c;
 
-          const plans = (entry.plans ?? []).map((p: any) => ({
-            name: String(p.name ?? ''),
-            amount: Number(p.priceMonthly ?? p.amount ?? 0),
-            currency: String(p.currency ?? c.currency ?? 'USD').toUpperCase(),
-            billingPeriod: 'MONTHLY' as const,
-          }));
-
-          // Pick the cheapest plan as the default fallback. The user can
-          // switch in the review UI; cheapest is the safest guess (most
-          // people start on the entry-tier subscription).
-          const defaultPlan = plans
-            .filter((p) => p.amount > 0)
-            .sort((a, b) => a.amount - b.amount)[0];
-
-          const enriched: EmailCandidate = {
-            ...c,
-            // Prefer email-extracted amount (real charge). Fall back to
-            // catalog default only when the email had no number.
-            amount: c.amountFromEmail && c.amount > 0
-              ? c.amount
-              : defaultPlan?.amount ?? c.amount,
-            currency: c.amountFromEmail
-              ? c.currency
-              : defaultPlan?.currency ?? c.currency,
-            // Catalog category is brand-curated; trust over AI guess
-            // unless the catalog returns a meaningless 'OTHER'.
-            category:
-              entry.category && entry.category !== 'OTHER'
-                ? entry.category
-                : c.category,
-            iconUrl: entry.logoUrl ?? undefined,
-            availablePlans: plans.length > 0 ? plans : undefined,
-          };
-          return enriched;
-        } catch (err: any) {
-          this.logger.warn(
-            `enrichWithCatalog: ${c.name}: ${err?.message ?? err}`,
-          );
-          return c;
-        }
-      }),
+    // Build the unique set of normalised names that are *eligible* for
+    // web-search (recurring, non-cancellation). One-off "thanks for
+    // your order" rows still get a catalog hit if the brand is
+    // already cached, but never trigger a fresh web search.
+    const namesToLookup = new Set<string>();
+    for (const c of candidates) {
+      if (c.isRecurring && !c.isCancellation) {
+        namesToLookup.add(this.market.normalizeServiceName(c.name));
+      }
+    }
+    const catalogByName = await this.market.batchLookup(
+      Array.from(namesToLookup),
+      this.MAX_WEB_SEARCHES_PER_SCAN,
     );
+
+    return candidates.map((c) => {
+      try {
+        const normalized = this.market.normalizeServiceName(c.name);
+        const entry = catalogByName.get(normalized);
+        if (!entry) return c;
+
+        const plans = (entry.plans ?? []).map((p: any) => ({
+          name: String(p.name ?? ''),
+          amount: Number(p.priceMonthly ?? p.amount ?? 0),
+          currency: String(p.currency ?? c.currency ?? 'USD').toUpperCase(),
+          billingPeriod: 'MONTHLY' as const,
+        }));
+
+        const defaultPlan = plans
+          .filter((p) => p.amount > 0)
+          .sort((a, b) => a.amount - b.amount)[0];
+
+        const enriched: EmailCandidate = {
+          ...c,
+          amount: c.amountFromEmail && c.amount > 0
+            ? c.amount
+            : defaultPlan?.amount ?? c.amount,
+          currency: c.amountFromEmail
+            ? c.currency
+            : defaultPlan?.currency ?? c.currency,
+          category:
+            entry.category && entry.category !== 'OTHER'
+              ? entry.category
+              : c.category,
+          iconUrl: entry.logoUrl ?? undefined,
+          availablePlans: plans.length > 0 ? plans : undefined,
+        };
+        return enriched;
+      } catch (err: any) {
+        this.logger.warn(
+          `enrichWithCatalog: ${c.name}: ${err?.message ?? err}`,
+        );
+        return c;
+      }
+    });
   }
 
   private requireConfig(): { clientId: string; clientSecret: string } {
@@ -515,7 +610,32 @@ export class GmailScanService {
       }
 
       const rawCandidates = await this.ai.parseBulkEmails(messages, locale);
-      const candidates = await this.enrichWithCatalog(rawCandidates);
+      const enriched = await this.enrichWithCatalog(rawCandidates);
+      const denoised = this.filterNoise(enriched);
+      const candidates = await this.filterDuplicates(userId, denoised);
+
+      // Refund the daily-quota slot if dedup hid every candidate as
+      // already-imported. Re-running scan to discover *new* receipts is
+      // the intended UX — a "nothing new since last scan" outcome
+      // shouldn't burn one of the 3-per-day Pro slots. We only refund
+      // when there were enriched candidates that got fully filtered by
+      // dedup; if the inbox was just empty (no receipts), we keep the
+      // quota consumed (the Gmail API + AI work was real).
+      if (
+        quotaWasIncremented &&
+        quotaKey &&
+        candidates.length === 0 &&
+        denoised.length > 0
+      ) {
+        try {
+          await this.redis.decr(quotaKey);
+          quotaWasIncremented = false;
+        } catch (refundErr: any) {
+          this.logger.warn(
+            `Failed to refund Gmail quota (no new) for ${userId}: ${refundErr?.message ?? refundErr}`,
+          );
+        }
+      }
 
       const durationMs = Date.now() - startedAt;
       await this.audit.log({
@@ -526,7 +646,15 @@ export class GmailScanService {
         metadata: {
           scanned: messages.length,
           candidates: candidates.length,
-          enriched: candidates.filter((c) => c.iconUrl || c.availablePlans)
+          // Funnel metrics are gold for tuning thresholds: AI parse →
+          // catalog enrichment → noise filter → dedup against existing
+          // subscriptions. If `dropped_dup` blows up we know we should
+          // surface "already tracked" hints instead of silently
+          // hiding rows.
+          ai_returned: rawCandidates.length,
+          dropped_noise: enriched.length - denoised.length,
+          dropped_dup: denoised.length - candidates.length,
+          enriched_count: enriched.filter((c) => c.iconUrl || c.availablePlans)
             .length,
           durationMs,
         },

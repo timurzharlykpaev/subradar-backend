@@ -56,9 +56,17 @@ export class ClientErrorController {
     const emoji = isMobile ? '📱' : '🌐';
     const tag = isMobile ? 'MOBILE' : 'WEB';
 
-    this.logger.error(
-      `${emoji} Client Error [${tag}] platform=${platform} ${dto.url ?? dto.context ?? ''}: ${dto.message}`,
-      dto.stack ?? '',
+    // Mobile clients tag warnings with a `[WARN]` prefix when shipping
+    // expected-but-noteworthy events (e.g. transient billing-drift 404s
+    // from old builds) through the same monitoring pipeline. Demote
+    // those to logger.warn so they don't trip the JSON-log → Telegram
+    // alert bridge that fires on `level: error`.
+    const isClientWarning = /^\[WARN\]/i.test(dto.message);
+    const logFn = isClientWarning ? this.logger.warn : this.logger.error;
+    logFn.call(
+      this.logger,
+      `${emoji} Client ${isClientWarning ? 'Warning' : 'Error'} [${tag}] platform=${platform} ${dto.url ?? dto.context ?? ''}: ${dto.message}`,
+      isClientWarning ? undefined : dto.stack ?? '',
     );
 
     // Skip expected client errors from Telegram alerts. The endpoint
@@ -76,6 +84,12 @@ export class ClientErrorController {
       /ThrottlerException/i,
       /billing\/me.*401/i,
       /auth\/.*429/i,
+      // Old client (≤1.3.21) BillingDrift check pings a 404'd legacy
+      // endpoint and ships the failure as a [WARN] through this
+      // controller. Already demoted to logger.warn above; also skip
+      // the alert pipeline so the channel stays clean.
+      /BillingDrift/i,
+      /^\[WARN\]/i,
     ];
     const SKIP_BY_URL_MOBILE = [
       // 4xx on these endpoints is documented "service unknown" for
