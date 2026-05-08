@@ -101,6 +101,32 @@ export class User {
   @Exclude({ toPlainOnly: true })
   lemonSqueezyCustomerId: string;
 
+  // Gmail OAuth integration columns (BATCH 4 / migration
+  // AddGmailIntegration1777700000000). The refresh token is the only
+  // long-lived secret in this set and MUST stay encrypted at rest —
+  // Limited Use compliance (Google API Services User Data Policy) and
+  // CASA Tier 2 V8.3.7 both require it.
+  //
+  // The other three columns are not secrets (timestamps, public email,
+  // scope strings) but stay marked Exclude so a generic API response
+  // doesn't accidentally leak the Gmail address to a third party who
+  // happens to call /users/me.
+  @Column({ nullable: true, transformer: AesGcmTransformer })
+  @Exclude({ toPlainOnly: true })
+  gmailRefreshToken: string;
+
+  @Column({ nullable: true, type: 'timestamp' })
+  @Exclude({ toPlainOnly: true })
+  gmailConnectedAt: Date | null;
+
+  @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
+  gmailEmail: string;
+
+  @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
+  gmailScopes: string;
+
   @Column({ default: false })
   trialUsed: boolean;
 
