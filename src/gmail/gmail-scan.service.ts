@@ -626,6 +626,17 @@ export class GmailScanService {
      * Mobile renders a banner inviting the user to re-scan. Old
      * clients (≤1.3.21) ignore unknown fields → no compat break. */
     truncated: boolean;
+    /** Funnel breakdown so mobile can render a meaningful empty
+     * state (e.g. "1 already in your list" vs "no receipts found"
+     * vs "AI found nothing"). Without this `candidates: []` looks
+     * identical regardless of whether the inbox was empty, the AI
+     * parsed nothing, or every find was a duplicate of an existing
+     * subscription. Old clients ignore unknown fields. */
+    summary: {
+      aiReturned: number;
+      droppedNoise: number;
+      droppedDup: number;
+    };
   }> {
     const startedAt = Date.now();
 
@@ -775,7 +786,17 @@ export class GmailScanService {
         },
       });
 
-      return { scanned: messages.length, candidates, durationMs, truncated };
+      return {
+        scanned: messages.length,
+        candidates,
+        durationMs,
+        truncated,
+        summary: {
+          aiReturned: rawCandidates.length,
+          droppedNoise: enriched.length - denoised.length,
+          droppedDup: denoised.length - candidates.length,
+        },
+      };
     } catch (err: any) {
       // Refund the daily-quota slot so an external-system failure (Gmail
       // 5xx, missing token, AI parse error) doesn't count against the
