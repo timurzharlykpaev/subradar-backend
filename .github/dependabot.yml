@@ -35,6 +35,28 @@ updates:
     # Major updates still come as individual PRs so we can review them
     # one-by-one (semver-major is where breaking changes happen).
     versioning-strategy: increase
+    # Ignore semver-major bumps for packages that have a history of
+    # breaking the build. Dependabot still files security advisories
+    # for these via GitHub's vulnerability alerts, but routine major
+    # version bumps stay out of the queue. To take a major bump,
+    # remove the package from this list, run `npm install <pkg>@latest`
+    # locally, fix any breaks, and ship as a normal feature commit.
+    # Lessons that produced this list:
+    #   - typescript@6: enabled `strictPropertyInitialization` by
+    #     default, broke entity files repo-wide.
+    #   - uuid@14: ESM-only, breaks CommonJS imports.
+    #   - eslint@10: flat-config-only, breaks legacy .eslintrc setups.
+    #   - @types/node@25: forced types/lib mismatches that fired
+    #     strict-mode errors in TS 5/6.
+    ignore:
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      - dependency-name: uuid
+        update-types: ['version-update:semver-major']
+      - dependency-name: eslint
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     commit-message:
       prefix: chore(deps)
       prefix-development: chore(deps-dev)
