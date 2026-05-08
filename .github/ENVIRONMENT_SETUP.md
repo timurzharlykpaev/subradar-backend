@@ -12,10 +12,14 @@ doesn't get the approval gate. **Only a repo admin can configure this.**
 
 1. Navigate to: **GitHub → Settings → Environments → New environment**.
 2. Name: `prod`.
-3. **Required reviewers**: add at least one team member who must approve every
-   production deploy.
-4. **Wait timer**: `5` minutes — a last-chance window to cancel an approved
-   deploy before it actually runs.
+3. **Required reviewers**: only enable when there is more than one
+   maintainer on the project. For a solo-maintainer repo a self-approval
+   gate adds friction without real security value — the same person who
+   pushed approves the same push — and the wait-timer below provides a
+   stronger defence against accidental deploys.
+4. **Wait timer**: `5` minutes — a last-chance window to cancel an
+   approved/queued deploy before it actually runs. Keep this enabled even
+   when reviewers are disabled.
 5. **Deployment branches**: restrict to `main` only. This prevents accidental
    prod deploys from feature branches triggered via `workflow_dispatch`.
 6. *(Optional)* Also create a `dev` environment with no reviewers / no wait
