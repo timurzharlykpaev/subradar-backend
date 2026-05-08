@@ -56,6 +56,12 @@ export class GmailScanService {
   // Pagination chunk for the Gmail messages.list call. Gmail caps a
   // single response at 500; loop with `pageToken` for the rest.
   private readonly LIST_PAGE_SIZE = 500;
+  // Hard ceiling on how long Gmail messages.list pagination is allowed
+  // to spin. Without it, a pathological inbox could chain N pages * 15s
+  // timeout each (75s+ scan duration) and the user sees an indefinite
+  // spinner. 30s budget is generous for the realistic 1–2 page case
+  // and bails the rare 5+ page edge case before the user gives up.
+  private readonly LIST_PAGINATION_BUDGET_MS = 30_000;
   // Per-user daily scan quota. Numbers are deliberately conservative —
   // a typical Pro user runs 1 scan a week; 3/day covers re-scans if the
   // first run missed something the user added later. Team plans get a
@@ -88,15 +94,20 @@ export class GmailScanService {
    *     the email being a subscription, and the brand isn't even
    *     known — almost certainly a one-off (Amazon order, ticket
    *     purchase, etc.).
-   *   - confidence < 0.3 with no enrichment: the AI itself isn't sure
-   *     and we have no independent signal that this is real.
+   *   - confidence < 0.3 with no enrichment AND no email-extracted
+   *     price: nothing independent to corroborate; drop. If we got a
+   *     real charge ($X.XX printed in the email body), that's a
+   *     stronger signal than AI's self-reported confidence — keep.
    */
   private filterNoise(candidates: EmailCandidate[]): EmailCandidate[] {
     return candidates.filter((c) => {
       if (c.isCancellation) return false;
       const enriched = !!c.iconUrl || (c.availablePlans?.length ?? 0) > 0;
       if (!c.isRecurring && !enriched) return false;
-      if (c.confidence < 0.3 && !enriched) return false;
+      // amountFromEmail is the strongest "this is a real subscription"
+      // signal we have — a printed money figure on a sender's domain.
+      // Override the confidence floor when we have it.
+      if (c.confidence < 0.3 && !enriched && !c.amountFromEmail) return false;
       return true;
     });
   }
@@ -164,8 +175,18 @@ export class GmailScanService {
    * cached forever in `service_catalog`, so subsequent users for the
    * same brand pay zero — but a *first* scan over a pathological inbox
    * with 200 unknown brands could otherwise fan out hundreds of
-   * parallel `gpt-4o-mini` calls and burn the OpenAI budget. */
-  private readonly MAX_WEB_SEARCHES_PER_SCAN = 20;
+   * parallel `gpt-4o-mini` calls and burn the OpenAI budget.
+   *
+   * Tunable via env `GMAIL_MAX_WEB_SEARCHES_PER_SCAN` so we can dial
+   * up/down under cost-pressure or when bulk-loading the catalog from
+   * known-good brands. Default 20 fits the realistic case (≤20 unique
+   * unknown brands per scan).
+   */
+  private get MAX_WEB_SEARCHES_PER_SCAN(): number {
+    const raw = this.cfg.get<string>('GMAIL_MAX_WEB_SEARCHES_PER_SCAN');
+    const parsed = raw ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 20;
+  }
 
   /**
    * Enrich each AI-extracted candidate with catalog data: brand-correct
@@ -212,6 +233,13 @@ export class GmailScanService {
         const entry = catalogByName.get(normalized);
         if (!entry) return c;
 
+        // Catalog stores plan price as `priceMonthly` (per-month
+        // amount). When the candidate's billingPeriod isn't MONTHLY,
+        // surface a period-matched copy so the UI shows a number that
+        // matches the user's actual receipt cycle. Yearly billing on
+        // most services discounts ~17% off 12× monthly, but without
+        // the actual yearly figure in the catalog the safest default
+        // is `12 × monthly`. The user can edit before saving.
         const plans = (entry.plans ?? []).map((p: any) => ({
           name: String(p.name ?? ''),
           amount: Number(p.priceMonthly ?? p.amount ?? 0),
@@ -223,11 +251,37 @@ export class GmailScanService {
           .filter((p) => p.amount > 0)
           .sort((a, b) => a.amount - b.amount)[0];
 
+        const periodMultiplier = (period: string): number => {
+          switch (period) {
+            case 'YEARLY':
+              return 12;
+            case 'QUARTERLY':
+              return 3;
+            case 'WEEKLY':
+              return 0.231; // 1 / 4.33 weeks per month
+            case 'LIFETIME':
+            case 'ONE_TIME':
+              // Catalog has no one-shot price; fall back to monthly
+              // figure so the UI isn't blank — user will edit.
+              return 1;
+            case 'MONTHLY':
+            default:
+              return 1;
+          }
+        };
+
+        const fallbackAmount =
+          defaultPlan != null
+            ? Number(
+                (defaultPlan.amount * periodMultiplier(c.billingPeriod)).toFixed(2),
+              )
+            : c.amount;
+
         const enriched: EmailCandidate = {
           ...c,
           amount: c.amountFromEmail && c.amount > 0
             ? c.amount
-            : defaultPlan?.amount ?? c.amount,
+            : fallbackAmount,
           currency: c.amountFromEmail
             ? c.currency
             : defaultPlan?.currency ?? c.currency,
@@ -376,8 +430,20 @@ export class GmailScanService {
   private async listMessages(accessToken: string): Promise<string[]> {
     const query = this.buildQuery();
     const ids: string[] = [];
+    const paginationStart = Date.now();
     let pageToken: string | undefined;
+    let pages = 0;
     while (ids.length < this.MAX_MESSAGES) {
+      const elapsed = Date.now() - paginationStart;
+      if (elapsed > this.LIST_PAGINATION_BUDGET_MS) {
+        // Budget exhausted; surface what we have rather than chain
+        // another 15s page fetch. Logged so we can spot inboxes that
+        // consistently trip the cap and tune accordingly.
+        this.logger.warn(
+          `[gmail.scan][stage:list] budget exceeded after ${pages} pages, ${ids.length} ids`,
+        );
+        break;
+      }
       const remaining = this.MAX_MESSAGES - ids.length;
       const pageSize = Math.min(this.LIST_PAGE_SIZE, remaining);
       const params = new URLSearchParams({
@@ -401,6 +467,7 @@ export class GmailScanService {
       };
       const page = (json.messages ?? []).map((m) => m.id);
       ids.push(...page);
+      pages++;
       if (!json.nextPageToken || page.length === 0) break;
       pageToken = json.nextPageToken;
     }
@@ -582,15 +649,23 @@ export class GmailScanService {
         );
       }
 
+      // Stage tags in log lines make it trivial to grep prod logs and
+      // see which step a slow / failing scan got stuck on. Without
+      // them, "Gmail scan failed" gives no signal between Gmail API
+      // 5xx, Gmail token expired, OpenAI timeout, or catalog DB error.
+      const userTag = `[gmail.scan][user:${userId.slice(0, 8)}]`;
+      this.logger.log(`${userTag}[stage:list] starting…`);
+
       const accessToken = await this.getAccessToken(user.gmailRefreshToken);
       const ids = await this.listMessages(accessToken);
       this.logger.log(
-        `Gmail scan: user ${userId} (${maskEmail(user.gmailEmail ?? '')}) found ${ids.length} candidates`,
+        `${userTag}[stage:list] done — ${ids.length} ids (${maskEmail(user.gmailEmail ?? '')})`,
       );
 
       // Sequential fetch with a small concurrency cap. Gmail's per-user
       // rate limit is generous, but bursting 200 requests in parallel
       // can still trigger 429s; 5-at-a-time is a safe sweet spot.
+      this.logger.log(`${userTag}[stage:fetch] starting (${ids.length} msgs)…`);
       const messages: Array<{
         id: string;
         subject: string;
@@ -608,11 +683,27 @@ export class GmailScanService {
           if (m && m.snippet.length > 0) messages.push(m);
         }
       }
+      this.logger.log(
+        `${userTag}[stage:fetch] done — ${messages.length} non-empty`,
+      );
 
+      this.logger.log(`${userTag}[stage:ai-parse] starting…`);
       const rawCandidates = await this.ai.parseBulkEmails(messages, locale);
+      this.logger.log(
+        `${userTag}[stage:ai-parse] done — ${rawCandidates.length} candidates`,
+      );
+
+      this.logger.log(`${userTag}[stage:enrich] starting…`);
       const enriched = await this.enrichWithCatalog(rawCandidates);
+      this.logger.log(
+        `${userTag}[stage:enrich] done — ${enriched.filter((c) => c.iconUrl).length} enriched`,
+      );
+
       const denoised = this.filterNoise(enriched);
       const candidates = await this.filterDuplicates(userId, denoised);
+      this.logger.log(
+        `${userTag}[stage:filter] noise=${enriched.length - denoised.length} dup=${denoised.length - candidates.length} → ${candidates.length} returned`,
+      );
 
       // Refund the daily-quota slot if dedup hid every candidate as
       // already-imported. Re-running scan to discover *new* receipts is
