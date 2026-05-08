@@ -908,6 +908,13 @@ export interface EmailCandidate {
   // service catalog as a default. UI uses this to decide whether to show
   // a "verify amount" hint to the user before saving.
   amountFromEmail?: boolean;
+  // True when `amount` was filled from the catalog with a period
+  // multiplier (e.g. 12× monthly for a YEARLY receipt because the
+  // catalog only stores monthly tiers). Real-world annual prices
+  // typically discount the monthly figure by ~15–20%, so the value
+  // is an upper-bound estimate. UI surfaces this with an "approx"
+  // label so the user knows to verify before saving.
+  amountIsApproximate?: boolean;
   iconUrl?: string;
   serviceUrl?: string;
   cancelUrl?: string;

@@ -184,8 +184,19 @@ export class GmailScanService {
    */
   private get MAX_WEB_SEARCHES_PER_SCAN(): number {
     const raw = this.cfg.get<string>('GMAIL_MAX_WEB_SEARCHES_PER_SCAN');
-    const parsed = raw ? Number(raw) : NaN;
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 20;
+    if (raw == null || raw === '') return 20;
+    const parsed = Number(raw);
+    // Guard against typo'd or zero values silently disabling the
+    // catalog enrichment step. A literal "0" override is rejected
+    // here too — disabling the feature accidentally is more harmful
+    // than the cost of running it.
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      this.logger.warn(
+        `[gmail.scan] invalid GMAIL_MAX_WEB_SEARCHES_PER_SCAN="${raw}", falling back to 20`,
+      );
+      return 20;
+    }
+    return parsed;
   }
 
   /**
@@ -233,13 +244,18 @@ export class GmailScanService {
         const entry = catalogByName.get(normalized);
         if (!entry) return c;
 
-        // Catalog stores plan price as `priceMonthly` (per-month
-        // amount). When the candidate's billingPeriod isn't MONTHLY,
-        // surface a period-matched copy so the UI shows a number that
-        // matches the user's actual receipt cycle. Yearly billing on
-        // most services discounts ~17% off 12× monthly, but without
-        // the actual yearly figure in the catalog the safest default
-        // is `12 × monthly`. The user can edit before saving.
+        // Catalog stores plan price as `priceMonthly` only — no
+        // weekly/quarterly tiers, no annual-discount figure. So we
+        // backfill conservatively:
+        //   - candidate.billingPeriod === MONTHLY → use monthly price
+        //   - YEARLY → 12× monthly (upper bound; real annual usually
+        //     ~15–20% cheaper). Set `amountIsApproximate = true` so
+        //     UI marks it for review.
+        //   - WEEKLY / QUARTERLY / LIFETIME / ONE_TIME → leave the
+        //     amount the AI extracted (or 0). Multiplying a monthly
+        //     figure by 0.231 / 3 / 1 fabricates a number that doesn't
+        //     correspond to any real plan the service actually sells,
+        //     which is worse UX than an empty field the user fills.
         const plans = (entry.plans ?? []).map((p: any) => ({
           name: String(p.name ?? ''),
           amount: Number(p.priceMonthly ?? p.amount ?? 0),
@@ -251,31 +267,19 @@ export class GmailScanService {
           .filter((p) => p.amount > 0)
           .sort((a, b) => a.amount - b.amount)[0];
 
-        const periodMultiplier = (period: string): number => {
-          switch (period) {
-            case 'YEARLY':
-              return 12;
-            case 'QUARTERLY':
-              return 3;
-            case 'WEEKLY':
-              return 0.231; // 1 / 4.33 weeks per month
-            case 'LIFETIME':
-            case 'ONE_TIME':
-              // Catalog has no one-shot price; fall back to monthly
-              // figure so the UI isn't blank — user will edit.
-              return 1;
-            case 'MONTHLY':
-            default:
-              return 1;
+        let fallbackAmount = c.amount;
+        let amountIsApproximate = false;
+        if (!c.amountFromEmail && defaultPlan) {
+          if (c.billingPeriod === 'MONTHLY') {
+            fallbackAmount = defaultPlan.amount;
+          } else if (c.billingPeriod === 'YEARLY') {
+            fallbackAmount = Number((defaultPlan.amount * 12).toFixed(2));
+            amountIsApproximate = true;
           }
-        };
-
-        const fallbackAmount =
-          defaultPlan != null
-            ? Number(
-                (defaultPlan.amount * periodMultiplier(c.billingPeriod)).toFixed(2),
-              )
-            : c.amount;
+          // For WEEKLY / QUARTERLY / LIFETIME / ONE_TIME we leave
+          // c.amount alone (most often 0) — the UI will show "—" and
+          // the user enters the real figure.
+        }
 
         const enriched: EmailCandidate = {
           ...c,
@@ -291,6 +295,7 @@ export class GmailScanService {
               : c.category,
           iconUrl: entry.logoUrl ?? undefined,
           availablePlans: plans.length > 0 ? plans : undefined,
+          amountIsApproximate: amountIsApproximate || undefined,
         };
         return enriched;
       } catch (err: any) {
@@ -427,12 +432,23 @@ export class GmailScanService {
    * loop with `pageToken` so accounts with thousands of receipts still
    * get full coverage rather than a 200-message slice off the top.
    */
-  private async listMessages(accessToken: string): Promise<string[]> {
+  /**
+   * Returns the message ids plus a `truncated` flag indicating whether
+   * the inbox had MORE matches than we returned. The flag is true when
+   * we hit MAX_MESSAGES OR the pagination budget while Gmail still
+   * had a `nextPageToken` queued. Mobile uses this to render a
+   * "we couldn't read your whole inbox in one go" banner so the user
+   * doesn't think the scan is complete when it actually was capped.
+   */
+  private async listMessages(
+    accessToken: string,
+  ): Promise<{ ids: string[]; truncated: boolean }> {
     const query = this.buildQuery();
     const ids: string[] = [];
     const paginationStart = Date.now();
     let pageToken: string | undefined;
     let pages = 0;
+    let truncated = false;
     while (ids.length < this.MAX_MESSAGES) {
       const elapsed = Date.now() - paginationStart;
       if (elapsed > this.LIST_PAGINATION_BUDGET_MS) {
@@ -442,6 +458,7 @@ export class GmailScanService {
         this.logger.warn(
           `[gmail.scan][stage:list] budget exceeded after ${pages} pages, ${ids.length} ids`,
         );
+        truncated = pageToken != null;
         break;
       }
       const remaining = this.MAX_MESSAGES - ids.length;
@@ -471,7 +488,10 @@ export class GmailScanService {
       if (!json.nextPageToken || page.length === 0) break;
       pageToken = json.nextPageToken;
     }
-    return ids.slice(0, this.MAX_MESSAGES);
+    // Hit the message cap before exhausting Gmail's pageToken queue =
+    // truncated too.
+    if (ids.length >= this.MAX_MESSAGES && pageToken) truncated = true;
+    return { ids: ids.slice(0, this.MAX_MESSAGES), truncated };
   }
 
   /**
@@ -602,6 +622,10 @@ export class GmailScanService {
     scanned: number;
     candidates: EmailCandidate[];
     durationMs: number;
+    /** True when Gmail returned more matching messages than we read.
+     * Mobile renders a banner inviting the user to re-scan. Old
+     * clients (≤1.3.21) ignore unknown fields → no compat break. */
+    truncated: boolean;
   }> {
     const startedAt = Date.now();
 
@@ -657,9 +681,9 @@ export class GmailScanService {
       this.logger.log(`${userTag}[stage:list] starting…`);
 
       const accessToken = await this.getAccessToken(user.gmailRefreshToken);
-      const ids = await this.listMessages(accessToken);
+      const { ids, truncated } = await this.listMessages(accessToken);
       this.logger.log(
-        `${userTag}[stage:list] done — ${ids.length} ids (${maskEmail(user.gmailEmail ?? '')})`,
+        `${userTag}[stage:list] done — ${ids.length} ids${truncated ? ' (TRUNCATED)' : ''} (${maskEmail(user.gmailEmail ?? '')})`,
       );
 
       // Sequential fetch with a small concurrency cap. Gmail's per-user
@@ -751,7 +775,7 @@ export class GmailScanService {
         },
       });
 
-      return { scanned: messages.length, candidates, durationMs };
+      return { scanned: messages.length, candidates, durationMs, truncated };
     } catch (err: any) {
       // Refund the daily-quota slot so an external-system failure (Gmail
       // 5xx, missing token, AI parse error) doesn't count against the
