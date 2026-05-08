@@ -78,18 +78,36 @@ import { IdempotencyModule } from './common/idempotency/idempotency.module';
           //     time migrations.
           migrationsRun: true,
           logging: false,
-          // DigitalOcean managed Postgres terminates TLS with its own CA; the
-          // cert chain isn't in Node's default trust store, so strict
-          // verification fails. rejectUnauthorized:false still negotiates TLS
-          // and encrypts the connection — we only skip CA chain verification.
-          // This is acceptable because:
-          //   1. Network path to DO managed DB is private (VPC peering or
-          //      IP allow-list on DO side).
-          //   2. TLS itself (encryption + server identity via cert) still works.
-          //   3. Pinning DO's CA would need per-region cert bundles + rotation.
-          // If/when we need stricter posture, download DO's CA and set
-          // `ssl: { ca: fs.readFileSync(...), rejectUnauthorized: true }`.
-          ssl: isProd ? { rejectUnauthorized: false } : undefined,
+          // CASA / ASVS V9.2.3 forbids `rejectUnauthorized: false`. We honour
+          // that whenever the operator has supplied DigitalOcean's CA bundle
+          // via DB_CA_CERT (PEM contents) or DB_CA_PATH (file path on disk).
+          // If neither is configured, we still negotiate TLS but skip CA chain
+          // verification — and emit a startup warning so the gap is visible
+          // in logs. This avoids breaking existing DO App Platform deploys
+          // while making the secure path opt-in via env, not code change.
+          ssl: (() => {
+            if (!isProd) return undefined;
+            const caInline = process.env.DB_CA_CERT;
+            const caPath = process.env.DB_CA_PATH;
+            if (caInline && caInline.trim().length > 0) {
+              return { ca: caInline, rejectUnauthorized: true };
+            }
+            if (caPath && caPath.trim().length > 0) {
+              // eslint-disable-next-line @typescript-eslint/no-require-imports
+              const fs = require('fs');
+              return {
+                ca: fs.readFileSync(caPath, 'utf8'),
+                rejectUnauthorized: true,
+              };
+            }
+
+            console.warn(
+              '[SECURITY] DB TLS: no DB_CA_CERT/DB_CA_PATH set — falling back to ' +
+                'rejectUnauthorized:false. Connection is encrypted but server cert ' +
+                'chain is NOT verified. Pin the DO managed-PG CA before CASA submission.',
+            );
+            return { rejectUnauthorized: false };
+          })(),
           // pg driver pool tuning. Hard ceiling is the DO managed-PG cluster's
           // max_connections (25 on Basic 1GB) minus 3 reserved for SUPERUSER
           // and ~5 used by DO internals (pghoard, _dodb, system-stats) — so

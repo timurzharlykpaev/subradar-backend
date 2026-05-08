@@ -36,12 +36,18 @@ async function bootstrap() {
   // Heuristic: identify non-browser clients (mobile apps, server-to-server, curl)
   // which legitimately don't send an Origin header. Browsers always send Origin
   // on cross-site requests, so any web origin MUST be in the allowlist.
-  const NON_BROWSER_UA = /\b(okhttp|axios|expo|CFNetwork|Darwin|Dart|curl|Postman|node(?:-fetch)?)\b/i;
+  const NON_BROWSER_UA =
+    /\b(okhttp|axios|expo|CFNetwork|Darwin|Dart|curl|Postman|node(?:-fetch)?)\b/i;
   const isNonBrowserClient = (req: any): boolean => {
     const headers = req?.headers ?? {};
     // Explicit opt-in header our mobile client can send
     const clientHint = String(headers['x-client'] || '').toLowerCase();
-    if (clientHint === 'mobile' || clientHint === 'ios' || clientHint === 'android') return true;
+    if (
+      clientHint === 'mobile' ||
+      clientHint === 'ios' ||
+      clientHint === 'android'
+    )
+      return true;
     const ua = String(headers['user-agent'] || '');
     return NON_BROWSER_UA.test(ua);
   };
@@ -83,7 +89,8 @@ async function bootstrap() {
   ];
   app.use((req: any, res: any, next: any) => {
     if (!STATE_CHANGING.has(req.method)) return next();
-    if (ORIGIN_BYPASS_PREFIXES.some((p) => req.url?.startsWith(p))) return next();
+    if (ORIGIN_BYPASS_PREFIXES.some((p) => req.url?.startsWith(p)))
+      return next();
     const origin = req.headers?.origin;
     if (origin) return next(); // already validated by CORS middleware
     if (isNonBrowserClient(req)) return next();
@@ -103,6 +110,13 @@ async function bootstrap() {
       crossOriginOpenerPolicy: false,
       crossOriginResourcePolicy: false,
       contentSecurityPolicy: false,
+      // CASA Tier 2 / OWASP ASVS V14.4.5 want HSTS at >= 1 year with
+      // includeSubDomains and preload. Helmet's default is 180 days.
+      strictTransportSecurity: {
+        maxAge: 31_536_000, // 1 year
+        includeSubDomains: true,
+        preload: true,
+      },
     }),
   );
 

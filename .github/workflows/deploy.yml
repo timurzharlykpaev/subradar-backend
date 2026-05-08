@@ -140,6 +140,7 @@ jobs:
             GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
             GOOGLE_CALLBACK_URL=https://api.subradar.ai/api/v1/auth/google/callback
+            APPLE_CLIENT_ID=${{ secrets.APPLE_CLIENT_ID }}
             OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
             OPENAI_MODEL=gpt-4o
             DO_SPACES_KEY=${{ secrets.DO_SPACES_KEY }}
@@ -202,6 +203,7 @@ jobs:
             GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
             GOOGLE_CALLBACK_URL=https://api-dev.subradar.ai/api/v1/auth/google/callback
+            APPLE_CLIENT_ID=${{ secrets.APPLE_CLIENT_ID }}
             OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
             OPENAI_MODEL=gpt-4o
             DO_SPACES_KEY=${{ secrets.DO_SPACES_KEY }}

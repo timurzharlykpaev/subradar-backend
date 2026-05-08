@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import Decimal from 'decimal.js';
 import Redis from 'ioredis';
 import { In, IsNull, MoreThan, Repository } from 'typeorm';
+import { randomInt } from 'crypto';
 import { REDIS_CLIENT } from '../common/redis.module';
 import { Workspace } from './entities/workspace.entity';
 import {
@@ -168,7 +169,9 @@ export class WorkspaceService {
       throw new ForbiddenException('Only owner can remove members');
 
     // Find member before deleting to get userId for grace period
-    const member = await this.memberRepo.findOne({ where: { id: memberId, workspaceId } });
+    const member = await this.memberRepo.findOne({
+      where: { id: memberId, workspaceId },
+    });
     await this.memberRepo.delete({ id: memberId, workspaceId });
 
     if (member?.userId) {
@@ -244,10 +247,7 @@ export class WorkspaceService {
     do {
       code = Array.from(
         { length: 10 },
-        () =>
-          this.INVITE_CHARSET[
-            Math.floor(Math.random() * this.INVITE_CHARSET.length)
-          ],
+        () => this.INVITE_CHARSET[randomInt(0, this.INVITE_CHARSET.length)],
       ).join('');
       attempts++;
     } while (
@@ -302,9 +302,7 @@ export class WorkspaceService {
     // Check not already member
     if (
       workspace.members.some(
-        (m) =>
-          m.userId === userId &&
-          m.status === WorkspaceMemberStatus.ACTIVE,
+        (m) => m.userId === userId && m.status === WorkspaceMemberStatus.ACTIVE,
       )
     ) {
       throw new BadRequestException(
@@ -334,7 +332,9 @@ export class WorkspaceService {
     });
     const savedMember = await this.memberRepo.save(member);
 
-    this.logger.log(`Member joined workspace: userId=${userId} workspaceId=${workspace.id} via invite code`);
+    this.logger.log(
+      `Member joined workspace: userId=${userId} workspaceId=${workspace.id} via invite code`,
+    );
 
     await this.audit.log({
       userId,
@@ -375,7 +375,9 @@ export class WorkspaceService {
     }
 
     await this.memberRepo.remove(member);
-    this.logger.log(`Member left workspace: userId=${userId} workspaceId=${workspaceId}`);
+    this.logger.log(
+      `Member left workspace: userId=${userId} workspaceId=${workspaceId}`,
+    );
 
     await this.userBilling.applyTransition(
       userId,
@@ -385,7 +387,11 @@ export class WorkspaceService {
   }
 
   /** Owner/Admin can view any member's subscriptions within the workspace */
-  async getMemberSubscriptions(workspaceId: string, requesterId: string, memberId: string): Promise<Subscription[]> {
+  async getMemberSubscriptions(
+    workspaceId: string,
+    requesterId: string,
+    memberId: string,
+  ): Promise<Subscription[]> {
     // Try finding workspace by ID first, fallback to user's workspace
     let workspace = await this.workspaceRepo.findOne({
       where: { id: workspaceId },
@@ -399,17 +405,29 @@ export class WorkspaceService {
 
     const requester = workspace.members.find((m) => m.userId === requesterId);
     if (!requester) {
-      this.logger.warn(`getMemberSubscriptions: requester ${requesterId} not in workspace ${workspace.id}, members: ${workspace.members.map(m => m.userId).join(',')}`);
+      this.logger.warn(
+        `getMemberSubscriptions: requester ${requesterId} not in workspace ${workspace.id}, members: ${workspace.members.map((m) => m.userId).join(',')}`,
+      );
       throw new ForbiddenException('Not a member of this workspace');
     }
-    if (requester.role !== WorkspaceMemberRole.OWNER && requester.role !== WorkspaceMemberRole.ADMIN) {
-      throw new ForbiddenException('Only owner or admin can view member subscriptions');
+    if (
+      requester.role !== WorkspaceMemberRole.OWNER &&
+      requester.role !== WorkspaceMemberRole.ADMIN
+    ) {
+      throw new ForbiddenException(
+        'Only owner or admin can view member subscriptions',
+      );
     }
-    const target = workspace.members.find((m) => m.id === memberId || m.userId === memberId);
+    const target = workspace.members.find(
+      (m) => m.id === memberId || m.userId === memberId,
+    );
     if (!target) throw new NotFoundException('Member not found in workspace');
 
     return this.subRepo.find({
-      where: { userId: target.userId, status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]) },
+      where: {
+        userId: target.userId,
+        status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]),
+      },
       order: { amount: 'DESC' },
     });
   }
@@ -431,7 +449,9 @@ export class WorkspaceService {
     await this.inviteCodeRepo.delete({ workspaceId });
     await this.memberRepo.delete({ workspaceId });
     await this.workspaceRepo.remove(workspace);
-    this.logger.log(`Workspace deleted: ${workspaceId} by owner ${requesterId}`);
+    this.logger.log(
+      `Workspace deleted: ${workspaceId} by owner ${requesterId}`,
+    );
 
     await this.audit.log({
       userId: requesterId,
@@ -464,9 +484,7 @@ export class WorkspaceService {
       (requester.role !== WorkspaceMemberRole.OWNER &&
         requester.role !== WorkspaceMemberRole.ADMIN)
     ) {
-      throw new ForbiddenException(
-        'Only owner or admin can rename workspace',
-      );
+      throw new ForbiddenException('Only owner or admin can rename workspace');
     }
 
     workspace.name = name;
@@ -512,7 +530,10 @@ export class WorkspaceService {
     return map[period] ?? amount;
   }
 
-  async getWorkspaceAnalytics(userId: string, displayCurrencyOverride?: string) {
+  async getWorkspaceAnalytics(
+    userId: string,
+    displayCurrencyOverride?: string,
+  ) {
     const workspace = await this.getMyWorkspace(userId);
     if (!workspace) throw new NotFoundException('Workspace not found');
 
@@ -528,7 +549,9 @@ export class WorkspaceService {
     const requesting = await this.usersService.findById(userId);
     const overrideUpper = (displayCurrencyOverride || '').trim().toUpperCase();
     // Defend against junk input — only honour an ISO-4217-shaped 3-letter code.
-    const validOverride = /^[A-Z]{3}$/.test(overrideUpper) ? overrideUpper : null;
+    const validOverride = /^[A-Z]{3}$/.test(overrideUpper)
+      ? overrideUpper
+      : null;
     const displayCurrency =
       validOverride || (requesting?.displayCurrency as string) || 'USD';
 
@@ -586,11 +609,19 @@ export class WorkspaceService {
     const members = activeMembers.map((member) => {
       const subs = subsByUser.get(member.userId) || [];
       const monthlySpend = subs.reduce((sum, s) => {
-        const monthlyRaw = this.toMonthlyAmount(Number(s.amount), s.billingPeriod);
+        const monthlyRaw = this.toMonthlyAmount(
+          Number(s.amount),
+          s.billingPeriod,
+        );
         // Convert each sub from its currency into the owner's display
         // currency. Without this, a USD sub + RUB sub silently summed
         // raw numbers and produced nonsense totals on mixed teams.
-        const converted = this.convertSafe(monthlyRaw, s.currency, displayCurrency, rates);
+        const converted = this.convertSafe(
+          monthlyRaw,
+          s.currency,
+          displayCurrency,
+          rates,
+        );
         return sum + converted;
       }, 0);
       const yearlySpend = monthlySpend * 12;
@@ -609,7 +640,11 @@ export class WorkspaceService {
         }));
 
       const u = member.user;
-      const hasOwnPro = !!(u && u.billingSource === 'revenuecat' && !u.cancelAtPeriodEnd);
+      const hasOwnPro = !!(
+        u &&
+        u.billingSource === 'revenuecat' &&
+        !u.cancelAtPeriodEnd
+      );
       const gracePeriodEnd = u?.gracePeriodEnd ?? null;
       return {
         userId: member.userId,
@@ -621,7 +656,9 @@ export class WorkspaceService {
         subscriptionCount: subs.length,
         topSubscriptions,
         hasOwnPro,
-        gracePeriodEnd: gracePeriodEnd ? new Date(gracePeriodEnd).toISOString() : null,
+        gracePeriodEnd: gracePeriodEnd
+          ? new Date(gracePeriodEnd).toISOString()
+          : null,
       };
     });
 
@@ -717,7 +754,8 @@ export class WorkspaceService {
     if (!workspace) throw new NotFoundException('Workspace not found');
 
     const requester = workspace.members.find((m) => m.userId === requesterId);
-    if (!requester) throw new ForbiddenException('Not a member of this workspace');
+    if (!requester)
+      throw new ForbiddenException('Not a member of this workspace');
     if (
       requester.role !== WorkspaceMemberRole.OWNER &&
       requester.role !== WorkspaceMemberRole.ADMIN
@@ -788,7 +826,12 @@ export class WorkspaceService {
     const start = (opts.page - 1) * opts.limit;
     const items = enriched.slice(start, start + opts.limit);
     return {
-      pagination: { page: opts.page, limit: opts.limit, total, hasMore: start + items.length < total },
+      pagination: {
+        page: opts.page,
+        limit: opts.limit,
+        total,
+        hasMore: start + items.length < total,
+      },
       members: items,
     };
   }
@@ -805,9 +848,14 @@ export class WorkspaceService {
     });
     if (!workspace) throw new NotFoundException('Workspace not found');
     if (workspace.ownerId !== requesterId) {
-      throw new ForbiddenException('Only the workspace owner can view team overlaps');
+      throw new ForbiddenException(
+        'Only the workspace owner can view team overlaps',
+      );
     }
-    const latest = await this.analysisService.getLatest(requesterId, workspace.id);
+    const latest = await this.analysisService.getLatest(
+      requesterId,
+      workspace.id,
+    );
     const result = (latest as any)?.latestResult;
     const overlaps = Array.isArray(result?.overlaps) ? result.overlaps : [];
     const teamSavings = Number(result?.teamSavings) || 0;

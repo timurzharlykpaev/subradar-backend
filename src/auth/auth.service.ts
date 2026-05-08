@@ -28,7 +28,7 @@ import {
 import Redis from 'ioredis';
 import { Inject } from '@nestjs/common';
 import { REDIS_CLIENT } from '../common/redis.module';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { maskEmail } from '../common/utils/pii';
 
 @Injectable()
@@ -47,7 +47,8 @@ export class AuthService {
     const payload = { sub: user.id, email: user.email };
 
     // Support both JWT_ACCESS_SECRET (new) and JWT_SECRET (legacy) env var names
-    const jwtSecret = this.cfg.get('JWT_ACCESS_SECRET') || this.cfg.get('JWT_SECRET');
+    const jwtSecret =
+      this.cfg.get('JWT_ACCESS_SECRET') || this.cfg.get('JWT_SECRET');
     if (!jwtSecret) {
       throw new Error('JWT_ACCESS_SECRET env var is required');
     }
@@ -89,14 +90,18 @@ export class AuthService {
   async login(dto: LoginDto) {
     // Check lockout
     const lockKey = `auth:lockout:${dto.email}`;
-    const failCount = parseInt(await this.redis.get(lockKey) || '0');
+    const failCount = parseInt((await this.redis.get(lockKey)) || '0');
     if (failCount >= 10) {
-      throw new ForbiddenException('Account temporarily locked. Try again in 1 hour.');
+      throw new ForbiddenException(
+        'Account temporarily locked. Try again in 1 hour.',
+      );
     }
 
     const user = await this.usersService.findByEmailWithPassword(dto.email);
     if (!user || !user.password) {
-      this.logger.warn(`Login failed (user not found): ${maskEmail(dto.email)}`);
+      this.logger.warn(
+        `Login failed (user not found): ${maskEmail(dto.email)}`,
+      );
       await this.redis.incr(lockKey);
       await this.redis.expire(lockKey, 3600);
       throw new UnauthorizedException('Invalid credentials');
@@ -104,7 +109,9 @@ export class AuthService {
 
     const valid = await bcrypt.compare(dto.password, user.password);
     if (!valid) {
-      this.logger.warn(`Login failed (wrong password): ${maskEmail(dto.email)}`);
+      this.logger.warn(
+        `Login failed (wrong password): ${maskEmail(dto.email)}`,
+      );
       await this.redis.incr(lockKey);
       await this.redis.expire(lockKey, 3600);
       throw new UnauthorizedException('Invalid credentials');
@@ -137,12 +144,22 @@ export class AuthService {
 
   async appleLogin(dto: AppleAuthDto) {
     const { idToken, name } = dto;
+    // Fail closed: refuse to verify Apple tokens without an explicit
+    // audience binding. A hardcoded fallback would let any Apple-issued
+    // token for an unrelated bundle log into SubRadar.
+    const appleAudience = process.env.APPLE_CLIENT_ID;
+    if (!appleAudience) {
+      this.logger.error(
+        'APPLE_CLIENT_ID env var is not set — refusing Apple login',
+      );
+      throw new InternalServerErrorException('Apple Sign-In not configured');
+    }
     let payload: any;
     try {
       // Verify Apple token signature cryptographically using Apple's public keys
       const appleSignin = require('apple-signin-auth');
       payload = await appleSignin.verifyIdToken(idToken, {
-        audience: process.env.APPLE_CLIENT_ID || 'com.goalin.subradar',
+        audience: appleAudience,
         ignoreExpiration: false,
       });
     } catch (e: any) {
@@ -225,9 +242,13 @@ export class AuthService {
       const magicSecret = this.cfg.get('MAGIC_LINK_SECRET');
       if (magicSecret) {
         try {
-          const payload: any = this.jwtService.verify(token, { secret: magicSecret });
+          const payload: any = this.jwtService.verify(token, {
+            secret: magicSecret,
+          });
           if (payload?.sub) {
-            const byId = await this.usersService.findById(payload.sub).catch(() => null);
+            const byId = await this.usersService
+              .findById(payload.sub)
+              .catch(() => null);
             if (byId && byId.magicLinkToken === token) {
               user = byId;
             }
@@ -252,7 +273,10 @@ export class AuthService {
     return { user, ...tokens };
   }
 
-  private parseDurationMs(value: string | undefined, fallbackMs: number): number {
+  private parseDurationMs(
+    value: string | undefined,
+    fallbackMs: number,
+  ): number {
     if (!value) return fallbackMs;
     const m = /^(\d+)\s*([smhd])$/.exec(value.trim());
     if (!m) {
@@ -262,10 +286,13 @@ export class AuthService {
     const n = parseInt(m[1], 10);
     const unit = m[2];
     const mult =
-      unit === 's' ? 1000 :
-      unit === 'm' ? 60_000 :
-      unit === 'h' ? 3_600_000 :
-      86_400_000;
+      unit === 's'
+        ? 1000
+        : unit === 'm'
+          ? 60_000
+          : unit === 'h'
+            ? 3_600_000
+            : 86_400_000;
     return n * mult;
   }
 
@@ -273,7 +300,8 @@ export class AuthService {
     let payload: any;
     try {
       const refreshSecret = this.cfg.get('JWT_REFRESH_SECRET');
-      if (!refreshSecret) throw new Error('JWT_REFRESH_SECRET env var is required');
+      if (!refreshSecret)
+        throw new Error('JWT_REFRESH_SECRET env var is required');
       payload = this.jwtService.verify(token, {
         secret: refreshSecret,
       });
@@ -282,7 +310,8 @@ export class AuthService {
     }
 
     const user = await this.usersService.findById(payload.sub);
-    if (!user.refreshToken) throw new UnauthorizedException('Refresh token revoked');
+    if (!user.refreshToken)
+      throw new UnauthorizedException('Refresh token revoked');
     const valid = await bcrypt.compare(token, user.refreshToken);
     if (!valid) throw new UnauthorizedException('Refresh token revoked');
 
@@ -326,9 +355,12 @@ export class AuthService {
    * Verify a Google ID token (JWT) signature and audience using Google's public keys.
    * Fails closed on any mismatch between `aud`/`azp` and the list of accepted client IDs.
    */
-  private async verifyGoogleIdToken(
-    idToken: string,
-  ): Promise<{ email: string; name?: string; picture?: string; sub: string } | null> {
+  private async verifyGoogleIdToken(idToken: string): Promise<{
+    email: string;
+    name?: string;
+    picture?: string;
+    sub: string;
+  } | null> {
     const audiences = this.getGoogleAudiences();
     if (audiences.length === 0) {
       this.logger.warn('verifyGoogleIdToken: no GOOGLE_CLIENT_ID_* configured');
@@ -340,7 +372,10 @@ export class AuthService {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { OAuth2Client } = require('google-auth-library');
       const client = new OAuth2Client();
-      const ticket = await client.verifyIdToken({ idToken, audience: audiences });
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: audiences,
+      });
       const payload = ticket.getPayload();
       if (!payload?.email) return null;
       // Extra defense: verifyIdToken already validates `aud`, but re-check `azp`
@@ -356,7 +391,9 @@ export class AuthService {
         sub: payload.sub!,
       };
     } catch (e: any) {
-      this.logger.warn(`verifyGoogleIdToken: signature/audience check failed: ${e?.message}`);
+      this.logger.warn(
+        `verifyGoogleIdToken: signature/audience check failed: ${e?.message}`,
+      );
       return null;
     }
   }
@@ -383,17 +420,63 @@ export class AuthService {
       }
     }
 
-    // Path 2: fall back to treating the value as an access_token (web flow via
-    // @react-oauth/google useGoogleLogin). userinfo endpoint implicitly validates
-    // the token by issuing a profile — but it does NOT validate audience, so this
-    // path is riskier and should eventually be retired in favor of idToken.
+    // Path 2: access_token flow (web via @react-oauth/google useGoogleLogin).
+    // We must validate audience server-side via tokeninfo BEFORE trusting the
+    // userinfo response — without this an attacker can replay any Google
+    // access_token issued for any other app and log in as that user here.
     if (!email) {
+      const audiences = this.getGoogleAudiences();
+      if (audiences.length === 0) {
+        this.logger.warn(
+          'googleTokenLogin Path 2: no GOOGLE_CLIENT_ID_* configured',
+        );
+        throw new UnauthorizedException(
+          'Google access-token login not configured',
+        );
+      }
+      // Node 20 `fetch` has NO default timeout — without an explicit signal a
+      // hanging Google endpoint blocks the request handler indefinitely and
+      // an attacker with a slow upstream can starve the pool.
+      const fetchTimeoutMs = 5000;
       try {
-        const res = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const tokenInfoRes = await fetch(
+          `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(token)}`,
+          { signal: AbortSignal.timeout(fetchTimeoutMs) },
+        );
+        if (!tokenInfoRes.ok) {
+          throw new UnauthorizedException('Invalid Google access token');
+        }
+        const tokenInfo = (await tokenInfoRes.json()) as any;
+        // For access tokens `aud` is the canonical client_id binding.
+        // `azp` (authorized party) is set on ID tokens and may be present
+        // on access tokens via OIDC; require BOTH to be in the allowlist
+        // when both are present so a token with `aud` matching ours but
+        // `azp` foreign (or vice-versa) is rejected.
+        const tokenAud = tokenInfo?.aud;
+        const tokenAzp = tokenInfo?.azp;
+        const audOk = tokenAud
+          ? audiences.includes(tokenAud)
+          : tokenAzp
+            ? audiences.includes(tokenAzp)
+            : false;
+        const azpOk = tokenAzp ? audiences.includes(tokenAzp) : true;
+        if (!audOk || !azpOk) {
+          this.logger.warn(
+            `googleTokenLogin Path 2: audience mismatch (aud=${tokenAud}, azp=${tokenAzp})`,
+          );
+          throw new UnauthorizedException('Google token audience mismatch');
+        }
+        const res = await fetch(
+          `https://www.googleapis.com/oauth2/v3/userinfo`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(fetchTimeoutMs),
+          },
+        );
         if (!res.ok) {
-          throw new UnauthorizedException('Invalid Google token — userinfo request failed');
+          throw new UnauthorizedException(
+            'Invalid Google token — userinfo request failed',
+          );
         }
         const profile = (await res.json()) as any;
         if (!profile?.email) {
@@ -405,6 +488,11 @@ export class AuthService {
         providerId = profile.sub;
       } catch (e) {
         if (e instanceof UnauthorizedException) throw e;
+        // AbortError/network/JSON parse failures all collapse here — log
+        // the class so a Google outage isn't invisible.
+        this.logger.warn(
+          `googleTokenLogin Path 2: ${(e as any)?.name ?? 'error'}: ${(e as any)?.message ?? 'unknown'}`,
+        );
         throw new UnauthorizedException('Failed to verify Google token');
       }
     }
@@ -417,7 +505,9 @@ export class AuthService {
     try {
       let user = await this.usersService.findByEmail(email);
       if (!user) {
-        this.logger.log(`googleTokenLogin: creating new user ${maskEmail(email)}`);
+        this.logger.log(
+          `googleTokenLogin: creating new user ${maskEmail(email)}`,
+        );
         user = await this.usersService.create({
           email,
           name,
@@ -431,8 +521,13 @@ export class AuthService {
       this.logger.log(`googleTokenLogin: success for ${maskEmail(email)}`);
       return { user, ...tokens };
     } catch (dbError: any) {
-      this.logger.error(`googleTokenLogin DB error for ${maskEmail(email)}: ${dbError?.message}`, dbError?.stack);
-      throw new InternalServerErrorException('Authentication failed. Please try again.');
+      this.logger.error(
+        `googleTokenLogin DB error for ${maskEmail(email)}: ${dbError?.message}`,
+        dbError?.stack,
+      );
+      throw new InternalServerErrorException(
+        'Authentication failed. Please try again.',
+      );
     }
   }
 
@@ -463,16 +558,21 @@ export class AuthService {
       );
       throw new ForbiddenException('E2E seed accounts disabled');
     }
-    const code = isBypass
-      ? '000000'
-      : Math.floor(100000 + Math.random() * 900000).toString();
-    await this.redis.set(`otp:${dto.email}`, code, 'EX', 900);
+    const code = isBypass ? '000000' : randomInt(100000, 1000000).toString();
+    // Store sha256 of the code, never the plaintext. A Redis dump must not
+    // disclose any live login codes.
+    const codeHash = createHash('sha256').update(code).digest('hex');
+    await this.redis.set(`otp:${dto.email}`, codeHash, 'EX', 900);
 
     const otpEmail = buildOtpEmail({
       locale: dto.locale ?? 'en',
       code,
     });
-    await this.notifications.sendEmail(dto.email, otpEmail.subject, otpEmail.html);
+    await this.notifications.sendEmail(
+      dto.email,
+      otpEmail.subject,
+      otpEmail.html,
+    );
 
     const isProd = this.cfg.get('NODE_ENV') === 'production';
     return {
@@ -484,20 +584,36 @@ export class AuthService {
   async verifyOtp(dto: OtpVerifyDto) {
     // Check OTP lockout
     const otpLockKey = `auth:lockout:otp:${dto.email}`;
-    const otpFailCount = parseInt(await this.redis.get(otpLockKey) || '0');
+    const otpFailCount = parseInt((await this.redis.get(otpLockKey)) || '0');
     if (otpFailCount >= 10) {
-      throw new ForbiddenException('Too many failed OTP attempts. Try again in 1 hour.');
+      throw new ForbiddenException(
+        'Too many failed OTP attempts. Try again in 1 hour.',
+      );
     }
 
-    const stored = await this.redis.get(`otp:${dto.email}`);
-    if (!stored) {
-      this.logger.warn(`OTP verification failed (expired/not found): ${maskEmail(dto.email)}`);
+    const storedHash = await this.redis.get(`otp:${dto.email}`);
+    if (!storedHash) {
+      this.logger.warn(
+        `OTP verification failed (expired/not found): ${maskEmail(dto.email)}`,
+      );
       await this.redis.incr(otpLockKey);
       await this.redis.expire(otpLockKey, 3600);
       throw new UnauthorizedException('OTP expired or not found');
     }
-    if (stored !== dto.code) {
-      this.logger.warn(`OTP verification failed (wrong code): ${maskEmail(dto.email)}`);
+    const submittedHash = createHash('sha256').update(dto.code).digest('hex');
+    // Constant-time compare: short-circuiting `!==` on the hex string would
+    // leak prefix-match length via timing. With a per-email lockout this is
+    // hard to exploit, but auditors flag non-timing-safe compares on sight,
+    // and an attacker iterating across many emails amortises the budget.
+    const storedBuf = Buffer.from(storedHash, 'hex');
+    const submittedBuf = Buffer.from(submittedHash, 'hex');
+    const otpMatches =
+      storedBuf.length === submittedBuf.length &&
+      timingSafeEqual(storedBuf, submittedBuf);
+    if (!otpMatches) {
+      this.logger.warn(
+        `OTP verification failed (wrong code): ${maskEmail(dto.email)}`,
+      );
       await this.redis.incr(otpLockKey);
       await this.redis.expire(otpLockKey, 3600);
       throw new UnauthorizedException('Invalid OTP code');
