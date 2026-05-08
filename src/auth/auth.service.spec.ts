@@ -5,6 +5,7 @@ import { UnauthorizedException, ConflictException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AuditService } from '../common/audit/audit.service';
 import { REDIS_CLIENT } from '../common/redis.module';
 
 // Mock ioredis
@@ -64,6 +65,10 @@ const mockNotificationsService = {
   sendEmail: jest.fn().mockResolvedValue(undefined),
 };
 
+const mockAuditService = {
+  log: jest.fn().mockResolvedValue(undefined),
+};
+
 describe('AuthService', () => {
   let service: AuthService;
 
@@ -75,6 +80,7 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: NotificationsService, useValue: mockNotificationsService },
+        { provide: AuditService, useValue: mockAuditService },
         {
           provide: REDIS_CLIENT,
           useValue: {
