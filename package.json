@@ -104,6 +104,10 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.59.2"
   },
+  "overrides": {
+    "@tootallnate/once": "^3.0.1",
+    "fast-xml-builder": "^1.1.7"
+  },
   "jest": {
     "moduleFileExtensions": [
       "js",
