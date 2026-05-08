@@ -61,15 +61,36 @@ export class ClientErrorController {
       dto.stack ?? '',
     );
 
-    // Skip expected client errors from Telegram alerts
-    const SKIP_TELEGRAM = [
+    // Skip expected client errors from Telegram alerts. The endpoint
+    // accepts user-supplied content with no auth, so anything matched
+    // against `dto.message` can be spoofed (an attacker could craft
+    // "404 /ai/service-catalog ... <real error>" to hide a follow-up
+    // failure). For URL-shaped suppression we anchor on the structured
+    // `dto.url` field — same source of truth the logger already prints —
+    // and require the mobile platform tag, both of which the client
+    // sets directly via the API layer rather than embedding into a
+    // free-form message string.
+    const SKIP_BY_MESSAGE = [
       /401.*Unauthorized/i,
       /429.*Too Many/i,
       /ThrottlerException/i,
       /billing\/me.*401/i,
       /auth\/.*429/i,
     ];
-    const shouldAlert = !SKIP_TELEGRAM.some((p) => p.test(dto.message));
+    const SKIP_BY_URL_MOBILE = [
+      // 4xx on these endpoints is documented "service unknown" for
+      // old mobile builds (≤1.3.21) that forwarded the raw smart-input
+      // string as the service name. New builds guard on the client.
+      /\/ai\/service-catalog(\/|$)/i,
+      /\/ai\/lookup(\/|$)/i,
+    ];
+    const messageMatches = SKIP_BY_MESSAGE.some((p) => p.test(dto.message));
+    const urlMatches =
+      isMobile &&
+      typeof dto.url === 'string' &&
+      /\b(404|400|403)\b/.test(dto.message) &&
+      SKIP_BY_URL_MOBILE.some((p) => p.test(dto.url ?? ''));
+    const shouldAlert = !messageMatches && !urlMatches;
 
     if (shouldAlert) {
       const truncatedStack = dto.stack ? '\n\n<code>' + dto.stack.slice(0, 800) + '</code>' : '';

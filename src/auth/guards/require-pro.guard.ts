@@ -64,6 +64,11 @@ export class RequireProGuard implements CanActivate {
       );
     }
 
+    // Stash the effective access so downstream handlers (e.g. the Gmail
+    // scan controller, which needs to know whether to apply the Pro vs
+    // Team daily quota) don't redo the BillingService roundtrip.
+    req.proAccess = access;
+
     return true;
   }
 }

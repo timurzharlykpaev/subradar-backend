@@ -53,6 +53,7 @@ export class ReconciliationCron {
     );
 
     let changed = 0;
+    let failed = 0;
     for (const user of suspicious) {
       try {
         const did = await this.svc.reconcileOne(user, dryRun);
@@ -61,14 +62,21 @@ export class ReconciliationCron {
         // even while sharing the key with webhook lookups.
         await sleep(300);
       } catch (err: any) {
-        this.logger.error(
+        // RevenueCat returns transient 5xx/timeout occasionally. Log as
+        // warn (not error) so the alert pipeline stays quiet — operators
+        // see the per-cron summary `Reconciliation finished: X failed`
+        // and only escalate if that count climbs over time. The previous
+        // logger.error() emitted one Telegram alert per failed user,
+        // which produced 200+ alerts on a single RC outage.
+        failed++;
+        this.logger.warn(
           `Reconcile failed for ${user.id}: ${err?.message ?? err}`,
         );
       }
     }
 
     this.logger.log(
-      `Reconciliation: ${changed} users ${dryRun ? 'would be' : 'were'} changed`,
+      `Reconciliation: ${changed} users ${dryRun ? 'would be' : 'were'} changed, ${failed} failed`,
     );
   }
 }

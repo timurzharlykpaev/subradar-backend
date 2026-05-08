@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   InternalServerErrorException,
@@ -40,6 +42,14 @@ export class GmailScanService {
   private readonly MAX_MESSAGES = 200;
   private readonly LOOKBACK_DAYS = 90;
   private readonly SCAN_LOCK_TTL_S = 60;
+  // Per-user daily scan quota. Numbers are deliberately conservative —
+  // a typical Pro user runs 1 scan a week; 3/day covers re-scans if the
+  // first run missed something the user added later. Team plans get a
+  // higher cap because they roll up multiple members' inboxes.
+  private readonly DAILY_QUOTA: Record<string, number> = {
+    pro: 3,
+    organization: 10,
+  };
 
   constructor(
     @InjectRepository(User) private readonly userRepo: Repository<User>,
@@ -181,8 +191,73 @@ export class GmailScanService {
     }
   }
 
+  /** Build today's daily-quota Redis key for a user, in UTC. */
+  private dailyQuotaKey(userId: string, now: Date = new Date()): string {
+    const yyyymmdd = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}`;
+    return `gmail:scan:daily:${userId}:${yyyymmdd}`;
+  }
+
+  /**
+   * Atomically increment the per-user-per-UTC-day scan counter and reject
+   * if the plan-specific cap is exceeded. Pipelining INCR+EXPIRE in a
+   * single MULTI keeps the TTL set even if the pod dies right after the
+   * INCR — otherwise a crash between the two calls would leave the key
+   * with no TTL and lock the user out indefinitely.
+   *
+   * Throws `HttpException(429, { code: 'GMAIL_DAILY_LIMIT', nextResetAt })`
+   * when the user is at or above their quota. Decrements on rejection so
+   * a denied attempt doesn't permanently bump the counter.
+   *
+   * Note: the caller is responsible for decrementing the key if the
+   * scan fails *after* this method returns (e.g. Gmail 5xx, missing
+   * token). That keeps an external-system failure from counting against
+   * quota. See `scan()` for the exact try/finally pattern.
+   */
+  private async enforceDailyQuota(
+    userId: string,
+    plan: 'pro' | 'organization',
+  ): Promise<{ key: string; count: number }> {
+    const cap = this.DAILY_QUOTA[plan];
+    const key = this.dailyQuotaKey(userId);
+
+    if (!cap) {
+      return { key, count: 0 };
+    }
+
+    // Atomic INCR + EXPIRE. Re-applying EXPIRE on every call is harmless
+    // (Redis simply refreshes the TTL) and removes the race window that
+    // could leave the key without a TTL after a pod restart.
+    const pipe = this.redis.pipeline();
+    pipe.incr(key);
+    pipe.expire(key, 90_000);
+    const results = await pipe.exec();
+    const count = (results?.[0]?.[1] as number) ?? 0;
+
+    if (count > cap) {
+      await this.redis.decr(key);
+      const now = new Date();
+      const next = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + 1,
+        0, 0, 0, 0,
+      ));
+      throw new HttpException(
+        {
+          code: 'GMAIL_DAILY_LIMIT',
+          message: `Daily scan limit reached (${cap}/day on ${plan} plan). Try again later.`,
+          nextResetAt: next.toISOString(),
+          cap,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    return { key, count };
+  }
+
   async scan(
     userId: string,
+    plan: 'pro' | 'organization',
     locale = 'en',
     ctx?: { ipAddress?: string; userAgent?: string },
   ): Promise<{
@@ -191,7 +266,10 @@ export class GmailScanService {
     durationMs: number;
   }> {
     const startedAt = Date.now();
-    // Per-user lock: prevent tap-spam from burning the OpenAI budget.
+
+    // Per-user single-flight lock first. A double-tap rejects here
+    // without consuming a quota slot, so users can't accidentally burn
+    // their daily allowance with two fast taps.
     const lockKey = `gmail-scan-lock:${userId}`;
     const setNx = await this.redis.set(
       lockKey,
@@ -204,6 +282,22 @@ export class GmailScanService {
       throw new BadRequestException(
         'A scan is already running. Wait a minute and try again.',
       );
+    }
+
+    // Quota check is *after* the lock so a successful tap consumes
+    // exactly one slot. We track the bumped key so we can refund it if
+    // an upstream Gmail call fails — see the catch block below.
+    let quotaKey: string | null = null;
+    let quotaWasIncremented = false;
+    try {
+      const q = await this.enforceDailyQuota(userId, plan);
+      quotaKey = q.key;
+      quotaWasIncremented = q.count > 0;
+    } catch (err) {
+      // Quota-exceeded throws; release the lock before rethrowing so
+      // a quick retry tomorrow doesn't get a stale "scan in progress".
+      await this.redis.del(lockKey);
+      throw err;
     }
 
     try {
@@ -261,6 +355,19 @@ export class GmailScanService {
 
       return { scanned: messages.length, candidates, durationMs };
     } catch (err: any) {
+      // Refund the daily-quota slot so an external-system failure (Gmail
+      // 5xx, missing token, AI parse error) doesn't count against the
+      // user. Without this a transient outage could lock a Pro user out
+      // for the rest of the day.
+      if (quotaWasIncremented && quotaKey) {
+        try {
+          await this.redis.decr(quotaKey);
+        } catch (refundErr: any) {
+          this.logger.warn(
+            `Failed to refund Gmail quota for ${userId}: ${refundErr?.message ?? refundErr}`,
+          );
+        }
+      }
       await this.audit.log({
         userId,
         action: 'gmail.scan.failure',

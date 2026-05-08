@@ -130,6 +130,17 @@ export class GmailController {
   @UseGuards(JwtAuthGuard, RequireProGuard)
   @Throttle({ default: { limit: 2, ttl: 60_000 } })
   async scan(@Request() req, @Body() dto: ScanGmailDto) {
-    return this.scanService.scan(req.user.id, dto.locale ?? 'en', ctxFromReq(req));
+    // RequireProGuard stashed the resolved access on req so we don't
+    // re-roundtrip BillingService just to pick the daily-quota tier.
+    // Default to 'pro' if for any reason it wasn't populated — keeps the
+    // call safe rather than throwing on a missing field.
+    const plan: 'pro' | 'organization' =
+      req.proAccess?.plan === 'organization' ? 'organization' : 'pro';
+    return this.scanService.scan(
+      req.user.id,
+      plan,
+      dto.locale ?? 'en',
+      ctxFromReq(req),
+    );
   }
 }
