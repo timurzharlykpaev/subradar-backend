@@ -13,6 +13,17 @@ import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { User, AuthProvider } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AuditService } from '../common/audit/audit.service';
+
+/**
+ * Optional caller context passed by the controller. Carries observability
+ * metadata that the audit-log row should include but isn't required for
+ * the auth operation itself. Callers (specs, internal flows) may omit it.
+ */
+export interface AuthContext {
+  ipAddress?: string;
+  userAgent?: string;
+}
 import {
   buildMagicLinkEmail,
   buildOtpEmail,
@@ -41,7 +52,39 @@ export class AuthService {
     private readonly cfg: ConfigService,
     private readonly notifications: NotificationsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly audit: AuditService,
   ) {}
+
+  /**
+   * Helper: emit an auth-event audit row. CASA / ASVS V7.2.1 requires
+   * login success/failure, password change, OAuth grant, refresh, logout
+   * to be auditable. Wrapping the call here keeps the call sites short and
+   * lets us add fields uniformly later (geoip, device fingerprint, etc.).
+   *
+   * `metadata.email` is always masked — full PII does not belong in audit.
+   */
+  private async auditAuth(
+    action: string,
+    opts: {
+      userId?: string | null;
+      email?: string | null;
+      reason?: string;
+      ctx?: AuthContext;
+      extra?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    const metadata: Record<string, unknown> = {};
+    if (opts.email) metadata.emailMasked = maskEmail(opts.email);
+    if (opts.reason) metadata.reason = opts.reason;
+    if (opts.extra) Object.assign(metadata, opts.extra);
+    await this.audit.log({
+      action,
+      userId: opts.userId ?? null,
+      ipAddress: opts.ctx?.ipAddress ?? null,
+      userAgent: opts.ctx?.userAgent ?? null,
+      metadata: Object.keys(metadata).length > 0 ? metadata : null,
+    });
+  }
 
   private generateTokens(user: User) {
     const payload = { sub: user.id, email: user.email };
@@ -58,20 +101,39 @@ export class AuthService {
       throw new Error('JWT_REFRESH_SECRET env var is required');
     }
 
+    // JWT iss/aud claims (ASVS V3.7.1). Set on every NEW token issued; the
+    // verifier (jwt.strategy) accepts tokens without these claims during a
+    // grace window so existing JWTs in mobile AsyncStorage / web cookies
+    // keep working until they naturally expire (refresh: 30d, access: 7d).
+    // Once the grace window passes the verifier can be tightened to
+    // require iss/aud — TODO tracked separately.
+    const issuer = this.cfg.get<string>('JWT_ISSUER', 'subradar-api');
+    const audience = this.cfg.get<string>('JWT_AUDIENCE', 'subradar-clients');
     const accessToken = this.jwtService.sign(payload, {
       secret: jwtSecret,
       expiresIn: this.cfg.get('JWT_EXPIRES_IN', '7d'),
+      issuer,
+      audience,
     });
     const refreshToken = this.jwtService.sign(payload, {
       secret: jwtRefreshSecret,
       expiresIn: this.cfg.get('JWT_REFRESH_EXPIRES_IN', '30d'),
+      issuer,
+      audience,
     });
     return { accessToken, refreshToken };
   }
 
-  async register(dto: RegisterDto) {
+  async register(dto: RegisterDto, ctx?: AuthContext) {
     const existing = await this.usersService.findByEmail(dto.email);
-    if (existing) throw new ConflictException('Email already in use');
+    if (existing) {
+      await this.auditAuth('auth.register.failure', {
+        email: dto.email,
+        reason: 'email_taken',
+        ctx,
+      });
+      throw new ConflictException('Email already in use');
+    }
 
     const hashedPassword = await bcrypt.hash(dto.password, 12);
     const user = await this.usersService.create({
@@ -82,16 +144,27 @@ export class AuthService {
     });
 
     this.logger.log(`Account created: ${maskEmail(dto.email)}`);
+    await this.auditAuth('auth.register.success', {
+      userId: user.id,
+      email: dto.email,
+      ctx,
+      extra: { provider: 'local' },
+    });
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, ctx?: AuthContext) {
     // Check lockout
     const lockKey = `auth:lockout:${dto.email}`;
     const failCount = parseInt((await this.redis.get(lockKey)) || '0');
     if (failCount >= 10) {
+      await this.auditAuth('auth.login.failure', {
+        email: dto.email,
+        reason: 'lockout',
+        ctx,
+      });
       throw new ForbiddenException(
         'Account temporarily locked. Try again in 1 hour.',
       );
@@ -104,6 +177,11 @@ export class AuthService {
       );
       await this.redis.incr(lockKey);
       await this.redis.expire(lockKey, 3600);
+      await this.auditAuth('auth.login.failure', {
+        email: dto.email,
+        reason: 'unknown_user',
+        ctx,
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -114,6 +192,12 @@ export class AuthService {
       );
       await this.redis.incr(lockKey);
       await this.redis.expire(lockKey, 3600);
+      await this.auditAuth('auth.login.failure', {
+        userId: user.id,
+        email: dto.email,
+        reason: 'wrong_password',
+        ctx,
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -121,13 +205,20 @@ export class AuthService {
     await this.redis.del(lockKey);
 
     this.logger.log(`Login success: ${maskEmail(dto.email)}`);
+    await this.auditAuth('auth.login.success', {
+      userId: user.id,
+      email: dto.email,
+      ctx,
+      extra: { provider: 'local' },
+    });
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
 
-  async googleLogin(googleUser: any) {
+  async googleLogin(googleUser: any, ctx?: AuthContext) {
     let user = await this.usersService.findByEmail(googleUser.email);
+    const isNew = !user;
     if (!user) {
       user = await this.usersService.create({
         email: googleUser.email,
@@ -137,12 +228,18 @@ export class AuthService {
         providerId: googleUser.providerId,
       });
     }
+    await this.auditAuth('auth.login.success', {
+      userId: user.id,
+      email: googleUser.email,
+      ctx,
+      extra: { provider: 'google', flow: 'oauth_callback', isNew },
+    });
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
 
-  async appleLogin(dto: AppleAuthDto) {
+  async appleLogin(dto: AppleAuthDto, ctx?: AuthContext) {
     const { idToken, name } = dto;
     // Fail closed: refuse to verify Apple tokens without an explicit
     // audience binding. A hardcoded fallback would let any Apple-issued
@@ -152,6 +249,11 @@ export class AuthService {
       this.logger.error(
         'APPLE_CLIENT_ID env var is not set — refusing Apple login',
       );
+      await this.auditAuth('auth.login.failure', {
+        reason: 'apple_not_configured',
+        ctx,
+        extra: { provider: 'apple' },
+      });
       throw new InternalServerErrorException('Apple Sign-In not configured');
     }
     let payload: any;
@@ -164,13 +266,26 @@ export class AuthService {
       });
     } catch (e: any) {
       this.logger.warn(`Apple token verification failed: ${e?.message}`);
+      await this.auditAuth('auth.login.failure', {
+        reason: 'apple_token_invalid',
+        ctx,
+        extra: { provider: 'apple', errorClass: e?.name },
+      });
       throw new UnauthorizedException('Invalid Apple token');
     }
 
     const email = payload?.email;
-    if (!email) throw new BadRequestException('Email not provided by Apple');
+    if (!email) {
+      await this.auditAuth('auth.login.failure', {
+        reason: 'apple_no_email',
+        ctx,
+        extra: { provider: 'apple' },
+      });
+      throw new BadRequestException('Email not provided by Apple');
+    }
 
     let user = await this.usersService.findByEmail(email);
+    const isNew = !user;
     if (!user) {
       user = await this.usersService.create({
         email,
@@ -180,12 +295,18 @@ export class AuthService {
       });
     }
 
+    await this.auditAuth('auth.login.success', {
+      userId: user.id,
+      email,
+      ctx,
+      extra: { provider: 'apple', isNew },
+    });
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
 
-  async sendMagicLink(dto: MagicLinkDto) {
+  async sendMagicLink(dto: MagicLinkDto, ctx?: AuthContext) {
     let user = await this.usersService.findByEmail(dto.email);
     if (!user) {
       user = await this.usersService.create({
@@ -220,6 +341,11 @@ export class AuthService {
       magicEmail.html,
     );
 
+    await this.auditAuth('auth.magic_link.sent', {
+      userId: user.id,
+      email: dto.email,
+      ctx,
+    });
     // В dev — возвращаем ссылку в ответе для удобства тестирования
     return {
       message: 'Magic link sent',
@@ -227,8 +353,12 @@ export class AuthService {
     };
   }
 
-  async verifyMagicLink(token: string) {
+  async verifyMagicLink(token: string, ctx?: AuthContext) {
     if (!token || typeof token !== 'string') {
+      await this.auditAuth('auth.magic_link.failure', {
+        reason: 'invalid_token_shape',
+        ctx,
+      });
       throw new UnauthorizedException('Invalid or expired magic link');
     }
 
@@ -259,15 +389,34 @@ export class AuthService {
       }
     }
 
-    if (!user) throw new UnauthorizedException('Invalid or expired magic link');
-    if (!user.magicLinkExpiry || new Date() > new Date(user.magicLinkExpiry))
+    if (!user) {
+      await this.auditAuth('auth.magic_link.failure', {
+        reason: 'token_not_found',
+        ctx,
+      });
+      throw new UnauthorizedException('Invalid or expired magic link');
+    }
+    if (!user.magicLinkExpiry || new Date() > new Date(user.magicLinkExpiry)) {
+      await this.auditAuth('auth.magic_link.failure', {
+        userId: user.id,
+        email: user.email,
+        reason: 'token_expired',
+        ctx,
+      });
       throw new UnauthorizedException('Link expired');
+    }
 
     await this.usersService.update(user.id, {
       magicLinkToken: undefined,
       magicLinkExpiry: undefined,
     });
 
+    await this.auditAuth('auth.login.success', {
+      userId: user.id,
+      email: user.email,
+      ctx,
+      extra: { provider: 'magic_link' },
+    });
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
@@ -296,7 +445,7 @@ export class AuthService {
     return n * mult;
   }
 
-  async refresh(token: string) {
+  async refresh(token: string, ctx?: AuthContext) {
     let payload: any;
     try {
       const refreshSecret = this.cfg.get('JWT_REFRESH_SECRET');
@@ -306,14 +455,31 @@ export class AuthService {
         secret: refreshSecret,
       });
     } catch {
+      await this.auditAuth('auth.refresh.failure', {
+        reason: 'invalid_signature_or_expired',
+        ctx,
+      });
       throw new UnauthorizedException('Invalid refresh token');
     }
 
     const user = await this.usersService.findById(payload.sub);
-    if (!user.refreshToken)
+    if (!user.refreshToken) {
+      await this.auditAuth('auth.refresh.failure', {
+        userId: user.id,
+        reason: 'token_revoked',
+        ctx,
+      });
       throw new UnauthorizedException('Refresh token revoked');
+    }
     const valid = await bcrypt.compare(token, user.refreshToken);
-    if (!valid) throw new UnauthorizedException('Refresh token revoked');
+    if (!valid) {
+      await this.auditAuth('auth.refresh.failure', {
+        userId: user.id,
+        reason: 'token_mismatch',
+        ctx,
+      });
+      throw new UnauthorizedException('Refresh token revoked');
+    }
 
     // Absolute expiry guard — reject tokens older than JWT_REFRESH_EXPIRES_IN
     // even if the JWT `exp` claim says otherwise. Belt-and-suspenders in case
@@ -324,10 +490,19 @@ export class AuthService {
       const ageMs = Date.now() - new Date(user.refreshTokenIssuedAt).getTime();
       if (ageMs > maxAgeMs) {
         await this.usersService.updateRefreshToken(user.id, null);
+        await this.auditAuth('auth.refresh.failure', {
+          userId: user.id,
+          reason: 'absolute_expiry',
+          ctx,
+        });
         throw new UnauthorizedException('Refresh token expired');
       }
     }
 
+    await this.auditAuth('auth.refresh.success', {
+      userId: user.id,
+      ctx,
+    });
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return tokens;
@@ -398,8 +573,15 @@ export class AuthService {
     }
   }
 
-  async googleTokenLogin(token: string) {
-    if (!token) throw new UnauthorizedException('Token required');
+  async googleTokenLogin(token: string, ctx?: AuthContext) {
+    if (!token) {
+      await this.auditAuth('auth.login.failure', {
+        reason: 'google_token_missing',
+        ctx,
+        extra: { provider: 'google', flow: 'token' },
+      });
+      throw new UnauthorizedException('Token required');
+    }
 
     let email: string | undefined;
     let name: string | undefined;
@@ -504,6 +686,7 @@ export class AuthService {
     this.logger.log(`googleTokenLogin: email=${maskEmail(email)}`);
     try {
       let user = await this.usersService.findByEmail(email);
+      const isNew = !user;
       if (!user) {
         this.logger.log(
           `googleTokenLogin: creating new user ${maskEmail(email)}`,
@@ -516,6 +699,17 @@ export class AuthService {
           providerId,
         });
       }
+      await this.auditAuth('auth.login.success', {
+        userId: user.id,
+        email,
+        ctx,
+        extra: {
+          provider: 'google',
+          flow: 'token',
+          path: looksLikeJwt ? 'idToken' : 'accessToken',
+          isNew,
+        },
+      });
       const tokens = this.generateTokens(user);
       await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
       this.logger.log(`googleTokenLogin: success for ${maskEmail(email)}`);
@@ -525,13 +719,19 @@ export class AuthService {
         `googleTokenLogin DB error for ${maskEmail(email)}: ${dbError?.message}`,
         dbError?.stack,
       );
+      await this.auditAuth('auth.login.failure', {
+        email,
+        reason: 'db_error',
+        ctx,
+        extra: { provider: 'google', flow: 'token' },
+      });
       throw new InternalServerErrorException(
         'Authentication failed. Please try again.',
       );
     }
   }
 
-  async sendOtp(dto: OtpSendDto) {
+  async sendOtp(dto: OtpSendDto, ctx?: AuthContext) {
     // Fixed OTP for App Store review account. This is a live backdoor into any
     // email matching review@subradar.ai, so it must be explicitly enabled per
     // environment — in production we only flip ENABLE_REVIEW_ACCOUNT=true while
@@ -574,6 +774,11 @@ export class AuthService {
       otpEmail.html,
     );
 
+    await this.auditAuth('auth.otp.sent', {
+      email: dto.email,
+      ctx,
+      extra: { isBypass },
+    });
     const isProd = this.cfg.get('NODE_ENV') === 'production';
     return {
       message: 'OTP sent',
@@ -581,11 +786,16 @@ export class AuthService {
     };
   }
 
-  async verifyOtp(dto: OtpVerifyDto) {
+  async verifyOtp(dto: OtpVerifyDto, ctx?: AuthContext) {
     // Check OTP lockout
     const otpLockKey = `auth:lockout:otp:${dto.email}`;
     const otpFailCount = parseInt((await this.redis.get(otpLockKey)) || '0');
     if (otpFailCount >= 10) {
+      await this.auditAuth('auth.otp.failure', {
+        email: dto.email,
+        reason: 'lockout',
+        ctx,
+      });
       throw new ForbiddenException(
         'Too many failed OTP attempts. Try again in 1 hour.',
       );
@@ -598,6 +808,11 @@ export class AuthService {
       );
       await this.redis.incr(otpLockKey);
       await this.redis.expire(otpLockKey, 3600);
+      await this.auditAuth('auth.otp.failure', {
+        email: dto.email,
+        reason: 'expired_or_not_found',
+        ctx,
+      });
       throw new UnauthorizedException('OTP expired or not found');
     }
     const submittedHash = createHash('sha256').update(dto.code).digest('hex');
@@ -616,6 +831,11 @@ export class AuthService {
       );
       await this.redis.incr(otpLockKey);
       await this.redis.expire(otpLockKey, 3600);
+      await this.auditAuth('auth.otp.failure', {
+        email: dto.email,
+        reason: 'wrong_code',
+        ctx,
+      });
       throw new UnauthorizedException('Invalid OTP code');
     }
 
@@ -624,6 +844,7 @@ export class AuthService {
     await this.redis.del(otpLockKey);
 
     let user = await this.usersService.findByEmail(dto.email);
+    const isNew = !user;
     if (!user) {
       user = await this.usersService.create({
         email: dto.email,
@@ -633,13 +854,23 @@ export class AuthService {
     }
 
     this.logger.log(`Login success via OTP: ${maskEmail(dto.email)}`);
+    await this.auditAuth('auth.login.success', {
+      userId: user.id,
+      email: dto.email,
+      ctx,
+      extra: { provider: 'otp', isNew },
+    });
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
     return { user, ...tokens };
   }
 
-  async logout(userId: string) {
+  async logout(userId: string, ctx?: AuthContext) {
     await this.usersService.updateRefreshToken(userId, null);
+    await this.auditAuth('auth.logout', {
+      userId,
+      ctx,
+    });
     return { message: 'Logged out' };
   }
 }

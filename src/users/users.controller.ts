@@ -1,14 +1,18 @@
 import {
   Controller,
   Get,
+  Header,
   Patch,
   Delete,
   Body,
   UseGuards,
   Request,
   HttpCode,
+  Res,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UsersService } from './users.service';
 
@@ -22,6 +26,25 @@ export class UsersController {
   @Get('me')
   getMe(@Request() req) {
     return this.usersService.findById(req.user.id);
+  }
+
+  /**
+   * GDPR Article 20 — data portability. Returns the full user data set as
+   * a downloadable JSON file. Throttled tightly because building the export
+   * touches several large tables (subscriptions, receipts, reports) and a
+   * malicious client could otherwise hammer it.
+   */
+  @Get('me/export')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  async exportMe(@Request() req, @Res() res: Response) {
+    const data = await this.usersService.exportUserData(req.user.id);
+    const filename = `subradar-export-${req.user.id}-${Date.now()}.json`;
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${filename}"`,
+    );
+    res.json(data);
   }
 
   @Patch('me')

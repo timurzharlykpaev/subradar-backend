@@ -8,6 +8,7 @@ import {
   OneToOne,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
+import { AesGcmTransformer } from '../../common/crypto/aes-gcm-transformer';
 import { Subscription } from '../../subscriptions/entities/subscription.entity';
 import { PaymentCard } from '../../payment-cards/entities/payment-card.entity';
 import { UserBilling } from '../../billing/entities/user-billing.entity';
@@ -52,9 +53,24 @@ export class User {
   @Column({ type: 'enum', enum: AuthProvider, default: AuthProvider.LOCAL })
   provider: AuthProvider;
 
-  @Column({ nullable: true })
+  // Column-level AES-256-GCM (V8.3.7) for the strongest identity-linking
+  // PII. `providerId` is the Google/Apple `sub` claim — a permanent
+  // user-identifier across services — so encrypting it at rest is the
+  // highest-value column-level protection we get. The versioned-ciphertext
+  // transformer accepts legacy plaintext for graceful migration; new
+  // writes encrypt automatically.
+  @Column({ nullable: true, transformer: AesGcmTransformer })
+  @Exclude({ toPlainOnly: true })
   providerId: string;
 
+  // `fcmToken` is intentionally NOT encrypted: it's looked up by-value in
+  // `notifications.service.clearDeadToken` (`where: { fcmToken: token }`)
+  // when FCM reports a dead handle, and a non-deterministic GCM ciphertext
+  // produces a different value on every encrypt — equality search would
+  // never match. fcmToken is also rotated frequently (every Expo install /
+  // app update) and is bound to a device, not a long-lived identity, so
+  // its sensitivity profile is materially lower than providerId. CASA
+  // submission docs note this scoping decision.
   @Column({ nullable: true })
   fcmToken: string;
 
@@ -73,7 +89,7 @@ export class User {
   @Exclude({ toPlainOnly: true })
   magicLinkExpiry: Date;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, transformer: AesGcmTransformer })
   @Exclude({ toPlainOnly: true })
   lemonSqueezyCustomerId: string;
 
