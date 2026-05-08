@@ -22,6 +22,8 @@ const SECRET_PARAM_NAMES = [
   'accesstoken',
   'refresh_token',
   'refreshtoken',
+  'id_token',
+  'idtoken',
   'code',
   'sig',
   'signature',
@@ -30,6 +32,10 @@ const SECRET_PARAM_NAMES = [
   'apikey',
   'api_key',
   'secret',
+  'session',
+  'sessionid',
+  'session_id',
+  'cookie',
   'state',
 ];
 
@@ -101,14 +107,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
         : (exception as any)?.message || 'Internal server error';
     }
 
+    const safeUrl = redactSecrets(request.url);
+
     // Alert on 5xx errors (skip health/silent paths)
     const isSilent = SILENT_PATHS.some((p) => request.url.startsWith(p));
     if (status >= 500 && !isSilent && this.tg) {
       const errMsg = redactSecrets(
         typeof message === 'string' ? message : JSON.stringify(message),
       );
-      const stack = redactSecrets(rawStack)?.slice(0, 600) ?? '';
-      const safeUrl = redactSecrets(request.url);
+      const stack = redactSecrets(rawStack).slice(0, 600);
       const tgText =
         `🔴 <b>Server Error 5xx [PROD]</b>\n` +
         `<code>${request.method} ${safeUrl}</code>\n` +
@@ -121,19 +128,25 @@ export class AllExceptionsFilter implements ExceptionFilter {
         .catch(() => {});
     }
 
+    // Redact `path` in the response body too: client-side error trackers
+    // (Sentry, Crashlytics, Bugsnag, mobile log uploaders) ship the entire
+    // response back to third-party infra, so a token in the request URL
+    // would leak there even though the server logs/Telegram are clean.
     const body: Record<string, unknown> = {
       success: false,
       statusCode: status,
       timestamp: new Date().toISOString(),
-      path: request.url,
+      path: safeUrl,
       message,
       ...(correlationId ? { correlationId } : {}),
     };
 
     // Only expose the stack in non-production — never leak server internals to
     // clients in prod. Stack is already logged and sent to Telegram above.
+    // Apply redaction even in dev so secret-laden test runs don't end up in
+    // QA error trackers / Slack alerts.
     if (!isProd && rawStack) {
-      body.stack = rawStack;
+      body.stack = redactSecrets(rawStack);
     }
 
     response.status(status).json(body);

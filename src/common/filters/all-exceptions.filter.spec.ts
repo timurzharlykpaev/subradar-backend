@@ -87,4 +87,74 @@ describe('AllExceptionsFilter', () => {
     expect(call).toHaveProperty('timestamp');
     expect(typeof call.timestamp).toBe('string');
   });
+
+  describe('redactSecrets — response body', () => {
+    const SECRET_VALUES = {
+      jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123def456',
+      magicLinkToken:
+        'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6abcd',
+      otp: '987654',
+    };
+
+    it.each([
+      ['?token=', `?token=${SECRET_VALUES.magicLinkToken}`],
+      ['?code=', `?code=${SECRET_VALUES.otp}`],
+      ['?id_token=', `?id_token=${SECRET_VALUES.jwt}`],
+      ['?refresh_token=', `?refresh_token=${SECRET_VALUES.jwt}`],
+      ['?sig=', `?sig=abcdef0123456789`],
+      ['?session=', `?session=session-cookie-value`],
+    ])('redacts %s from response body.path', (label, qs) => {
+      mockRequest.url = `/auth/verify${qs}`;
+      const exception = new HttpException('Bad', 400);
+      filter.catch(exception, mockHost);
+      const body = mockResponse.json.mock.calls[0][0];
+      expect(body.path).toContain(label);
+      expect(body.path).toContain('REDACTED');
+      expect(body.path).not.toContain(qs.split('=')[1]);
+    });
+
+    it('redacts JWT-shaped strings inside the URL path', () => {
+      mockRequest.url = `/some/path/${SECRET_VALUES.jwt}/more`;
+      filter.catch(new HttpException('Bad', 400), mockHost);
+      const body = mockResponse.json.mock.calls[0][0];
+      expect(body.path).not.toContain(SECRET_VALUES.jwt);
+      expect(body.path).toContain('REDACTED_JWT');
+    });
+
+    it('strips CRLF for log injection defence (V7.1.4)', () => {
+      mockRequest.url = '/test\r\n[FAKE] forged log line';
+      filter.catch(new HttpException('Bad', 400), mockHost);
+      const body = mockResponse.json.mock.calls[0][0];
+      expect(body.path).not.toMatch(/\r\n/);
+    });
+
+    it('redacts secrets in body.stack in non-prod', () => {
+      const prev = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+      try {
+        const err = new Error('boom');
+        err.stack = `Error: token=${SECRET_VALUES.jwt}\n  at /test`;
+        filter.catch(err, mockHost);
+        const body = mockResponse.json.mock.calls[0][0];
+        expect(body.stack).not.toContain(SECRET_VALUES.jwt);
+        expect(body.stack).toContain('REDACTED');
+      } finally {
+        process.env.NODE_ENV = prev;
+      }
+    });
+
+    it('does not expose body.stack in production', () => {
+      const prev = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      try {
+        const err = new Error('boom');
+        err.stack = 'Error: secret-stuff\n  at /test';
+        filter.catch(err, mockHost);
+        const body = mockResponse.json.mock.calls[0][0];
+        expect(body.stack).toBeUndefined();
+      } finally {
+        process.env.NODE_ENV = prev;
+      }
+    });
+  });
 });

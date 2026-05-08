@@ -28,7 +28,7 @@ import {
 import Redis from 'ioredis';
 import { Inject } from '@nestjs/common';
 import { REDIS_CLIENT } from '../common/redis.module';
-import { createHash, randomBytes, randomInt } from 'crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { maskEmail } from '../common/utils/pii';
 
 @Injectable()
@@ -434,18 +434,35 @@ export class AuthService {
           'Google access-token login not configured',
         );
       }
+      // Node 20 `fetch` has NO default timeout — without an explicit signal a
+      // hanging Google endpoint blocks the request handler indefinitely and
+      // an attacker with a slow upstream can starve the pool.
+      const fetchTimeoutMs = 5000;
       try {
         const tokenInfoRes = await fetch(
           `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(token)}`,
+          { signal: AbortSignal.timeout(fetchTimeoutMs) },
         );
         if (!tokenInfoRes.ok) {
           throw new UnauthorizedException('Invalid Google access token');
         }
         const tokenInfo = (await tokenInfoRes.json()) as any;
-        const tokenAud = tokenInfo?.aud || tokenInfo?.azp;
-        if (!tokenAud || !audiences.includes(tokenAud)) {
+        // For access tokens `aud` is the canonical client_id binding.
+        // `azp` (authorized party) is set on ID tokens and may be present
+        // on access tokens via OIDC; require BOTH to be in the allowlist
+        // when both are present so a token with `aud` matching ours but
+        // `azp` foreign (or vice-versa) is rejected.
+        const tokenAud = tokenInfo?.aud;
+        const tokenAzp = tokenInfo?.azp;
+        const audOk = tokenAud
+          ? audiences.includes(tokenAud)
+          : tokenAzp
+            ? audiences.includes(tokenAzp)
+            : false;
+        const azpOk = tokenAzp ? audiences.includes(tokenAzp) : true;
+        if (!audOk || !azpOk) {
           this.logger.warn(
-            `googleTokenLogin Path 2: audience mismatch (token aud=${tokenAud})`,
+            `googleTokenLogin Path 2: audience mismatch (aud=${tokenAud}, azp=${tokenAzp})`,
           );
           throw new UnauthorizedException('Google token audience mismatch');
         }
@@ -453,6 +470,7 @@ export class AuthService {
           `https://www.googleapis.com/oauth2/v3/userinfo`,
           {
             headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(fetchTimeoutMs),
           },
         );
         if (!res.ok) {
@@ -470,6 +488,11 @@ export class AuthService {
         providerId = profile.sub;
       } catch (e) {
         if (e instanceof UnauthorizedException) throw e;
+        // AbortError/network/JSON parse failures all collapse here — log
+        // the class so a Google outage isn't invisible.
+        this.logger.warn(
+          `googleTokenLogin Path 2: ${(e as any)?.name ?? 'error'}: ${(e as any)?.message ?? 'unknown'}`,
+        );
         throw new UnauthorizedException('Failed to verify Google token');
       }
     }
@@ -578,7 +601,16 @@ export class AuthService {
       throw new UnauthorizedException('OTP expired or not found');
     }
     const submittedHash = createHash('sha256').update(dto.code).digest('hex');
-    if (storedHash !== submittedHash) {
+    // Constant-time compare: short-circuiting `!==` on the hex string would
+    // leak prefix-match length via timing. With a per-email lockout this is
+    // hard to exploit, but auditors flag non-timing-safe compares on sight,
+    // and an attacker iterating across many emails amortises the budget.
+    const storedBuf = Buffer.from(storedHash, 'hex');
+    const submittedBuf = Buffer.from(submittedHash, 'hex');
+    const otpMatches =
+      storedBuf.length === submittedBuf.length &&
+      timingSafeEqual(storedBuf, submittedBuf);
+    if (!otpMatches) {
       this.logger.warn(
         `OTP verification failed (wrong code): ${maskEmail(dto.email)}`,
       );

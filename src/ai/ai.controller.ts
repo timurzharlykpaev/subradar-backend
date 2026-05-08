@@ -144,10 +144,14 @@ function resolveLocaleContext(
   };
 }
 
-// 30 req/min/user is well above legitimate use (a busy power-user might do
-// ~5 AI parses per minute) but cuts off any attempt to exhaust our OpenAI
-// budget by replaying the user's bearer token. Plan-level quotas in
-// `consumeAiRequest` apply on top — this is a hard ceiling.
+// @nestjs/throttler keys on client IP by default (NOT user id), so this is
+// a per-IP ceiling — two attackers behind the same NAT share the budget.
+// 30 req/min is well above legitimate use (a power-user does ~5 AI parses
+// per minute) but cuts off any attempt to exhaust the OpenAI budget by
+// replaying a bearer token. Plan-level quotas in `consumeAiRequest`
+// apply on top — that path IS keyed per user, so tighter per-user caps
+// are still enforced. To switch this throttle to per-user, override
+// `ThrottlerGuard.getTracker()` to return req.user.id.
 @ApiTags('ai')
 @ApiBearerAuth()
 @Throttle({ default: { limit: 30, ttl: 60_000 } })

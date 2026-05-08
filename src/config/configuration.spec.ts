@@ -1,4 +1,7 @@
-import configuration from './configuration';
+import configuration, {
+  DEV_JWT_ACCESS_SENTINEL,
+  DEV_JWT_REFRESH_SENTINEL,
+} from './configuration';
 
 describe('configuration', () => {
   it('returns default config values in non-prod', () => {
@@ -10,7 +13,9 @@ describe('configuration', () => {
     const prevDbHost = process.env.DB_HOST;
     const prevDbPort = process.env.DB_PORT;
     delete process.env.PORT;
-    delete process.env.NODE_ENV;
+    // NODE_ENV='development' so the dev sentinel branch fires; deleting it
+    // entirely would now (correctly) fail-closed.
+    process.env.NODE_ENV = 'development';
     delete process.env.JWT_SECRET;
     delete process.env.JWT_ACCESS_SECRET;
     delete process.env.JWT_REFRESH_SECRET;
@@ -20,10 +25,10 @@ describe('configuration', () => {
       const config = configuration();
       expect(config.port).toBe(3000);
       expect(['development', 'test']).toContain(config.nodeEnv);
-      // Dev-only sentinel — never used in prod.
-      expect(config.jwt.secret).toMatch(/^dev-only-/);
-      expect(config.jwt.refreshSecret).toMatch(/^dev-only-/);
-      expect(config.jwt.secret).not.toEqual(config.jwt.refreshSecret);
+      // Dev-only sentinels — exact constants exported from configuration.ts.
+      expect(config.jwt.secret).toBe(DEV_JWT_ACCESS_SENTINEL);
+      expect(config.jwt.refreshSecret).toBe(DEV_JWT_REFRESH_SENTINEL);
+      expect(DEV_JWT_ACCESS_SENTINEL).not.toBe(DEV_JWT_REFRESH_SENTINEL);
       expect(config.database.host).toBe('localhost');
       expect(config.database.port).toBe(5432);
     } finally {
@@ -46,22 +51,40 @@ describe('configuration', () => {
     delete process.env.PORT;
   });
 
-  it('throws in production when JWT secrets are missing', () => {
+  it.each(['production', 'staging', 'preview', 'PRODUCTION', ''])(
+    'throws when JWT secrets are missing and NODE_ENV=%p',
+    (nodeEnv) => {
+      const prevNodeEnv = process.env.NODE_ENV;
+      const prevJwtAccess = process.env.JWT_ACCESS_SECRET;
+      const prevJwtRefresh = process.env.JWT_REFRESH_SECRET;
+      delete process.env.JWT_ACCESS_SECRET;
+      delete process.env.JWT_REFRESH_SECRET;
+      process.env.NODE_ENV = nodeEnv;
+      try {
+        expect(() => configuration()).toThrow(/Missing required secret/);
+      } finally {
+        if (prevNodeEnv !== undefined) process.env.NODE_ENV = prevNodeEnv;
+        else delete process.env.NODE_ENV;
+        if (prevJwtAccess !== undefined)
+          process.env.JWT_ACCESS_SECRET = prevJwtAccess;
+        if (prevJwtRefresh !== undefined)
+          process.env.JWT_REFRESH_SECRET = prevJwtRefresh;
+      }
+    },
+  );
+
+  it('rejects whitespace-only secret values', () => {
     const prevNodeEnv = process.env.NODE_ENV;
-    const prevJwtAccess = process.env.JWT_ACCESS_SECRET;
-    const prevJwtRefresh = process.env.JWT_REFRESH_SECRET;
-    delete process.env.JWT_ACCESS_SECRET;
-    delete process.env.JWT_REFRESH_SECRET;
     process.env.NODE_ENV = 'production';
+    process.env.JWT_ACCESS_SECRET = '   \t  \n ';
+    process.env.JWT_REFRESH_SECRET = '   ';
     try {
       expect(() => configuration()).toThrow(/Missing required secret/);
     } finally {
       if (prevNodeEnv !== undefined) process.env.NODE_ENV = prevNodeEnv;
       else delete process.env.NODE_ENV;
-      if (prevJwtAccess !== undefined)
-        process.env.JWT_ACCESS_SECRET = prevJwtAccess;
-      if (prevJwtRefresh !== undefined)
-        process.env.JWT_REFRESH_SECRET = prevJwtRefresh;
+      delete process.env.JWT_ACCESS_SECRET;
+      delete process.env.JWT_REFRESH_SECRET;
     }
   });
 
