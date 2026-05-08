@@ -27,7 +27,7 @@ jobs:
           fi
 
       - name: Insert migration history into dev DB
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: 46.101.197.19
           username: root

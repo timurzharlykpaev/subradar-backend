@@ -116,7 +116,7 @@ jobs:
 
       - name: Write .env.prod to server
         if: steps.env.outputs.target == 'prod'
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: 46.101.197.19
           username: root
@@ -180,7 +180,7 @@ jobs:
 
       - name: Write .env.dev to server
         if: steps.env.outputs.target == 'dev'
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: 46.101.197.19
           username: root
@@ -243,7 +243,7 @@ jobs:
             echo "✅ .env.dev updated"
 
       - name: Deploy to server
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: 46.101.197.19
           username: root
