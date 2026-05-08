@@ -342,6 +342,30 @@ export class UsersService {
       await this.deleteRevenueCatSubscriber(id);
     }
 
+    // Revoke any outstanding Google Gmail grant. Limited Use compliance
+    // (Google API Services User Data Policy) requires we tell Google to
+    // forget the grant when the user deletes their SubRadar account —
+    // otherwise the refresh token would technically still be valid on
+    // Google's side until natural expiry. Best-effort: a Google outage
+    // shouldn't block local deletion. The encrypted column reads back
+    // as plaintext via the AesGcmTransformer.
+    if (existing?.gmailRefreshToken) {
+      try {
+        await fetch(
+          `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(existing.gmailRefreshToken)}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            signal: AbortSignal.timeout(5000),
+          },
+        );
+      } catch (err: any) {
+        this.logger.warn(
+          `Gmail revoke during deleteAccount failed for ${id}: ${err?.message ?? err}; continuing with local delete`,
+        );
+      }
+    }
+
     // Order matters: delete children before parents (workspaces own workspace_members
     // via FK; delete members first, then workspaces). FK-constrained deletes must
     // stay strict, but a few tables (push_tokens, older analysis tables) may not
