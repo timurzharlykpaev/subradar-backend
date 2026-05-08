@@ -142,8 +142,6 @@ jobs:
             GOOGLE_CALLBACK_URL=https://api.subradar.ai/api/v1/auth/google/callback
             APPLE_CLIENT_ID=${{ secrets.APPLE_CLIENT_ID }}
             DATA_ENCRYPTION_KEY=${{ secrets.DATA_ENCRYPTION_KEY }}
-            GOOGLE_GMAIL_CLIENT_ID=${{ secrets.GOOGLE_GMAIL_CLIENT_ID }}
-            GOOGLE_GMAIL_CLIENT_SECRET=${{ secrets.GOOGLE_GMAIL_CLIENT_SECRET }}
             GMAIL_REDIRECT_URI=https://api.subradar.ai/api/v1/gmail/callback
             OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
             OPENAI_MODEL=gpt-4o
@@ -209,8 +207,6 @@ jobs:
             GOOGLE_CALLBACK_URL=https://api-dev.subradar.ai/api/v1/auth/google/callback
             APPLE_CLIENT_ID=${{ secrets.APPLE_CLIENT_ID }}
             DATA_ENCRYPTION_KEY=${{ secrets.DATA_ENCRYPTION_KEY }}
-            GOOGLE_GMAIL_CLIENT_ID=${{ secrets.GOOGLE_GMAIL_CLIENT_ID }}
-            GOOGLE_GMAIL_CLIENT_SECRET=${{ secrets.GOOGLE_GMAIL_CLIENT_SECRET }}
             GMAIL_REDIRECT_URI=https://api-dev.subradar.ai/api/v1/gmail/callback
             OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
             OPENAI_MODEL=gpt-4o
