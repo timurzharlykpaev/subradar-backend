@@ -40,9 +40,21 @@ import { maskEmail } from '../common/utils/pii';
 @Injectable()
 export class GmailScanService {
   private readonly logger = new Logger(GmailScanService.name);
-  private readonly MAX_MESSAGES = 200;
-  private readonly LOOKBACK_DAYS = 90;
+  // Bumped from 200 → 500: an active Gmail user with 3+ years of
+  // billing history easily blows past 200 receipts even within a
+  // single year. 500 strikes a balance between recall and OpenAI cost
+  // (parseBulkEmails chunks the prompt internally).
+  private readonly MAX_MESSAGES = 500;
+  // Bumped from 90 → 365 days: yearly subscriptions (Adobe Annual,
+  // Netflix Annual, GitHub Pro yearly, domain registrations) only
+  // generate ONE receipt per year. With a 90-day window we'd silently
+  // miss every annual subscription the user has — which is the most
+  // forgotten kind. 365 captures the full cycle.
+  private readonly LOOKBACK_DAYS = 365;
   private readonly SCAN_LOCK_TTL_S = 60;
+  // Pagination chunk for the Gmail messages.list call. Gmail caps a
+  // single response at 500; loop with `pageToken` for the rest.
+  private readonly LIST_PAGE_SIZE = 500;
   // Per-user daily scan quota. Numbers are deliberately conservative —
   // a typical Pro user runs 1 scan a week; 3/day covers re-scans if the
   // first run missed something the user added later. Team plans get a
@@ -73,10 +85,14 @@ export class GmailScanService {
    * user will see on their card. We never overwrite an
    * `amountFromEmail = true` value with a catalog default.
    *
-   * `allowWebSearch = false` keeps catalog lookups DB-only — we don't
-   * burn an OpenAI call here because (a) the catalog is large enough
-   * that most popular services are already cached, and (b) the user's
-   * scan latency is more important than catalog completeness.
+   * Web search is enabled (`allowWebSearch = true`) so unknown services
+   * trigger an OpenAI lookup to populate the catalog. Cost matters,
+   * but the lookup result is persisted to `service_catalog` — the next
+   * user scanning the same brand pays $0 for it. The MarketDataService
+   * also caches a normalised-name lookup for 7 days. Per-scan cost cap:
+   * we only web-search candidates that are clearly recurring billable
+   * subscriptions (isRecurring && !isCancellation) so one-off
+   * "thank you for your order" mentions don't burn API calls.
    */
   private async enrichWithCatalog(
     candidates: EmailCandidate[],
@@ -86,7 +102,11 @@ export class GmailScanService {
       candidates.map(async (c) => {
         try {
           const normalized = this.market.normalizeServiceName(c.name);
-          const entry = await this.market.getMarketData(normalized, false);
+          const allowWebSearch = c.isRecurring && !c.isCancellation;
+          const entry = await this.market.getMarketData(
+            normalized,
+            allowWebSearch,
+          );
           if (!entry) return c;
 
           const plans = (entry.plans ?? []).map((p: any) => ({
@@ -180,34 +200,116 @@ export class GmailScanService {
     return json.access_token;
   }
 
-  /** Build the Gmail search query for billing receipts in the lookback window. */
+  /**
+   * Build the Gmail search query for billing receipts in the lookback
+   * window. The query is intentionally broad so we don't miss receipts
+   * just because Gmail Tabs are disabled or the receipt is in a
+   * non-English locale:
+   *
+   * - `category:purchases` is preferred when available (Tabs on)
+   * - Subject keyword list is multilingual: EN + RU + ES + DE + FR
+   *   covers the bulk of common SaaS/streaming receipt subjects we've
+   *   seen in real inboxes.
+   * - Sender-based heuristics catch billing addresses ("no-reply",
+   *   "billing", "invoice", "receipts") which fire for services that
+   *   don't put a money keyword in the subject (Spotify, Apple TV+,
+   *   bank-issued receipts, etc.).
+   *
+   * The downside of a broad query is more messages → more tokens to
+   * the AI parser. The OR'd structure keeps Gmail's index efficient,
+   * and the AI step deduplicates aggressively.
+   */
   private buildQuery(): string {
-    // Gmail's `category:purchases` covers most receipts. We also pick up
-    // common renewal-keyword-laden subjects in case category isn't
-    // populated (older accounts don't always have categories enabled).
     const after = new Date();
     after.setDate(after.getDate() - this.LOOKBACK_DAYS);
     const afterStr = `${after.getFullYear()}/${String(after.getMonth() + 1).padStart(2, '0')}/${String(after.getDate()).padStart(2, '0')}`;
-    return `(category:purchases OR subject:(receipt OR invoice OR subscription OR renewed OR "thank you for your")) after:${afterStr}`;
+    const subjectKeywords = [
+      // English
+      'receipt',
+      'invoice',
+      'subscription',
+      'subscribed',
+      'renewed',
+      'renewal',
+      'charged',
+      'payment',
+      '"thank you for your"',
+      'membership',
+      // Russian
+      'чек',
+      'счёт',
+      'счет',
+      'подписка',
+      'продление',
+      'оплата',
+      'квитанция',
+      // Spanish
+      'recibo',
+      'factura',
+      'suscripción',
+      'suscripcion',
+      'pago',
+      // German
+      'rechnung',
+      'beleg',
+      'abonnement',
+      'zahlung',
+      // French
+      'reçu',
+      'facture',
+      'abonnement',
+      'paiement',
+    ].join(' OR ');
+    const senderHints = [
+      'no-reply',
+      'noreply',
+      'billing',
+      'invoice',
+      'receipts',
+      'support',
+      'notifications',
+    ].join(' OR ');
+    return `(category:purchases OR subject:(${subjectKeywords}) OR from:(${senderHints})) after:${afterStr}`;
   }
 
-  /** List Gmail message IDs matching the billing query, capped at MAX_MESSAGES. */
+  /**
+   * List Gmail message IDs matching the billing query, paginated up to
+   * MAX_MESSAGES. Single Gmail API page maxes out at 500 messages; we
+   * loop with `pageToken` so accounts with thousands of receipts still
+   * get full coverage rather than a 200-message slice off the top.
+   */
   private async listMessages(accessToken: string): Promise<string[]> {
     const query = this.buildQuery();
-    const url = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${this.MAX_MESSAGES}&q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      throw new InternalServerErrorException(
-        `Gmail list failed: ${res.status}`,
-      );
+    const ids: string[] = [];
+    let pageToken: string | undefined;
+    while (ids.length < this.MAX_MESSAGES) {
+      const remaining = this.MAX_MESSAGES - ids.length;
+      const pageSize = Math.min(this.LIST_PAGE_SIZE, remaining);
+      const params = new URLSearchParams({
+        maxResults: String(pageSize),
+        q: query,
+      });
+      if (pageToken) params.set('pageToken', pageToken);
+      const url = `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) {
+        throw new InternalServerErrorException(
+          `Gmail list failed: ${res.status}`,
+        );
+      }
+      const json = (await res.json()) as {
+        messages?: Array<{ id: string }>;
+        nextPageToken?: string;
+      };
+      const page = (json.messages ?? []).map((m) => m.id);
+      ids.push(...page);
+      if (!json.nextPageToken || page.length === 0) break;
+      pageToken = json.nextPageToken;
     }
-    const json = (await res.json()) as {
-      messages?: Array<{ id: string }>;
-    };
-    return (json.messages ?? []).map((m) => m.id);
+    return ids.slice(0, this.MAX_MESSAGES);
   }
 
   /**
