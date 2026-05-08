@@ -12,12 +12,19 @@ name: Security
 
 on:
   push:
-    branches: [dev, main]
+    # Only on main: dev gets the same code minutes later via merge,
+    # so a per-dev-push security scan duplicates work without adding
+    # signal. The PR trigger below still scans every diff before it
+    # lands; the cron picks up advisories filed against unchanged code.
+    branches: [main]
   pull_request:
     branches: [dev, main]
   schedule:
     # Mondays 03:00 UTC — picks up advisories filed over the weekend.
     - cron: "0 3 * * 1"
+  # Manual trigger from the Actions UI for ad-hoc verification (e.g.
+  # after rotating a dependency outside of a PR).
+  workflow_dispatch: {}
 
 # Workflow-level permissions: every job that uploads SARIF needs
 # `security-events: write` (CodeQL Action API). Running with the bare
