@@ -42,6 +42,7 @@ const mockUsersService = {
   create: jest.fn().mockResolvedValue(mockUser),
   update: jest.fn().mockResolvedValue(mockUser),
   updateRefreshToken: jest.fn().mockResolvedValue(undefined),
+  bumpTokenVersion: jest.fn().mockResolvedValue(1),
 };
 
 const mockJwtService = {

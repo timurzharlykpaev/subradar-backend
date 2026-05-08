@@ -7,12 +7,23 @@ import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { CacheControlInterceptor } from './common/interceptors/cache-control.interceptor';
 import { TelegramAlertService } from './common/telegram-alert.service';
+import { JsonLogger } from './common/logging/json-logger';
 
 async function bootstrap() {
   // Disable Nest's built-in body parser. We register our own below with a
   // `verify` callback so we can capture the raw bytes needed for HMAC
   // verification of Lemon Squeezy (and future provider) webhooks.
-  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  // Use the JSON logger in non-dev environments so DigitalOcean Logs (and
+  // any other stdout-tail consumer) can index `level`/`context`/`msg`
+  // fields directly. Dev keeps the default colourful Nest logger because
+  // it's much easier to scan visually.
+  const useJsonLogger =
+    process.env.NODE_ENV === 'production' ||
+    process.env.LOG_FORMAT === 'json';
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: false,
+    logger: useJsonLogger ? new JsonLogger() : undefined,
+  });
 
   // Global JSON parser — captures `req.rawBody` on every request so that
   // webhook endpoints can verify signatures against the exact bytes we
