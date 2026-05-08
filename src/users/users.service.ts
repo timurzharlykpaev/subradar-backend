@@ -187,6 +187,23 @@ export class UsersService {
     });
   }
 
+  /**
+   * Bump `tokenVersion` so every outstanding JWT for this user is rejected
+   * by JwtStrategy.validate on the next request. Used by logout, password
+   * change, and any "revoke all sessions" admin action. Atomic, no race
+   * window.
+   */
+  async bumpTokenVersion(id: string): Promise<number> {
+    const result = await this.repo
+      .createQueryBuilder()
+      .update(User)
+      .set({ tokenVersion: () => '"tokenVersion" + 1' })
+      .where('id = :id', { id })
+      .returning('"tokenVersion"')
+      .execute();
+    return result.raw?.[0]?.tokenVersion ?? 0;
+  }
+
   async updatePreferences(
     id: string,
     prefs: Partial<{

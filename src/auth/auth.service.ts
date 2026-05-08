@@ -87,7 +87,15 @@ export class AuthService {
   }
 
   private generateTokens(user: User) {
-    const payload = { sub: user.id, email: user.email };
+    // Embed tokenVersion (V3.5.2). The JwtStrategy compares this against
+    // the User row on every authenticated request; bumping it on logout
+    // invalidates every outstanding access AND refresh token in one
+    // write, instead of waiting up to 7d for the access JWT to expire.
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      tv: user.tokenVersion ?? 0,
+    };
 
     // Support both JWT_ACCESS_SECRET (new) and JWT_SECRET (legacy) env var names
     const jwtSecret =
@@ -866,6 +874,11 @@ export class AuthService {
   }
 
   async logout(userId: string, ctx?: AuthContext) {
+    // Bump tokenVersion FIRST so the access JWT in the user's hand is
+    // invalidated immediately, then null the refresh token. Order matters:
+    // doing it the other way leaves a tiny window where the access JWT
+    // still works after the refresh has been revoked.
+    await this.usersService.bumpTokenVersion(userId);
     await this.usersService.updateRefreshToken(userId, null);
     await this.auditAuth('auth.logout', {
       userId,
