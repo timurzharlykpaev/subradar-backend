@@ -1,8 +1,10 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Delete,
   Get,
+  Post,
   Query,
   Request,
   Res,
@@ -10,9 +12,19 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RequireProGuard } from '../auth/guards/require-pro.guard';
 import { GmailService } from './gmail.service';
+import { GmailScanService } from './gmail-scan.service';
+
+class ScanGmailDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  locale?: string;
+}
 
 function ctxFromReq(req: any): { ipAddress?: string; userAgent?: string } {
   const xff = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0]?.trim();
@@ -24,7 +36,10 @@ function ctxFromReq(req: any): { ipAddress?: string; userAgent?: string } {
 @ApiTags('gmail')
 @Controller('gmail')
 export class GmailController {
-  constructor(private readonly gmailService: GmailService) {}
+  constructor(
+    private readonly gmailService: GmailService,
+    private readonly scanService: GmailScanService,
+  ) {}
 
   /**
    * Authenticated initiator: the client posts here to get a Google
@@ -99,5 +114,22 @@ export class GmailController {
   @UseGuards(JwtAuthGuard)
   disconnect(@Request() req) {
     return this.gmailService.disconnect(req.user.id, ctxFromReq(req));
+  }
+
+  /**
+   * Pro/Team-gated bulk scan. Reads up to 200 receipts from the last 90
+   * days, parses them through the AI, returns deduplicated subscription
+   * candidates. The mobile client then surfaces these in a "Review &
+   * import" sheet so the user picks which to add — no auto-import to
+   * keep the user in control. Throttled 1/min per user (the in-service
+   * Redis lock provides the actual single-flight enforcement; the
+   * decorator throttle is belt-and-suspenders).
+   */
+  @Post('scan')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RequireProGuard)
+  @Throttle({ default: { limit: 2, ttl: 60_000 } })
+  async scan(@Request() req, @Body() dto: ScanGmailDto) {
+    return this.scanService.scan(req.user.id, dto.locale ?? 'en', ctxFromReq(req));
   }
 }
