@@ -26,6 +26,7 @@ import { RedisModule } from './common/redis.module';
 import { AnalysisModule } from './analysis/analysis.module';
 import { FxModule } from './fx/fx.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { GmailModule } from './gmail/gmail.module';
 import { HealthModule } from './health/health.module';
 import { AuditModule } from './common/audit/audit.module';
 import { IdempotencyModule } from './common/idempotency/idempotency.module';
@@ -162,6 +163,7 @@ import { IdempotencyModule } from './common/idempotency/idempotency.module';
     AnalysisModule,
     FxModule,
     CatalogModule,
+    GmailModule,
     HealthModule,
     AuditModule,
     IdempotencyModule,
