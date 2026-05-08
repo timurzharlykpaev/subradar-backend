@@ -64,6 +64,17 @@ export class GmailController {
    * token (encrypted), and bounce the user back to the SubRadar app via
    * a deep link. The state HMAC carries the userId so we don't need a
    * session cookie.
+   *
+   * Redirect target is the mobile deep link (`subradar://settings/gmail`)
+   * by default, because the only consumer of this flow today is the
+   * mobile app and `expo-web-browser`'s `openAuthSessionAsync` listens
+   * for that scheme to know when to close the in-app browser. The
+   * earlier `https://app.subradar.ai/settings/gmail` target was a 404
+   * because no web route exists at that path and the Universal Links
+   * AASA only covers `/app/*`. When a web flow lands, override with
+   * `GMAIL_REDIRECT_FRONTEND` (e.g. `https://app.subradar.ai/app/gmail`)
+   * — the AASA already routes `/app/*` to the mobile binary too, so
+   * the same value works for both clients.
    */
   @Get('callback')
   async callback(
@@ -74,12 +85,13 @@ export class GmailController {
     @Query('error') error?: string,
   ): Promise<void> {
     const frontendUrl =
-      process.env.FRONTEND_URL || 'https://app.subradar.ai';
+      process.env.GMAIL_REDIRECT_FRONTEND || 'subradar://settings/gmail';
+    const sep = frontendUrl.includes('?') ? '&' : '?';
     if (error) {
       // User denied access on Google's consent screen, or Google
       // returned an error. Bounce back without a result.
       res.redirect(
-        `${frontendUrl}/settings/gmail?status=denied&error=${encodeURIComponent(error)}`,
+        `${frontendUrl}${sep}status=denied&error=${encodeURIComponent(error)}`,
       );
       return;
     }
@@ -93,11 +105,11 @@ export class GmailController {
         ctxFromReq(req),
       );
       res.redirect(
-        `${frontendUrl}/settings/gmail?status=connected&email=${encodeURIComponent(result.gmailEmail)}`,
+        `${frontendUrl}${sep}status=connected&email=${encodeURIComponent(result.gmailEmail)}`,
       );
     } catch (err: any) {
       res.redirect(
-        `${frontendUrl}/settings/gmail?status=error&message=${encodeURIComponent(err?.message ?? 'unknown')}`,
+        `${frontendUrl}${sep}status=error&message=${encodeURIComponent(err?.message ?? 'unknown')}`,
       );
     }
   }
