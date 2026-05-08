@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { UsersService } from './users.service';
 import { User } from './entities/user.entity';
 import { UserBilling } from '../billing/entities/user-billing.entity';
@@ -56,6 +57,14 @@ describe('UsersService', () => {
         {
           provide: ConfigService,
           useValue: { get: jest.fn(() => '') },
+        },
+        {
+          // exportUserData uses DataSource.getRepository(); tests that don't
+          // exercise that path get a stub that throws if accidentally used.
+          provide: DataSource,
+          useValue: {
+            getRepository: jest.fn(() => ({ find: jest.fn().mockResolvedValue([]) })),
+          },
         },
       ],
     }).compile();

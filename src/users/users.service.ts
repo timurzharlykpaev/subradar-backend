@@ -1,10 +1,14 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from './entities/user.entity';
 import { UserBilling } from '../billing/entities/user-billing.entity';
+import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { PaymentCard } from '../payment-cards/entities/payment-card.entity';
+import { Receipt } from '../receipts/entities/receipt.entity';
+import { Report } from '../reports/entities/report.entity';
 import { AuditService } from '../common/audit/audit.service';
 
 @Injectable()
@@ -17,7 +21,77 @@ export class UsersService {
     private readonly billingRepo: Repository<UserBilling>,
     private readonly audit: AuditService,
     private readonly cfg: ConfigService,
+    private readonly dataSource: DataSource,
   ) {}
+
+  /**
+   * GDPR Article 20 (data portability) — export everything we have on this
+   * user as a single JSON document the user can take elsewhere. Returns
+   * machine-readable structure; the controller is expected to serialise it
+   * with Content-Disposition so browsers offer a download.
+   *
+   * Audit logs are intentionally NOT included: they are an integrity record
+   * of admin / system access, not user-controlled data, and Article 20
+   * scopes "data which the data subject has provided." Audit retention
+   * policy is documented separately.
+   */
+  async exportUserData(userId: string): Promise<{
+    exportedAt: string;
+    schemaVersion: string;
+    user: unknown;
+    billing: unknown;
+    subscriptions: unknown[];
+    paymentCards: unknown[];
+    receipts: unknown[];
+    reports: unknown[];
+  }> {
+    const user = await this.findById(userId);
+    const billing = await this.billingRepo.findOne({ where: { userId } });
+    const subRepo = this.dataSource.getRepository(Subscription);
+    const cardRepo = this.dataSource.getRepository(PaymentCard);
+    const receiptRepo = this.dataSource.getRepository(Receipt);
+    const reportRepo = this.dataSource.getRepository(Report);
+
+    const [subscriptions, paymentCards, receipts, reports] = await Promise.all([
+      subRepo.find({ where: { userId } }),
+      cardRepo.find({ where: { userId } }),
+      receiptRepo.find({ where: { userId } }),
+      reportRepo.find({ where: { userId } }),
+    ]);
+
+    // Strip internal columns from the user row that are NOT user data:
+    // password hash, refresh token (the user already has the raw token),
+    // magic-link hash, FCM device token (transient).
+    const {
+      password: _pw,
+      refreshToken: _rt,
+      magicLinkToken: _ml,
+      fcmToken: _fcm,
+      ...userPublic
+    } = user as any;
+
+    await this.audit.log({
+      userId,
+      action: 'user.data_export',
+      metadata: {
+        subscriptions: subscriptions.length,
+        paymentCards: paymentCards.length,
+        receipts: receipts.length,
+        reports: reports.length,
+      },
+    });
+
+    return {
+      exportedAt: new Date().toISOString(),
+      schemaVersion: '1.0.0',
+      user: userPublic,
+      billing: billing ? { ...billing } : null,
+      subscriptions,
+      paymentCards,
+      receipts,
+      reports,
+    };
+  }
 
   async findById(id: string): Promise<User> {
     const user = await this.repo.findOne({ where: { id } });
