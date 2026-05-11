@@ -81,6 +81,15 @@ export interface PushI18n {
 
   /** Pro plan trial has already expired — user was just downgraded. */
   proTrialExpired: () => { title: string; body: string };
+
+  /**
+   * Apple/Google refund just landed — fired from the RC_REFUND webhook
+   * path. Body is deliberately neutral (no dollar amount or product
+   * name) because refund pushes can land long after the original
+   * charge and surface on the lock screen of a device the user may
+   * share with family.
+   */
+  refundProcessed: () => { title: string; body: string };
 }
 
 export const SUPPORTED_PUSH_LOCALES = [

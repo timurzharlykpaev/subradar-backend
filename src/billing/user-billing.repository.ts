@@ -150,6 +150,7 @@ export class UserBillingRepository {
         gracePeriodEnd: next.graceExpiresAt,
         gracePeriodReason: next.graceReason,
         billingIssueAt: next.billingIssueAt,
+        refundedAt: next.refundedAt,
       };
       await m.update(UserBilling, { userId }, updates);
 
@@ -196,6 +197,7 @@ export class UserBillingRepository {
       graceExpiresAt: row.gracePeriodEnd ?? null,
       graceReason: (row.gracePeriodReason as GraceReason) ?? null,
       billingIssueAt: row.billingIssueAt ?? null,
+      refundedAt: row.refundedAt ?? null,
     };
   }
 
@@ -211,6 +213,7 @@ export class UserBillingRepository {
       'graceExpiresAt',
       'graceReason',
       'billingIssueAt',
+      'refundedAt',
     ];
     for (const f of fields) {
       const av = a[f];

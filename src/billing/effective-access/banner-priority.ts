@@ -38,6 +38,13 @@ export interface BannerInput {
   isTeamOwner: boolean;
   hiddenSubscriptionsCount: number;
   hadProBefore: boolean;
+  /**
+   * Timestamp when the user was last refunded by Apple/Google (RC_REFUND
+   * transition). Null in every other state. Used to surface the
+   * "refund processed" banner for 7 days so the user understands why
+   * they lost Pro access — distinguishes refund from ordinary expiry.
+   */
+  refundedAt: Date | null;
 }
 
 export interface BannerResult {
@@ -139,6 +146,25 @@ export function computeBannerPriority(input: BannerInput): BannerResult {
     (input.plan === 'pro' || input.plan === 'organization')
   ) {
     return { priority: 'annual_upgrade', payload: { plan: input.plan } };
+  }
+
+  // Refund banner — surfaces for 7 days after Apple/Google reverses a
+  // charge so the user understands their downgrade was a refund, not a
+  // silent failure. Higher priority than win_back because "refund" is
+  // more specific (and more urgent for support / churn analysis).
+  if (input.refundedAt) {
+    const daysSinceRefund = Math.floor(
+      (now.getTime() - input.refundedAt.getTime()) / DAY_MS,
+    );
+    if (daysSinceRefund >= 0 && daysSinceRefund <= 7) {
+      return {
+        priority: 'refund',
+        payload: {
+          refundedAt: input.refundedAt.toISOString(),
+          daysSinceRefund,
+        },
+      };
+    }
   }
 
   if (

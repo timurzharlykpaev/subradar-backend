@@ -38,6 +38,7 @@ function userFixture(overrides: Record<string, unknown> = {}) {
     gracePeriodEnd: null,
     gracePeriodReason: null,
     billingIssueAt: null,
+        refundedAt: null,
     downgradedAt: null,
     aiRequestsUsed: 0,
     proInviteeEmail: null,

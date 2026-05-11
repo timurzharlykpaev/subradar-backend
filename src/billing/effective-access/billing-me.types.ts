@@ -20,6 +20,7 @@ export type BannerPriority =
   | 'expiration'
   | 'double_pay'
   | 'annual_upgrade'
+  | 'refund'
   | 'win_back'
   | 'none';
 
@@ -51,6 +52,15 @@ export interface BillingMeResponse {
     graceDaysLeft: number | null;
     trialEndsAt: string | null;
     billingIssueStartedAt: string | null;
+    /**
+     * Timestamp when the most recent Apple/Google refund was processed
+     * (RC_REFUND webhook). Null in every other state. Mobile shows a
+     * "refund processed" banner for 7 days after this stamp so the
+     * downgrade reads as a refund, not silent breakage. Field is
+     * optional on the wire so old mobile clients that don't know
+     * about it simply ignore it.
+     */
+    refundedAt?: string | null;
   };
   flags: {
     cancelAtPeriodEnd: boolean;

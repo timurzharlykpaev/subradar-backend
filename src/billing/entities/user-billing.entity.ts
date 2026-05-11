@@ -68,6 +68,14 @@ export class UserBilling {
   @Column({ type: 'timestamptz', nullable: true })
   billingIssueAt: Date | null;
 
+  /**
+   * Set by the state machine on RC_REFUND. Cleared on any transition
+   * back into `active` (new purchase / renewal / product change) so a
+   * returning customer doesn't keep seeing a stale refund banner.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  refundedAt: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

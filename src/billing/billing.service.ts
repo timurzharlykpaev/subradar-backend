@@ -21,6 +21,7 @@ import { WebhookEvent } from './entities/webhook-event.entity';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { OutboxService } from './outbox/outbox.service';
 import { TrialsService } from './trials/trials.service';
+import { pushT } from '../notifications/push-i18n';
 import { maskEmail } from '../common/utils/pii';
 import {
   mapRCEventToBillingEvent,
@@ -808,6 +809,26 @@ export class BillingService {
       if (billingEvent.type === 'RC_EXPIRATION') {
         await m.update(User, user.id, { downgradedAt: new Date() });
         user.downgradedAt = new Date();
+      }
+
+      // Refunds get a localized FCM push so the user understands why
+      // their access vanished. Pre-Phase-2 the user would silently lose
+      // Pro and never know it was a refund vs an ordinary expiration.
+      // Enqueued through the transactional outbox so a rollback above
+      // (e.g. workspace save fails) doesn't leak a misleading push.
+      if (billingEvent.type === 'RC_REFUND' && user.fcmToken) {
+        const { title, body } = pushT(user.locale).refundProcessed();
+        await this.outbox.enqueue(
+          'fcm.push',
+          {
+            token: user.fcmToken,
+            title,
+            body,
+            data: { type: 'refund_processed' },
+            userId: user.id,
+          },
+          m,
+        );
       }
 
       await this.audit.log({

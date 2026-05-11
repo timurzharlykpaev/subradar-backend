@@ -335,6 +335,7 @@ export class EffectiveAccessResolver {
       isTeamOwner,
       hiddenSubscriptionsCount: hiddenCount,
       hadProBefore: !!user.downgradedAt,
+      refundedAt: user.refundedAt,
     });
 
     const workspaceId =
@@ -370,6 +371,7 @@ export class EffectiveAccessResolver {
         graceDaysLeft,
         trialEndsAt: trialActive ? trial!.endsAt.toISOString() : null,
         billingIssueStartedAt: user.billingIssueAt?.toISOString() ?? null,
+        refundedAt: user.refundedAt?.toISOString() ?? null,
       },
       flags: {
         cancelAtPeriodEnd: user.cancelAtPeriodEnd,

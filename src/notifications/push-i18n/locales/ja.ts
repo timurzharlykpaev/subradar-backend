@@ -77,4 +77,9 @@ export const ja: PushI18n = {
     title: '🔓 無料トライアルが終了しました',
     body: 'SubRadar Pro に登録して、無制限アクセスを取り戻しましょう',
   }),
+
+  refundProcessed: () => ({
+    title: '返金が処理されました',
+    body: 'サブスクリプションが返金され、アクセスが削除されました',
+  }),
 };

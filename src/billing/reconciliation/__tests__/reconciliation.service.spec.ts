@@ -45,6 +45,7 @@ describe('ReconciliationService.reconcileOne', () => {
       gracePeriodEnd: null,
       gracePeriodReason: null,
       billingIssueAt: null,
+        refundedAt: null,
     };
 
     const changed = await svc.reconcileOne(user, false);

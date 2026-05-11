@@ -77,4 +77,9 @@ export const zh: PushI18n = {
     title: '🔓 您的免费试用已结束',
     body: '订阅 SubRadar Pro 以恢复无限制访问',
   }),
+
+  refundProcessed: () => ({
+    title: '退款已处理',
+    body: '您的订阅已退款,访问权限已移除',
+  }),
 };

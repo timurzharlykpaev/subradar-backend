@@ -13,6 +13,7 @@ const baseSnap: UserBillingSnapshot = {
   graceExpiresAt: null,
   graceReason: null,
   billingIssueAt: null,
+        refundedAt: null,
 };
 
 const emptyRc: RCSubscriberSnapshot = {

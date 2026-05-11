@@ -46,6 +46,7 @@ describe('UserBillingRepository', () => {
     gracePeriodEnd: null,
     gracePeriodReason: null,
     billingIssueAt: null,
+        refundedAt: null,
     ...overrides,
   });
 

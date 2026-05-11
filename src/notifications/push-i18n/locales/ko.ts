@@ -77,4 +77,9 @@ export const ko: PushI18n = {
     title: '🔓 무료 체험이 종료되었습니다',
     body: 'SubRadar Pro를 구독하여 무제한 액세스를 복구하세요',
   }),
+
+  refundProcessed: () => ({
+    title: '환불이 처리되었습니다',
+    body: '구독이 환불되었으며 액세스가 제거되었습니다',
+  }),
 };

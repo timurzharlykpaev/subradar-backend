@@ -23,6 +23,12 @@ export interface UserBillingSnapshot {
   graceExpiresAt: Date | null;
   graceReason: GraceReason;
   billingIssueAt: Date | null;
+  /**
+   * Set when an Apple/Google refund came through (RC_REFUND); null in
+   * every other state. Cleared by any transition into `active` so a
+   * resubscribing user doesn't carry a stale refund flag.
+   */
+  refundedAt: Date | null;
 }
 
 export type BillingEvent =
