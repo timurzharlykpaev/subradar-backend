@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
@@ -11,9 +11,10 @@ import {
   BillingState,
   GraceReason,
   Plan,
+  inferEventFromRcSnapshot,
 } from '../state-machine';
-import { AuditService } from '../../common/audit/audit.service';
 import { OutboxService } from '../outbox/outbox.service';
+import { UserBillingRepository } from '../user-billing.repository';
 
 /**
  * Reconciles the user's billing state with RevenueCat's source of truth.
@@ -36,8 +37,9 @@ export class ReconciliationService {
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly rc: RevenueCatClient,
-    private readonly audit: AuditService,
     private readonly outbox: OutboxService,
+    @Inject(forwardRef(() => UserBillingRepository))
+    private readonly userBilling: UserBillingRepository,
   ) {}
 
   /**
@@ -117,38 +119,56 @@ export class ReconciliationService {
       return true;
     }
 
-    // The User entity has `billingSource: string` without the `| null` side
-    // even though the column is nullable; cast to `any` to match the state
-    // machine's tri-state type without touching the entity schema.
-    await this.users.update(user.id, {
-      plan: next.plan,
-      billingStatus: next.state,
-      billingSource: next.billingSource as any,
-      billingPeriod: next.billingPeriod,
-      currentPeriodStart: next.currentPeriodStart,
-      currentPeriodEnd: next.currentPeriodEnd,
-      cancelAtPeriodEnd: next.cancelAtPeriodEnd,
-      gracePeriodEnd: next.graceExpiresAt,
-      gracePeriodReason: next.graceReason,
-      billingIssueAt: next.billingIssueAt,
+    // Previously this method did a raw `users.update()` against the
+    // `users` table — wrong on two counts after Phase 2:
+    //   1. billing columns now live in `user_billing`; writing the
+    //      legacy columns either no-ops or drifts the two tables.
+    //   2. it bypassed `applyTransition`, so the in-process
+    //      EffectiveAccess TTL cache stayed stale until the row's 60s
+    //      timer expired — users on this pod kept seeing the wrong
+    //      plan after a reconcile.
+    //
+    // Route through the same state-machine pipeline as webhooks: infer
+    // the event from the RC snapshot + current state, then run
+    // applyTransition which writes user_billing atomically + audits +
+    // invalidates the effective-access cache. We still keep the
+    // pre-computed `next` snapshot for the analytics + telegram
+    // payload so observability stays unchanged.
+    const event = inferEventFromRcSnapshot(rcSub, current);
+    if (!event) {
+      this.logger.warn(
+        `[reconciliation] user ${user.id.slice(0, 8)}: snapshot drift detected (${current.state} → ${next.state}) but no event mapping — manual review required`,
+      );
+      await this.outbox.enqueue('telegram.alert', {
+        text: `[reconciliation][unmapped] user=${user.id.slice(0, 8)} ${current.state} → ${next.state} — no state-machine event from RC snapshot`,
+      });
+      return false;
+    }
+
+    const result = await this.userBilling.applyTransition(user.id, event, {
+      actor: 'reconcile',
     });
 
-    await this.audit.log({
-      userId: user.id,
-      action: 'billing.reconciliation_fix',
-      resourceType: 'user',
-      resourceId: user.id,
-      metadata: { from: current.state, to: next.state },
-    });
+    if (!result.applied) {
+      // Either invalid_transition (logged to DLQ by applyTransition)
+      // or idempotent_noop (state machine considered them equal even
+      // though our JSON-equality check above didn't). Either way the
+      // user isn't stuck — return false so the cron counter only
+      // increments on real fixes.
+      this.logger.log(
+        `[reconciliation] user ${user.id.slice(0, 8)}: applyTransition no-op (${result.reason})`,
+      );
+      return false;
+    }
 
     await this.outbox.enqueue('amplitude.track', {
       event: 'billing.reconciliation_mismatch',
       userId: user.id,
-      properties: { from: current.state, to: next.state },
+      properties: { from: current.state, to: next.state, eventType: event.type },
     });
 
     await this.outbox.enqueue('telegram.alert', {
-      text: `[reconciliation] user=${user.id.slice(0, 8)} ${current.state} → ${next.state}`,
+      text: `[reconciliation] user=${user.id.slice(0, 8)} ${current.state} → ${next.state} (via ${event.type})`,
     });
 
     return true;
