@@ -844,7 +844,10 @@ Then extract:
 
 Each message includes a \`hints\` object pre-extracted by deterministic regex:
 - hints.candidateAmounts: top-3 money figures found in body/subject (raw text + parsed currency + numeric value). When the receipt has ONE dominant price (typical), it's the one you want; when several appear (upsell + actual charge), pick the one nearest a recurring cue or under the brand header.
-- hints.senderBrand: tentative brand name (curated registry hit OR domain-derived). Trust it when present unless the body clearly contradicts. Null for PSP-issued receipts (Stripe/Paddle/Link/Apple) — read the body for the merchant in that case.
+- hints.senderBrand: tentative brand name (curated registry hit OR domain-derived). Trust it when present unless the body clearly contradicts. Null for PSP-issued receipts (Stripe/Paddle/Link/Apple/Google) — read the body for the merchant in that case.
+  • For Apple-billed receipts (sender ends in apple.com / itunes.com) the body usually names the specific Apple product on the first line: "Apple TV+", "Apple One", "iCloud+", "Apple Music", "Apple Arcade", "Apple Fitness+". Use that exact name, not just "Apple".
+  • For Google-billed receipts (sender ends in google.com / googleplay) the body usually says "YouTube Premium", "YouTube Music", "Google One", "Google Workspace", or names a third-party Android-app subscription. Pull the specific product, not "Google".
+  • For Stripe/Paddle/Lemon Squeezy/Link/PayPal receipts the body names the actual merchant (e.g. "You will see a charge from LINK.COM*APPSCREENS.C on your statement" → the brand is AppScreens). Avoid attributing the merchant as "Stripe" or "PayPal".
 - hints.category: canonical category from the curated registry (STREAMING, MUSIC, AI_SERVICES, etc.). When present, use it as the category answer unless the body strongly suggests otherwise.
 - hints.defaultPeriod: typical billing cadence for this brand (MONTHLY or YEARLY). Use it as the default when the body doesn't print "/mo", "/yr", "monthly", "annually" etc.
 - hints.recurringCueCount / oneTimeCueCount: counts of recurring-shaped vs one-time-shaped phrases in the email. recurringCueCount ≥ 1 with no oneTimeCue is a strong recurring signal.
