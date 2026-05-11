@@ -40,6 +40,27 @@ import { randomUUID } from 'crypto';
  *   - All snippets stripped of HTML before LLM ingestion (defence in
  *     depth against prompt injection from receipt body content).
  */
+
+/**
+ * Live progress snapshot persisted alongside a background scan job.
+ * The mobile loader reads `stage` to pick the user-facing label and
+ * `current/total` to render an exact "X of Y emails" count. `total`
+ * is null while we don't yet know it (between accepting the scan
+ * request and the Gmail list returning).
+ */
+export type ScanProgressStage =
+  | 'listing'
+  | 'fetching'
+  | 'parsing'
+  | 'enriching'
+  | 'filtering';
+
+export interface ScanProgress {
+  stage: ScanProgressStage;
+  current?: number;
+  total?: number;
+}
+
 @Injectable()
 export class GmailScanService {
   private readonly logger = new Logger(GmailScanService.name);
@@ -116,6 +137,11 @@ export class GmailScanService {
    * Persisted shape of a scan job. Kept narrow on purpose — the result
    * payload mirrors the sync scan() response so the mobile client
    * renders it the same way regardless of which endpoint it came from.
+   *
+   * `progress` is updated continuously during a running job so the
+   * mobile loader can show real "X of Y emails processed" numbers
+   * instead of an opaque spinner. Fields are all optional because
+   * stage transitions update them incrementally, not always together.
    */
   private async writeJob(
     jobId: string,
@@ -126,6 +152,7 @@ export class GmailScanService {
       error?: { code?: string; message: string; statusCode?: number };
       startedAt: string;
       completedAt?: string;
+      progress?: ScanProgress;
     },
   ): Promise<void> {
     await this.redis.set(
@@ -134,6 +161,40 @@ export class GmailScanService {
       'EX',
       GmailScanService.JOB_TTL_S,
     );
+  }
+
+  /**
+   * Merge a progress update into the current job record without
+   * overwriting the rest of the state. Read-modify-write under no
+   * lock — the worst case in a race (two concurrent progress
+   * updates) is one update being lost, which only affects the
+   * polled UI smoothness, never the scan correctness.
+   *
+   * Fire-and-forget at callsites — Redis hiccups during a 500-msg
+   * scan shouldn't block the actual work.
+   */
+  private async mergeJobProgress(
+    jobId: string,
+    progress: ScanProgress,
+  ): Promise<void> {
+    try {
+      const raw = await this.redis.get(this.jobKey(jobId));
+      if (!raw) return;
+      const job = JSON.parse(raw);
+      // Don't overwrite terminal states with mid-flight progress
+      // (the worker might have already completed/failed between
+      // the last in-loop reportProgress call and this one landing).
+      if (job.status === 'completed' || job.status === 'failed') return;
+      job.progress = progress;
+      await this.redis.set(
+        this.jobKey(jobId),
+        JSON.stringify(job),
+        'EX',
+        GmailScanService.JOB_TTL_S,
+      );
+    } catch {
+      /* progress reporting is best-effort */
+    }
   }
 
   /**
@@ -243,7 +304,13 @@ export class GmailScanService {
     let result: any;
     let failedError: { message: string; statusCode?: number; code?: string } | null = null;
     try {
-      result = await this.scan(userId, plan, locale, ctx);
+      // Forward each stage update from scan() into the job record so
+      // /scan/status polls return real progress. Fire-and-forget — a
+      // slow Redis hop never blocks the scanner.
+      const onProgress = (p: ScanProgress) => {
+        void this.mergeJobProgress(jobId, p);
+      };
+      result = await this.scan(userId, plan, locale, { ...ctx, onProgress });
     } catch (err: any) {
       failedError = {
         message: err?.message ?? String(err),
@@ -301,6 +368,10 @@ export class GmailScanService {
     error?: { code?: string; message: string; statusCode?: number };
     startedAt: string;
     completedAt?: string;
+    /** Live stage + count, filled in by the worker as it progresses.
+     * Missing on pending jobs (worker hasn't taken them yet) and on
+     * completed/failed jobs (terminal state). */
+    progress?: ScanProgress;
   } | null> {
     const raw = await this.redis.get(this.jobKey(jobId));
     if (!raw) return null;
@@ -1256,7 +1327,20 @@ export class GmailScanService {
     userId: string,
     plan: 'pro' | 'organization',
     locale = 'en',
-    ctx?: { ipAddress?: string; userAgent?: string; force?: boolean },
+    ctx?: {
+      ipAddress?: string;
+      userAgent?: string;
+      force?: boolean;
+      /**
+       * Per-stage progress callback. Optional — sync /gmail/scan
+       * doesn't pass it (the HTTP response is the user's only signal
+       * of completion). Background-job flow wires it to
+       * `mergeJobProgress` so the mobile loader can show real
+       * "X of Y emails" numbers. Fire-and-forget at the callsite,
+       * so a slow Redis write never blocks the actual scan.
+       */
+      onProgress?: (p: ScanProgress) => void;
+    },
   ): Promise<{
     scanned: number;
     candidates: EmailCandidate[];
@@ -1362,6 +1446,17 @@ export class GmailScanService {
       // them, "Gmail scan failed" gives no signal between Gmail API
       // 5xx, Gmail token expired, OpenAI timeout, or catalog DB error.
       const userTag = `[gmail.scan][user:${userId.slice(0, 8)}]`;
+      // Fire-and-forget progress reporter. Background-scan path
+      // passes onProgress; sync scan path doesn't, so this becomes
+      // a no-op for the legacy /gmail/scan endpoint.
+      const reportProgress = (p: ScanProgress) => {
+        try {
+          ctx?.onProgress?.(p);
+        } catch {
+          /* progress is best-effort */
+        }
+      };
+      reportProgress({ stage: 'listing' });
       this.logger.log(`${userTag}[stage:list] starting…`);
 
       const accessToken = await this.getAccessToken(
@@ -1372,6 +1467,7 @@ export class GmailScanService {
       this.logger.log(
         `${userTag}[stage:list] done — ${ids.length} ids${truncated ? ' (TRUNCATED)' : ''} (${maskEmail(user.gmailEmail ?? '')})`,
       );
+      reportProgress({ stage: 'fetching', current: 0, total: ids.length });
 
       // Concurrent fetch. Gmail per-user budget is 250 quota units/s and
       // a metadata GET costs 5 units → 50 GETs/s is the theoretical
@@ -1403,23 +1499,43 @@ export class GmailScanService {
             messages.push(m);
           }
         }
+        // Per-batch progress update so the mobile loader can show a
+        // live "X of Y" count. For a 500-msg scan that's 50 updates,
+        // ~1 every 200-600ms — well below polling cadence (2 s).
+        reportProgress({
+          stage: 'fetching',
+          current: Math.min(i + concurrency, ids.length),
+          total: ids.length,
+        });
       }
       this.logger.log(
         `${userTag}[stage:fetch] done — ${messages.length} non-empty`,
       );
 
+      reportProgress({
+        stage: 'parsing',
+        current: 0,
+        total: messages.length,
+      });
       this.logger.log(`${userTag}[stage:ai-parse] starting…`);
       const rawCandidates = await this.ai.parseBulkEmails(messages, locale);
       this.logger.log(
         `${userTag}[stage:ai-parse] done — ${rawCandidates.length} candidates`,
       );
+      reportProgress({
+        stage: 'parsing',
+        current: messages.length,
+        total: messages.length,
+      });
 
+      reportProgress({ stage: 'enriching' });
       this.logger.log(`${userTag}[stage:enrich] starting…`);
       const enriched = await this.enrichWithCatalog(rawCandidates);
       this.logger.log(
         `${userTag}[stage:enrich] done — ${enriched.filter((c) => c.iconUrl).length} enriched`,
       );
 
+      reportProgress({ stage: 'filtering' });
       // Index receivedAt by message id so the stale-filter can find each
       // candidate's freshest contributing receipt without a second
       // Gmail round-trip.
