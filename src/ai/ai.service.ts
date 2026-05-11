@@ -50,6 +50,24 @@ export class AiService {
   private readonly maxConcurrency = 3;
   private readonly waitQueue: (() => void)[] = [];
 
+  /**
+   * Best-effort sliding TPM tracker. Each scheduled chat() pushes its
+   * estimated token cost onto `tpmWindow` and the array auto-prunes
+   * anything older than 60 s on every check. Before issuing a request
+   * we make sure (used + estimate) stays under TPM_BUDGET — if not, we
+   * sleep just long enough for the oldest entries to roll off. This is
+   * a complement, not a replacement, to the server-side retry below:
+   * the tracker prevents most 429s preemptively, the retry handles the
+   * remaining races (multiple pods sharing one OpenAI org).
+   *
+   * NB: this is local to this Node process. With more than one backend
+   * pod the TPM is shared at the OpenAI side, so the per-pod budget
+   * here should be set to TPM ÷ #pods. We're single-pod today so the
+   * full budget is fine.
+   */
+  private readonly TPM_BUDGET = 180_000; // 90% of gpt-4o-mini's 200K TPM
+  private tpmWindow: Array<{ ts: number; tokens: number }> = [];
+
   constructor(
     private readonly cfg: ConfigService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -70,7 +88,11 @@ export class AiService {
     const code = err?.code ?? err?.error?.code;
     const message = err?.message || String(err);
 
-    if (status === 429 || code === 'insufficient_quota' || /quota/i.test(message)) {
+    if (
+      status === 429 ||
+      code === 'insufficient_quota' ||
+      /quota/i.test(message)
+    ) {
       this.logger.error(
         `[OpenAI quota] ${context}: ${message} (status=${status} code=${code})`,
       );
@@ -110,33 +132,147 @@ export class AiService {
     if (next) next();
   }
 
+  /**
+   * Rough token estimate for a chat-completion request. OpenAI bills ~1
+   * token per 4 chars of English text on average. We deliberately
+   * round UP — overestimating throttles slightly more aggressively
+   * which is the safe side (false 429s are way more expensive than a
+   * 200ms extra delay).
+   */
+  private estimateTokens(
+    messages: OpenAI.ChatCompletionMessageParam[],
+  ): number {
+    let chars = 0;
+    for (const m of messages) {
+      const c = m.content;
+      if (typeof c === 'string') chars += c.length;
+      else if (Array.isArray(c)) {
+        for (const part of c) {
+          if (typeof part === 'object' && part && 'text' in part) {
+            chars += String((part as any).text ?? '').length;
+          }
+        }
+      }
+    }
+    // +500 budget for output tokens & metadata; /3.5 (not /4) so we
+    // round up rather than down.
+    return Math.ceil(chars / 3.5) + 500;
+  }
+
+  /**
+   * Pre-emptive sliding-window TPM throttle. If issuing this request
+   * now would push us above 90% of OpenAI's per-minute limit, sleep
+   * until the oldest entries in our window age out. Always reserves
+   * the slot at the end so concurrent callers see this request's cost
+   * before deciding their own delay.
+   */
+  private async waitForTpmBudget(estimateTokens: number): Promise<void> {
+    while (true) {
+      const cutoff = Date.now() - 60_000;
+      this.tpmWindow = this.tpmWindow.filter((e) => e.ts > cutoff);
+      const used = this.tpmWindow.reduce((s, e) => s + e.tokens, 0);
+      if (used + estimateTokens <= this.TPM_BUDGET) {
+        this.tpmWindow.push({ ts: Date.now(), tokens: estimateTokens });
+        return;
+      }
+      // Sleep just long enough for the oldest entry to roll off the
+      // 60s window. Add 50ms padding so we don't oscillate on the
+      // boundary.
+      const oldest = this.tpmWindow[0]?.ts ?? Date.now();
+      const sleepMs = Math.max(100, oldest + 60_000 - Date.now() + 50);
+      await new Promise((r) => setTimeout(r, sleepMs));
+    }
+  }
+
+  /** Promise-based sleep helper, used by the 429 retry loop. */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   private async chat(
     messages: OpenAI.ChatCompletionMessageParam[],
     jsonMode = true,
     modelOverride?: string,
   ) {
     await this.acquireSlot();
+    const estimate = this.estimateTokens(messages);
     try {
-      const response = await this.openai.chat.completions.create({
-        model: modelOverride ?? this.model,
-        messages,
-        response_format: jsonMode ? { type: 'json_object' } : undefined,
-        temperature: 0.2,
-      }, { timeout: 30000 });
-      const content = response.choices[0].message.content || '{}';
-      if (!jsonMode) return content;
-      try {
-        return JSON.parse(content);
-      } catch {
-        const match = content.match(/\{[\s\S]*\}/);
-        if (match) {
-          try { return JSON.parse(match[0]); } catch { /* fall through */ }
+      // Up to 4 attempts (1 + 3 retries). Each 429 either reads
+      // `retry-after` from the response headers or falls back to
+      // exponential backoff 1s/2s/4s. We retry ONLY on 429 — any
+      // other error (timeout, 5xx, auth) propagates immediately to
+      // the caller. This prevents the previous silent-loss bug where
+      // a chunk that hit TPM saturation was caught downstream and
+      // turned into an empty candidate list, making 1500-msg scans
+      // come back near-empty under load.
+      const MAX_ATTEMPTS = 4;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        await this.waitForTpmBudget(estimate);
+        try {
+          const response = await this.openai.chat.completions.create(
+            {
+              model: modelOverride ?? this.model,
+              messages,
+              response_format: jsonMode ? { type: 'json_object' } : undefined,
+              temperature: 0.2,
+            },
+            { timeout: 30000 },
+          );
+          const content = response.choices[0].message.content || '{}';
+          if (!jsonMode) return content;
+          try {
+            return JSON.parse(content);
+          } catch {
+            const match = content.match(/\{[\s\S]*\}/);
+            if (match) {
+              try {
+                return JSON.parse(match[0]);
+              } catch {
+                /* fall through */
+              }
+            }
+            return {};
+          }
+        } catch (err: any) {
+          const status = err?.status ?? err?.response?.status;
+          // Only 429 is retryable here. Everything else short-circuits
+          // to the outer handler (timeout, 401, 5xx, network).
+          if (status !== 429 || attempt === MAX_ATTEMPTS) {
+            this.handleOpenAIError(err, 'chat');
+            throw err;
+          }
+          // Prefer the server's `retry-after` hint if present; OpenAI
+          // sends it in seconds (sometimes fractional via header on
+          // gpt-4o-mini). Fall back to exponential 1s/2s/4s.
+          const retryAfterRaw =
+            err?.headers?.['retry-after'] ??
+            err?.response?.headers?.['retry-after'] ??
+            err?.responseHeaders?.['retry-after'];
+          let waitMs: number;
+          if (retryAfterRaw != null) {
+            const seconds = Number(retryAfterRaw);
+            waitMs =
+              Number.isFinite(seconds) && seconds > 0
+                ? Math.min(15_000, Math.ceil(seconds * 1000))
+                : 1000 * Math.pow(2, attempt - 1);
+          } else {
+            waitMs = 1000 * Math.pow(2, attempt - 1);
+          }
+          this.logger.warn(
+            `[OpenAI 429] chat retry ${attempt}/${MAX_ATTEMPTS - 1} after ${waitMs}ms (estimateTokens=${estimate})`,
+          );
+          await this.sleep(waitMs);
+          // Don't double-book the TPM budget — drop the previous
+          // estimate before re-entering the loop so waitForTpmBudget
+          // recomputes fresh.
+          this.tpmWindow = this.tpmWindow.filter(
+            (e) => Date.now() - e.ts < 60_000,
+          );
         }
-        return {};
       }
-    } catch (err: any) {
-      this.handleOpenAIError(err, 'chat');
-      throw err;
+      // Unreachable — the loop either returns or throws — but TS needs
+      // an explicit terminator.
+      throw new Error('chat: exhausted retries without exception');
     } finally {
       this.releaseSlot();
     }
@@ -186,7 +322,10 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
     // Generate reliable iconUrl from serviceUrl using Clearbit Logo API
     if (result && result.serviceUrl) {
       try {
-        const hostname = new URL(result.serviceUrl).hostname.replace(/^www\./, '');
+        const hostname = new URL(result.serviceUrl).hostname.replace(
+          /^www\./,
+          '',
+        );
         result.iconUrl = `https://icon.horse/icon/${hostname}`;
       } catch {
         // fallback to Google favicons
@@ -202,12 +341,13 @@ IMPORTANT: Always return at least one plan with a non-zero price for paid servic
     const ctx = resolveCtx(opts);
     await this.acquireSlot();
     try {
-      const response = await this.openai.chat.completions.create({
-        model: this.model,
-        messages: [
-          {
-            role: 'system',
-            content: `You are a receipt/subscription screenshot parser. Extract subscription details from the image.
+      const response = await this.openai.chat.completions.create(
+        {
+          model: this.model,
+          messages: [
+            {
+              role: 'system',
+              content: `You are a receipt/subscription screenshot parser. Extract subscription details from the image.
 
 ${buildLocaleBlock(ctx)}
 
@@ -222,21 +362,23 @@ Return JSON with:
 
 Category guidance: PlayStation/Xbox/Nintendo → GAMING, Netflix/Disney+/Kinopoisk/Okko/IVI → STREAMING, Spotify/Apple Music/Yandex Music → MUSIC, GitHub/JetBrains → DEVELOPER, ChatGPT/Claude → AI_SERVICES, NordVPN/1Password → SECURITY, Strava/Peloton → SPORT.
 If unsure about category, use OTHER. If cannot extract data, return {}.`,
-          },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'Parse this subscription screenshot:' },
-              {
-                type: 'image_url',
-                image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
-              },
-            ],
-          },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.1,
-      }, { timeout: 30000 });
+            },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Parse this subscription screenshot:' },
+                {
+                  type: 'image_url',
+                  image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
+                },
+              ],
+            },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.1,
+        },
+        { timeout: 30000 },
+      );
       return JSON.parse(response.choices[0].message.content || '{}');
     } catch (err: any) {
       this.handleOpenAIError(err, 'parseScreenshot');
@@ -258,17 +400,31 @@ If unsure about category, use OTHER. If cannot extract data, return {}.`,
       let fileName = 'audio.m4a';
       if (audioBuffer.length > 4) {
         const header = audioBuffer.slice(0, 4).toString('hex');
-        if (header.startsWith('1a45')) { mimeType = 'audio/webm'; fileName = 'audio.webm'; }
-        else if (header.startsWith('494433') || header.startsWith('fffb') || header.startsWith('fff3')) { mimeType = 'audio/mpeg'; fileName = 'audio.mp3'; }
-        else if (header.startsWith('4f676753')) { mimeType = 'audio/ogg'; fileName = 'audio.ogg'; }
+        if (header.startsWith('1a45')) {
+          mimeType = 'audio/webm';
+          fileName = 'audio.webm';
+        } else if (
+          header.startsWith('494433') ||
+          header.startsWith('fffb') ||
+          header.startsWith('fff3')
+        ) {
+          mimeType = 'audio/mpeg';
+          fileName = 'audio.mp3';
+        } else if (header.startsWith('4f676753')) {
+          mimeType = 'audio/ogg';
+          fileName = 'audio.ogg';
+        }
       }
       const audioFile = await toFile(audioBuffer, fileName, { type: mimeType });
 
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioFile,
-        model: 'whisper-1',
-        language: ctx.locale.split('-')[0],
-      }, { timeout: 30000 });
+      const transcription = await this.openai.audio.transcriptions.create(
+        {
+          file: audioFile,
+          model: 'whisper-1',
+          language: ctx.locale.split('-')[0],
+        },
+        { timeout: 30000 },
+      );
       text = transcription.text;
     } catch (err: any) {
       this.handleOpenAIError(err, 'voiceToSubscription.transcribe');
@@ -305,7 +461,10 @@ If unsure about category, use OTHER.`,
    * Transcribe audio only — return { text } without parsing subscription.
    * Used by mobile AIWizard which sends transcript to wizard endpoint separately.
    */
-  async transcribeAudio(audioBase64: string, locale = 'en'): Promise<{ text: string }> {
+  async transcribeAudio(
+    audioBase64: string,
+    locale = 'en',
+  ): Promise<{ text: string }> {
     if (!audioBase64) return { text: '' };
     await this.acquireSlot();
     try {
@@ -316,17 +475,31 @@ If unsure about category, use OTHER.`,
       let fileName = 'audio.m4a';
       if (audioBuffer.length > 4) {
         const header = audioBuffer.slice(0, 4).toString('hex');
-        if (header.startsWith('1a45')) { mimeType = 'audio/webm'; fileName = 'audio.webm'; }
-        else if (header.startsWith('494433') || header.startsWith('fffb') || header.startsWith('fff3')) { mimeType = 'audio/mpeg'; fileName = 'audio.mp3'; }
-        else if (header.startsWith('4f676753')) { mimeType = 'audio/ogg'; fileName = 'audio.ogg'; }
+        if (header.startsWith('1a45')) {
+          mimeType = 'audio/webm';
+          fileName = 'audio.webm';
+        } else if (
+          header.startsWith('494433') ||
+          header.startsWith('fffb') ||
+          header.startsWith('fff3')
+        ) {
+          mimeType = 'audio/mpeg';
+          fileName = 'audio.mp3';
+        } else if (header.startsWith('4f676753')) {
+          mimeType = 'audio/ogg';
+          fileName = 'audio.ogg';
+        }
       }
       const audioFile = await toFile(audioBuffer, fileName, { type: mimeType });
 
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioFile,
-        model: 'whisper-1',
-        language: locale.split('-')[0],
-      }, { timeout: 30000 });
+      const transcription = await this.openai.audio.transcriptions.create(
+        {
+          file: audioFile,
+          model: 'whisper-1',
+          language: locale.split('-')[0],
+        },
+        { timeout: 30000 },
+      );
       return { text: transcription.text || '' };
     } catch (err: any) {
       this.handleOpenAIError(err, 'transcribeAudio');
@@ -342,7 +515,12 @@ If unsure about category, use OTHER.`,
    * Returns array of subscription objects.
    * E.g. "У меня Netflix за 15 долларов, Spotify 10 евро в месяц и iCloud 3 доллара"
    */
-  async parseBulkSubscriptions(text: string, locale = 'en', currency?: string, country?: string) {
+  async parseBulkSubscriptions(
+    text: string,
+    locale = 'en',
+    currency?: string,
+    country?: string,
+  ) {
     const ctx = resolveCtx({ locale, currency, country });
 
     const result = await this.chat([
@@ -395,23 +573,39 @@ Rules:
   /**
    * Transcribe audio and parse multiple subscriptions from it.
    */
-  async voiceToBulkSubscriptions(audioBase64: string, locale = 'en', currency?: string, country?: string) {
+  async voiceToBulkSubscriptions(
+    audioBase64: string,
+    locale = 'en',
+    currency?: string,
+    country?: string,
+  ) {
     await this.acquireSlot();
     let text: string;
     try {
       const audioBuffer = Buffer.from(audioBase64, 'base64');
-      let mimeType2 = 'audio/mp4'; let fileName2 = 'audio.m4a';
+      let mimeType2 = 'audio/mp4';
+      let fileName2 = 'audio.m4a';
       if (audioBuffer.length > 4) {
         const h = audioBuffer.slice(0, 4).toString('hex');
-        if (h.startsWith('1a45')) { mimeType2 = 'audio/webm'; fileName2 = 'audio.webm'; }
-        else if (h.startsWith('4f676753')) { mimeType2 = 'audio/ogg'; fileName2 = 'audio.ogg'; }
+        if (h.startsWith('1a45')) {
+          mimeType2 = 'audio/webm';
+          fileName2 = 'audio.webm';
+        } else if (h.startsWith('4f676753')) {
+          mimeType2 = 'audio/ogg';
+          fileName2 = 'audio.ogg';
+        }
       }
-      const audioFile = await toFile(audioBuffer, fileName2, { type: mimeType2 });
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioFile,
-        model: 'whisper-1',
-        language: locale.split('-')[0],
-      }, { timeout: 30000 });
+      const audioFile = await toFile(audioBuffer, fileName2, {
+        type: mimeType2,
+      });
+      const transcription = await this.openai.audio.transcriptions.create(
+        {
+          file: audioFile,
+          model: 'whisper-1',
+          language: locale.split('-')[0],
+        },
+        { timeout: 30000 },
+      );
       text = transcription.text;
     } catch (err: any) {
       this.handleOpenAIError(err, 'voiceToBulkSubscriptions.transcribe');
@@ -419,7 +613,12 @@ Rules:
     } finally {
       this.releaseSlot();
     }
-    const result = await this.parseBulkSubscriptions(text, locale, currency, country);
+    const result = await this.parseBulkSubscriptions(
+      text,
+      locale,
+      currency,
+      country,
+    );
     return { text, subscriptions: Array.isArray(result) ? result : [result] };
   }
 
@@ -459,9 +658,15 @@ If not a subscription email, return {}.`,
     locale = 'en',
     history: Array<{ role: 'user' | 'assistant'; content: string }> = [],
   ) {
-    const preferredCurrency = (context.preferredCurrency as string | undefined)?.toUpperCase() || 'USD';
-    const userCountry = (context.userCountry as string | undefined)?.toUpperCase() || 'US';
-    const ctx = resolveCtx({ locale, currency: preferredCurrency, country: userCountry });
+    const preferredCurrency =
+      (context.preferredCurrency as string | undefined)?.toUpperCase() || 'USD';
+    const userCountry =
+      (context.userCountry as string | undefined)?.toUpperCase() || 'US';
+    const ctx = resolveCtx({
+      locale,
+      currency: preferredCurrency,
+      country: userCountry,
+    });
     const cleanContext = { ...context };
     delete cleanContext.preferredCurrency;
     delete cleanContext.userCountry;
@@ -656,9 +861,14 @@ CURRENCY (REPEAT, CRITICAL):
     };
 
     // Build messages: system + history + current user message
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    const messages: Array<{
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+    }> = [
       systemMsg,
-      ...history.slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 500) })),
+      ...history
+        .slice(-8)
+        .map((h) => ({ role: h.role, content: h.content.slice(0, 500) })),
       { role: 'user', content: message.slice(0, 1000) },
     ];
 
@@ -668,17 +878,34 @@ CURRENCY (REPEAT, CRITICAL):
     if (typeof result === 'object' && result !== null) {
       // If GPT returned a question (doesn't know the service), try web search to find pricing
       if (result.done === false && result.question) {
-        const webResult = await this.wizardWithWebSearch(message, systemMsg.content, locale);
+        const webResult = await this.wizardWithWebSearch(
+          message,
+          systemMsg.content,
+          locale,
+        );
         if (webResult) return webResult;
       }
       // Ensure iconUrl is always set for completed responses
       if (result.done === true) {
         this.ensureIconUrl(result.subscription ?? result);
-        if (result.plans) { this.ensureIconUrl(result); }
+        if (result.plans) {
+          this.ensureIconUrl(result);
+        }
       }
       return result;
     }
-    try { return JSON.parse(String(result)); } catch { return { done: false, question: locale.startsWith('ru') ? 'Какой это сервис?' : 'What service is this?', field: 'name', partialContext: {} }; }
+    try {
+      return JSON.parse(String(result));
+    } catch {
+      return {
+        done: false,
+        question: locale.startsWith('ru')
+          ? 'Какой это сервис?'
+          : 'What service is this?',
+        field: 'name',
+        partialContext: {},
+      };
+    }
   }
 
   /** Ensure iconUrl is set on any object that has serviceUrl or name */
@@ -693,7 +920,10 @@ CURRENCY (REPEAT, CRITICAL):
       } catch {}
     }
     if (obj.serviceName || obj.name) {
-      const name = (obj.serviceName || obj.name || '').toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '');
+      const name = (obj.serviceName || obj.name || '')
+        .toLowerCase()
+        .replace(/\s+/g, '')
+        .replace(/[^a-z0-9]/g, '');
       if (name) obj.iconUrl = `https://icon.horse/icon/${name}.com`;
     }
   }
@@ -710,12 +940,18 @@ CURRENCY (REPEAT, CRITICAL):
         tools: [{ type: 'web_search_preview' }],
         input: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Search the web for current pricing of: "${userMessage}". Find the official pricing page and return subscription plans in the required JSON format.` },
+          {
+            role: 'user',
+            content: `Search the web for current pricing of: "${userMessage}". Find the official pricing page and return subscription plans in the required JSON format.`,
+          },
         ],
         temperature: 0.2,
       });
 
-      const content = response.output_text || response.output?.[response.output?.length - 1]?.content?.[0]?.text || '';
+      const content =
+        response.output_text ||
+        response.output?.[response.output?.length - 1]?.content?.[0]?.text ||
+        '';
       if (!content) return null;
 
       const match = content.match(/\{[\s\S]*\}/);
@@ -940,16 +1176,22 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
     const buildUserContent = (chunk: BulkEmailInput[]): string => {
       const userPayload = JSON.stringify(
         chunk.map((m) => {
-          const cleanBody = stripDelimiter((m.bodyText ?? '').slice(0, 4000));
+          // Tighter caps after May 11 TPM-saturation incident: 1500-msg
+          // scans were thrashing into 200K TPM on gpt-4o-mini because
+          // 25 msgs × (4000 body + 1500 snippet + 300 subject) ≈ ~7KB
+          // each ≈ 175KB per chunk × 3 parallel = 525KB ≈ 150K tokens/
+          // window. 2500 body + 800 snippet keeps the bulk of useful
+          // receipt content (the prices, "Manage subscription" /
+          // "renews on" lines, and trial dates are always in the first
+          // ~2 KB of body); marketing footer paragraphs and image alt
+          // dumps that lived past 2.5 KB never contributed to candidate
+          // detection in our internal A/B.
+          const cleanBody = stripDelimiter((m.bodyText ?? '').slice(0, 2500));
           return {
             id: m.id,
             from: stripDelimiter(m.from),
             subject: stripDelimiter(m.subject.slice(0, 300)),
-            snippet: stripDelimiter(m.snippet.slice(0, 1500)),
-            // bodyText is the real receipt content (HTML stripped
-            // upstream, capped at ~4 KB). Gives the AI the prices
-            // and "Manage subscription" / "renews on" cues the
-            // snippet often misses on image-heavy templates.
+            snippet: stripDelimiter(m.snippet.slice(0, 800)),
             body: cleanBody,
             // Pre-extracted hints. Cheap regex pass over
             // body+subject so the AI doesn't have to do its own
@@ -1077,65 +1319,241 @@ type KnownSenderInfo = {
 
 const KNOWN_BILLING_SENDERS: Record<string, KnownSenderInfo> = {
   // ── Streaming ──────────────────────────────────────────────────
-  'netflix.com': { brand: 'Netflix', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
-  'disneyplus.com': { brand: 'Disney+', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
-  'hbomax.com': { brand: 'HBO Max', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
-  'hulu.com': { brand: 'Hulu', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
-  'youtube.com': { brand: 'YouTube', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
-  'twitch.tv': { brand: 'Twitch', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
+  'netflix.com': {
+    brand: 'Netflix',
+    category: 'STREAMING',
+    defaultPeriod: 'MONTHLY',
+  },
+  'disneyplus.com': {
+    brand: 'Disney+',
+    category: 'STREAMING',
+    defaultPeriod: 'MONTHLY',
+  },
+  'hbomax.com': {
+    brand: 'HBO Max',
+    category: 'STREAMING',
+    defaultPeriod: 'MONTHLY',
+  },
+  'hulu.com': {
+    brand: 'Hulu',
+    category: 'STREAMING',
+    defaultPeriod: 'MONTHLY',
+  },
+  'youtube.com': {
+    brand: 'YouTube',
+    category: 'STREAMING',
+    defaultPeriod: 'MONTHLY',
+  },
+  'twitch.tv': {
+    brand: 'Twitch',
+    category: 'STREAMING',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── Music ──────────────────────────────────────────────────────
-  'spotify.com': { brand: 'Spotify', category: 'MUSIC', defaultPeriod: 'MONTHLY' },
+  'spotify.com': {
+    brand: 'Spotify',
+    category: 'MUSIC',
+    defaultPeriod: 'MONTHLY',
+  },
   'tidal.com': { brand: 'Tidal', category: 'MUSIC', defaultPeriod: 'MONTHLY' },
-  'soundcloud.com': { brand: 'SoundCloud', category: 'MUSIC', defaultPeriod: 'MONTHLY' },
+  'soundcloud.com': {
+    brand: 'SoundCloud',
+    category: 'MUSIC',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── AI ─────────────────────────────────────────────────────────
-  'openai.com': { brand: 'OpenAI', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
-  'anthropic.com': { brand: 'Anthropic', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
-  'cursor.sh': { brand: 'Cursor', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
-  'cursor.com': { brand: 'Cursor', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
-  'midjourney.com': { brand: 'Midjourney', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
-  'perplexity.ai': { brand: 'Perplexity', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
+  'openai.com': {
+    brand: 'OpenAI',
+    category: 'AI_SERVICES',
+    defaultPeriod: 'MONTHLY',
+  },
+  'anthropic.com': {
+    brand: 'Anthropic',
+    category: 'AI_SERVICES',
+    defaultPeriod: 'MONTHLY',
+  },
+  'cursor.sh': {
+    brand: 'Cursor',
+    category: 'AI_SERVICES',
+    defaultPeriod: 'MONTHLY',
+  },
+  'cursor.com': {
+    brand: 'Cursor',
+    category: 'AI_SERVICES',
+    defaultPeriod: 'MONTHLY',
+  },
+  'midjourney.com': {
+    brand: 'Midjourney',
+    category: 'AI_SERVICES',
+    defaultPeriod: 'MONTHLY',
+  },
+  'perplexity.ai': {
+    brand: 'Perplexity',
+    category: 'AI_SERVICES',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── Productivity ───────────────────────────────────────────────
-  'notion.so': { brand: 'Notion', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'notion.so': {
+    brand: 'Notion',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
   'figma.com': { brand: 'Figma', category: 'DESIGN', defaultPeriod: 'MONTHLY' },
-  'slack.com': { brand: 'Slack', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'discord.com': { brand: 'Discord', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'zoom.us': { brand: 'Zoom', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'linear.app': { brand: 'Linear', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'asana.com': { brand: 'Asana', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'monday.com': { brand: 'Monday', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'clickup.com': { brand: 'ClickUp', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'calendly.com': { brand: 'Calendly', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'loom.com': { brand: 'Loom', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
-  'dropbox.com': { brand: 'Dropbox', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'slack.com': {
+    brand: 'Slack',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'discord.com': {
+    brand: 'Discord',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'zoom.us': {
+    brand: 'Zoom',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'linear.app': {
+    brand: 'Linear',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'asana.com': {
+    brand: 'Asana',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'monday.com': {
+    brand: 'Monday',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'clickup.com': {
+    brand: 'ClickUp',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'calendly.com': {
+    brand: 'Calendly',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'loom.com': {
+    brand: 'Loom',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'dropbox.com': {
+    brand: 'Dropbox',
+    category: 'PRODUCTIVITY',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── Developer / Infra ──────────────────────────────────────────
-  'github.com': { brand: 'GitHub', category: 'DEVELOPER', defaultPeriod: 'MONTHLY' },
-  'gitlab.com': { brand: 'GitLab', category: 'DEVELOPER', defaultPeriod: 'MONTHLY' },
-  'vercel.com': { brand: 'Vercel', category: 'INFRASTRUCTURE', defaultPeriod: 'MONTHLY' },
-  'netlify.com': { brand: 'Netlify', category: 'INFRASTRUCTURE', defaultPeriod: 'MONTHLY' },
-  'digitalocean.com': { brand: 'DigitalOcean', category: 'INFRASTRUCTURE', defaultPeriod: 'MONTHLY' },
-  'cloudflare.com': { brand: 'Cloudflare', category: 'INFRASTRUCTURE', defaultPeriod: 'MONTHLY' },
+  'github.com': {
+    brand: 'GitHub',
+    category: 'DEVELOPER',
+    defaultPeriod: 'MONTHLY',
+  },
+  'gitlab.com': {
+    brand: 'GitLab',
+    category: 'DEVELOPER',
+    defaultPeriod: 'MONTHLY',
+  },
+  'vercel.com': {
+    brand: 'Vercel',
+    category: 'INFRASTRUCTURE',
+    defaultPeriod: 'MONTHLY',
+  },
+  'netlify.com': {
+    brand: 'Netlify',
+    category: 'INFRASTRUCTURE',
+    defaultPeriod: 'MONTHLY',
+  },
+  'digitalocean.com': {
+    brand: 'DigitalOcean',
+    category: 'INFRASTRUCTURE',
+    defaultPeriod: 'MONTHLY',
+  },
+  'cloudflare.com': {
+    brand: 'Cloudflare',
+    category: 'INFRASTRUCTURE',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── Design ─────────────────────────────────────────────────────
   'adobe.com': { brand: 'Adobe', category: 'DESIGN', defaultPeriod: 'MONTHLY' },
   'canva.com': { brand: 'Canva', category: 'DESIGN', defaultPeriod: 'MONTHLY' },
   // ── Security / VPN ─────────────────────────────────────────────
-  '1password.com': { brand: '1Password', category: 'SECURITY', defaultPeriod: 'YEARLY' },
-  'nordvpn.com': { brand: 'NordVPN', category: 'SECURITY', defaultPeriod: 'YEARLY' },
-  'protonmail.com': { brand: 'Proton', category: 'SECURITY', defaultPeriod: 'MONTHLY' },
-  'proton.me': { brand: 'Proton', category: 'SECURITY', defaultPeriod: 'MONTHLY' },
+  '1password.com': {
+    brand: '1Password',
+    category: 'SECURITY',
+    defaultPeriod: 'YEARLY',
+  },
+  'nordvpn.com': {
+    brand: 'NordVPN',
+    category: 'SECURITY',
+    defaultPeriod: 'YEARLY',
+  },
+  'protonmail.com': {
+    brand: 'Proton',
+    category: 'SECURITY',
+    defaultPeriod: 'MONTHLY',
+  },
+  'proton.me': {
+    brand: 'Proton',
+    category: 'SECURITY',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── News / Reading ─────────────────────────────────────────────
-  'nytimes.com': { brand: 'New York Times', category: 'NEWS', defaultPeriod: 'MONTHLY' },
-  'wsj.com': { brand: 'Wall Street Journal', category: 'NEWS', defaultPeriod: 'MONTHLY' },
-  'substack.com': { brand: 'Substack', category: 'NEWS', defaultPeriod: 'MONTHLY' },
+  'nytimes.com': {
+    brand: 'New York Times',
+    category: 'NEWS',
+    defaultPeriod: 'MONTHLY',
+  },
+  'wsj.com': {
+    brand: 'Wall Street Journal',
+    category: 'NEWS',
+    defaultPeriod: 'MONTHLY',
+  },
+  'substack.com': {
+    brand: 'Substack',
+    category: 'NEWS',
+    defaultPeriod: 'MONTHLY',
+  },
   'medium.com': { brand: 'Medium', category: 'NEWS', defaultPeriod: 'MONTHLY' },
-  'audible.com': { brand: 'Audible', category: 'NEWS', defaultPeriod: 'MONTHLY' },
+  'audible.com': {
+    brand: 'Audible',
+    category: 'NEWS',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── Fitness / Health ───────────────────────────────────────────
-  'strava.com': { brand: 'Strava', category: 'HEALTH', defaultPeriod: 'YEARLY' },
-  'headspace.com': { brand: 'Headspace', category: 'HEALTH', defaultPeriod: 'YEARLY' },
+  'strava.com': {
+    brand: 'Strava',
+    category: 'HEALTH',
+    defaultPeriod: 'YEARLY',
+  },
+  'headspace.com': {
+    brand: 'Headspace',
+    category: 'HEALTH',
+    defaultPeriod: 'YEARLY',
+  },
   // ── Education ──────────────────────────────────────────────────
-  'duolingo.com': { brand: 'Duolingo', category: 'EDUCATION', defaultPeriod: 'YEARLY' },
-  'coursera.org': { brand: 'Coursera', category: 'EDUCATION', defaultPeriod: 'MONTHLY' },
+  'duolingo.com': {
+    brand: 'Duolingo',
+    category: 'EDUCATION',
+    defaultPeriod: 'YEARLY',
+  },
+  'coursera.org': {
+    brand: 'Coursera',
+    category: 'EDUCATION',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── Business ───────────────────────────────────────────────────
-  'linkedin.com': { brand: 'LinkedIn', category: 'BUSINESS', defaultPeriod: 'MONTHLY' },
+  'linkedin.com': {
+    brand: 'LinkedIn',
+    category: 'BUSINESS',
+    defaultPeriod: 'MONTHLY',
+  },
   // ── PSP — brand:null forces "read body for merchant" path ──────
   'stripe.com': { brand: null },
   'paddle.com': { brand: null },
@@ -1163,15 +1581,14 @@ const PSP_HOSTS = new Set<string>(
  * (`receipts.brand.com` → `brand.com`). Returns null for unknown
  * domains — caller falls back to the regex derivation.
  */
-function lookupKnownBillingSender(
-  rawDomain: string,
-): KnownSenderInfo | null {
+function lookupKnownBillingSender(rawDomain: string): KnownSenderInfo | null {
   if (KNOWN_BILLING_SENDERS[rawDomain]) return KNOWN_BILLING_SENDERS[rawDomain];
   const parts = rawDomain.split('.');
   while (parts.length > 2) {
     parts.shift();
     const candidate = parts.join('.');
-    if (KNOWN_BILLING_SENDERS[candidate]) return KNOWN_BILLING_SENDERS[candidate];
+    if (KNOWN_BILLING_SENDERS[candidate])
+      return KNOWN_BILLING_SENDERS[candidate];
   }
   return null;
 }

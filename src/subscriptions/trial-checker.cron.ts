@@ -9,6 +9,7 @@ import { pushT } from '../notifications/push-i18n';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
 import { UserBillingRepository } from '../billing/user-billing.repository';
+import { TrialsService } from '../billing/trials/trials.service';
 
 @Injectable()
 export class TrialCheckerCron {
@@ -23,6 +24,8 @@ export class TrialCheckerCron {
     private readonly tg: TelegramAlertService,
     @Inject(forwardRef(() => UserBillingRepository))
     private readonly userBilling: UserBillingRepository,
+    @Inject(forwardRef(() => TrialsService))
+    private readonly trials: TrialsService,
   ) {}
 
   // ── Subscription trial reminders (1d, 3d before end) ──────────────────────
@@ -123,20 +126,36 @@ export class TrialCheckerCron {
     const dayAfter = new Date();
     dayAfter.setDate(dayAfter.getDate() + 2);
 
-    // Users on our backend trial expiring in ~1 day, not yet RC subscribers
+    // Source of truth for trial expiry is `user_trials.ends_at` since the
+    // TrialsService migration — but new TrialsService.activate() does NOT
+    // backfill the legacy `users.trialEndDate` column, so a cron reading
+    // ONLY the legacy column would silently skip every trial created
+    // through the new endpoint. We coalesce: prefer ut.ends_at when a
+    // row exists, fall back to users.trialEndDate for the pre-migration
+    // population that hasn't been re-issued through TrialsService yet.
     const expiringUsers = await this.userRepo
       .createQueryBuilder('u')
       .leftJoinAndSelect('u.billing', 'b')
+      .leftJoin('user_trials', 'ut', 'ut.user_id = u.id')
       .where('b.plan = :plan', { plan: 'pro' })
       .andWhere('u.trialUsed = true')
-      .andWhere('u.trialEndDate IS NOT NULL')
-      .andWhere('u.trialEndDate >= :tomorrow', { tomorrow })
-      .andWhere('u.trialEndDate < :dayAfter', { dayAfter })
-      .andWhere('b.billingSource IS NULL')  // not yet paid via RC/LS
+      .andWhere(
+        `COALESCE(ut.ends_at, u.trialEndDate) IS NOT NULL
+         AND COALESCE(ut.ends_at, u.trialEndDate) >= :tomorrow
+         AND COALESCE(ut.ends_at, u.trialEndDate) < :dayAfter`,
+        { tomorrow, dayAfter },
+      )
+      .andWhere('b.billingSource IS NULL') // not yet paid via RC/LS
+      .addSelect('COALESCE(ut.ends_at, u.trialEndDate)', 'effective_ends_at')
       .getMany();
 
     for (const user of expiringUsers) {
-      if (!user.trialEndDate) continue;
+      // Resolve effective end date from user_trials first, fall back to
+      // legacy column. Skip silently if both are null (shouldn't happen
+      // given the WHERE above, but defensive against query drift).
+      const trial = await this.trials.status(user.id);
+      const effectiveEnd = trial?.endsAt ?? user.trialEndDate;
+      if (!effectiveEnd) continue;
       try {
         const { title, body } = pushT(user.locale).proTrialExpiring();
 
@@ -161,7 +180,7 @@ export class TrialCheckerCron {
           2.99,
           'USD',
           1,
-          new Date(user.trialEndDate).toLocaleDateString(emailLocale),
+          new Date(effectiveEnd).toLocaleDateString(emailLocale),
           'https://app.subradar.ai',
           emailLocale,
           user.id,
@@ -195,14 +214,23 @@ export class TrialCheckerCron {
 
     const now = new Date();
 
+    // Source of truth: prefer user_trials.ends_at over the legacy
+    // users.trialEndDate column. Without the COALESCE, every trial
+    // activated through the new TrialsService.activate() path (which
+    // writes only to user_trials) would slip past this cron forever
+    // — a Pro freeloader bug.
     const expiredUsers = await this.userRepo
       .createQueryBuilder('u')
       .leftJoinAndSelect('u.billing', 'b')
+      .leftJoin('user_trials', 'ut', 'ut.user_id = u.id')
       .where('b.plan = :plan', { plan: 'pro' })
       .andWhere('u.trialUsed = true')
-      .andWhere('u.trialEndDate IS NOT NULL')
-      .andWhere('u.trialEndDate < :now', { now })
-      .andWhere('b.billingSource IS NULL')          // not paying via RC or LS
+      .andWhere(
+        `COALESCE(ut.ends_at, u.trialEndDate) IS NOT NULL
+         AND COALESCE(ut.ends_at, u.trialEndDate) < :now`,
+        { now },
+      )
+      .andWhere('b.billingSource IS NULL') // not paying via RC or LS
       .andWhere('u.lemonSqueezyCustomerId IS NULL') // not a LS customer
       .getMany();
 
