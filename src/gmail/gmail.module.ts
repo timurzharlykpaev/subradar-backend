@@ -9,6 +9,7 @@ import { AnalysisModule } from '../analysis/analysis.module';
 import { BillingModule } from '../billing/billing.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { UsersModule } from '../users/users.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -18,6 +19,9 @@ import { UsersModule } from '../users/users.module';
     forwardRef(() => BillingModule),
     SubscriptionsModule,
     UsersModule,
+    // Push notification on background-scan completion. Module is
+    // self-contained — no DI cycle risk vs Gmail.
+    NotificationsModule,
   ],
   providers: [GmailService, GmailScanService],
   controllers: [GmailController],

@@ -19,6 +19,8 @@ import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { AuditService } from '../common/audit/audit.service';
 import { REDIS_CLIENT } from '../common/redis.module';
 import { maskEmail } from '../common/utils/pii';
+import { NotificationsService } from '../notifications/notifications.service';
+import { randomUUID } from 'crypto';
 
 /**
  * Server-side bulk Gmail scan: handles the access-token refresh, the
@@ -78,8 +80,284 @@ export class GmailScanService {
     private readonly market: MarketDataService,
     private readonly subscriptions: SubscriptionsService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
+
+  // ── Background-scan job machinery ────────────────────────────────
+  //
+  // Why this exists: a sync POST /gmail/scan that takes 15-30 s blocks
+  // the mobile request → if the user backgrounds the app mid-scan,
+  // their open connection dies, the request resolves to nothing on
+  // the next foreground, and the user has to scan again. With a job
+  // queue the scan runs server-side independent of any one client
+  // connection. The mobile starts the job (returns immediately with
+  // a jobId), then either polls /status while the screen is open
+  // OR — when the user backgrounds the app — gets a push notification
+  // on completion telling them how many subscriptions we found.
+  //
+  // Storage: Redis with a 30-min TTL on each job key. That covers the
+  // longest realistic scan (≤2 min today, give 15× headroom) plus a
+  // few minutes for the user to come back from the push. No external
+  // queue (BullMQ etc.) — a single setImmediate handler is enough
+  // because scans are user-initiated, per-user-throttled, and the
+  // existing single-flight Redis lock prevents pile-ups.
+  private static readonly JOB_TTL_S = 30 * 60;
+
+  private jobKey(jobId: string): string {
+    return `gmail:scan:job:${jobId}`;
+  }
+
+  private inflightJobKey(userId: string): string {
+    return `gmail:scan:inflight:${userId}`;
+  }
+
+  /**
+   * Persisted shape of a scan job. Kept narrow on purpose — the result
+   * payload mirrors the sync scan() response so the mobile client
+   * renders it the same way regardless of which endpoint it came from.
+   */
+  private async writeJob(
+    jobId: string,
+    job: {
+      userId: string;
+      status: 'pending' | 'running' | 'completed' | 'failed';
+      result?: unknown;
+      error?: { code?: string; message: string; statusCode?: number };
+      startedAt: string;
+      completedAt?: string;
+    },
+  ): Promise<void> {
+    await this.redis.set(
+      this.jobKey(jobId),
+      JSON.stringify(job),
+      'EX',
+      GmailScanService.JOB_TTL_S,
+    );
+  }
+
+  /**
+   * Start a scan in the background. Returns immediately with a jobId
+   * the mobile client uses to poll /status or that the push handler
+   * deep-links to. If the user already has an in-flight job (e.g.
+   * they double-tapped Scan, or backgrounded + foregrounded mid-scan
+   * and the screen retried), we return the existing jobId so two
+   * parallel scans never run for the same user.
+   *
+   * Cached prior result short-circuits at the same place sync scan()
+   * does — the new endpoint preserves all the existing behaviour
+   * (cache TTL, force bypass, daily quota, lock semantics).
+   */
+  async startScanJob(
+    userId: string,
+    plan: 'pro' | 'organization',
+    locale: string,
+    ctx: { ipAddress?: string; userAgent?: string; force?: boolean },
+  ): Promise<{ jobId: string; status: 'pending' | 'running' | 'completed'; cached: boolean }> {
+    // If the cached result is still fresh AND the caller isn't forcing
+    // a fresh scan, return a synthetic "already-completed" job so the
+    // mobile can render the result immediately without polling.
+    if (!ctx?.force) {
+      try {
+        const cached = await this.redis.get(this.resultCacheKey(userId));
+        if (cached) {
+          const cachedResult = JSON.parse(cached);
+          const jobId = randomUUID();
+          await this.writeJob(jobId, {
+            userId,
+            status: 'completed',
+            result: { ...cachedResult, cached: true },
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+          });
+          return { jobId, status: 'completed', cached: true };
+        }
+      } catch {
+        /* fall through to a real scan */
+      }
+    }
+
+    // Reuse in-flight job if one already exists. Important for the
+    // re-foreground case: user backgrounds mid-scan, comes back,
+    // mobile re-issues startScan — we don't want to double-spend the
+    // daily quota slot.
+    const existing = await this.redis.get(this.inflightJobKey(userId));
+    if (existing) {
+      const peek = await this.redis.get(this.jobKey(existing));
+      if (peek) {
+        const job = JSON.parse(peek);
+        if (job.status === 'pending' || job.status === 'running') {
+          return { jobId: existing, status: job.status, cached: false };
+        }
+      }
+    }
+
+    const jobId = randomUUID();
+    await this.writeJob(jobId, {
+      userId,
+      status: 'pending',
+      startedAt: new Date().toISOString(),
+    });
+    // Map userId → in-flight jobId for re-foreground dedup, with the
+    // same TTL as the job itself.
+    await this.redis.set(
+      this.inflightJobKey(userId),
+      jobId,
+      'EX',
+      GmailScanService.JOB_TTL_S,
+    );
+
+    // Fire-and-forget the actual scan. setImmediate keeps the HTTP
+    // response prompt; the worker handles all errors internally and
+    // never lets a rejection bubble to the unhandled-rejection log.
+    setImmediate(() => {
+      this.runScanJob(jobId, userId, plan, locale, ctx).catch((err) => {
+        this.logger.error(
+          `[gmail.scan][job:${jobId.slice(0, 8)}] worker crashed: ${err?.message ?? err}`,
+        );
+      });
+    });
+
+    return { jobId, status: 'pending', cached: false };
+  }
+
+  /**
+   * Background worker that actually runs the scan, updates the job
+   * state, and fires a push when it's done. Pure side-effect — no
+   * return value reaches HTTP because the request was already
+   * answered by startScanJob.
+   */
+  private async runScanJob(
+    jobId: string,
+    userId: string,
+    plan: 'pro' | 'organization',
+    locale: string,
+    ctx: { ipAddress?: string; userAgent?: string; force?: boolean },
+  ): Promise<void> {
+    await this.writeJob(jobId, {
+      userId,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+    });
+
+    let result: any;
+    let failedError: { message: string; statusCode?: number; code?: string } | null = null;
+    try {
+      result = await this.scan(userId, plan, locale, ctx);
+    } catch (err: any) {
+      failedError = {
+        message: err?.message ?? String(err),
+        statusCode: err?.status ?? err?.response?.status,
+        code: err?.response?.data?.code ?? err?.code,
+      };
+    } finally {
+      // Always clear the in-flight pointer so a follow-up scan can
+      // start; the job record itself lives the full TTL for the
+      // mobile to fetch results / for diagnostics.
+      try {
+        await this.redis.del(this.inflightJobKey(userId));
+      } catch {
+        /* best-effort */
+      }
+    }
+
+    const completedAt = new Date().toISOString();
+    if (failedError) {
+      await this.writeJob(jobId, {
+        userId,
+        status: 'failed',
+        error: failedError,
+        startedAt: new Date().toISOString(),
+        completedAt,
+      });
+      // No push on failure — failure messages don't help the user
+      // out of context. The mobile poll path surfaces them in-screen.
+      return;
+    }
+
+    await this.writeJob(jobId, {
+      userId,
+      status: 'completed',
+      result,
+      startedAt: new Date().toISOString(),
+      completedAt,
+    });
+
+    // Push notification when the user is offscreen. We send for the
+    // happy path (found something OR truncated-with-more-to-come)
+    // AND the genuine empty result, so the user knows the scan
+    // finished either way. Failures don't push.
+    await this.sendScanCompletePush(userId, jobId, result);
+  }
+
+  /**
+   * Fetch a job's state. Returns null if the job has expired or never
+   * existed. Caller verifies userId matches before exposing data.
+   */
+  async getScanJobStatus(jobId: string, userId: string): Promise<{
+    jobId: string;
+    status: 'pending' | 'running' | 'completed' | 'failed';
+    result?: unknown;
+    error?: { code?: string; message: string; statusCode?: number };
+    startedAt: string;
+    completedAt?: string;
+  } | null> {
+    const raw = await this.redis.get(this.jobKey(jobId));
+    if (!raw) return null;
+    let job: any;
+    try {
+      job = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (job.userId !== userId) return null;
+    return { jobId, ...job };
+  }
+
+  /**
+   * Fire a localized push when a scan finishes. The body is
+   * intentionally low-precision ("subscriptions found") because the
+   * exact count + which ones are sensitive — we never put dollar
+   * amounts or service names into a notification that surfaces on
+   * the lock-screen of an unlocked device. Failure to send is
+   * non-fatal: the user can still open the app and see the result
+   * via the poll path.
+   */
+  private async sendScanCompletePush(
+    userId: string,
+    jobId: string,
+    result: any,
+  ): Promise<void> {
+    try {
+      const user = await this.userRepo.findOne({
+        where: { id: userId },
+        select: ['id', 'fcmToken'],
+      });
+      if (!user?.fcmToken) return;
+      const candidates = Array.isArray(result?.candidates)
+        ? result.candidates.length
+        : 0;
+      const title =
+        candidates > 0
+          ? '✨ SubRadar: Gmail scan ready'
+          : 'SubRadar: Gmail scan finished';
+      const body =
+        candidates > 0
+          ? `Found ${candidates} potential subscription${candidates === 1 ? '' : 's'} in your inbox.`
+          : "No new subscriptions found. Anything we detected was already in your list.";
+      await this.notifications.sendPushNotification(
+        user.fcmToken,
+        title,
+        body,
+        { type: 'gmail_scan_complete', jobId, candidates: String(candidates) },
+        userId,
+      );
+    } catch (err: any) {
+      this.logger.warn(
+        `[gmail.scan][job:${jobId.slice(0, 8)}] push send failed: ${err?.message ?? err}`,
+      );
+    }
+  }
 
   /**
    * Drop candidates that are clearly noise so the user doesn't have to
