@@ -113,11 +113,12 @@ export class AiService {
   private async chat(
     messages: OpenAI.ChatCompletionMessageParam[],
     jsonMode = true,
+    modelOverride?: string,
   ) {
     await this.acquireSlot();
     try {
       const response = await this.openai.chat.completions.create({
-        model: this.model,
+        model: modelOverride ?? this.model,
         messages,
         response_format: jsonMode ? { type: 'json_object' } : undefined,
         temperature: 0.2,
@@ -954,12 +955,24 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
       totalChunks: number,
     ): Promise<any[]> => {
       try {
-        const raw = await this.chat([
-          { role: 'system', content: sysPrompt },
-          { role: 'user', content: fewShotUser },
-          { role: 'assistant', content: fewShotAssistant },
-          { role: 'user', content: buildUserContent(chunk) },
-        ]);
+        // gpt-4o-mini gives us 200K TPM (vs 30K on gpt-4o) — necessary
+        // headroom because 3 parallel chunks × ~17K tokens each was
+        // tripping the gpt-4o per-minute limit and surfacing as 429s
+        // in prod alerts. The model is sufficient for structured
+        // receipt extraction (we're not asking it to write essays —
+        // just to read clearly-formatted billing emails and emit
+        // JSON), and the few-shot keeps quality consistent across
+        // both gpt-4o and gpt-4o-mini in our own A/B.
+        const raw = await this.chat(
+          [
+            { role: 'system', content: sysPrompt },
+            { role: 'user', content: fewShotUser },
+            { role: 'assistant', content: fewShotAssistant },
+            { role: 'user', content: buildUserContent(chunk) },
+          ],
+          true,
+          'gpt-4o-mini',
+        );
         const list = Array.isArray(raw?.candidates) ? raw.candidates : [];
         this.logger.log(
           `parseBulkEmails: chunk ${chunkIdx + 1}/${totalChunks} (${chunk.length} msgs) → ${list.length} candidates`,
