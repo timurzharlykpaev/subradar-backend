@@ -293,70 +293,109 @@ export class WorkspaceService {
       throw new BadRequestException('Invalid or expired invite code');
     }
 
-    const workspace = await this.workspaceRepo.findOne({
-      where: { id: inviteCode.workspaceId },
-      relations: ['members'],
-    });
-    if (!workspace) throw new NotFoundException('Workspace not found');
-
-    // Check not already member
-    if (
-      workspace.members.some(
-        (m) => m.userId === userId && m.status === WorkspaceMemberStatus.ACTIVE,
-      )
-    ) {
+    // Per-workspace lock so concurrent joins can't race the capacity
+    // check and over-fill the workspace, or both consume the same
+    // single-use code. The TTL is short — even on a slow DB the
+    // critical section finishes in <1s, and on pod death the lock
+    // auto-expires so the next attempt isn't permanently blocked.
+    const lockKey = `workspace:join-lock:${inviteCode.workspaceId}`;
+    const lockOk = await this.redis.set(
+      lockKey,
+      String(Date.now()),
+      'EX',
+      10,
+      'NX',
+    );
+    if (lockOk !== 'OK') {
       throw new BadRequestException(
-        'You are already a member of this workspace',
+        'Someone else is joining this workspace right now. Try again in a moment.',
       );
     }
 
-    // Check not full
-    const activeCount = workspace.members.filter(
-      (m) => m.status === WorkspaceMemberStatus.ACTIVE,
-    ).length;
-    if (activeCount >= workspace.maxMembers) {
-      throw new BadRequestException('Workspace is full');
+    try {
+      // Re-read the code under lock — another joiner may have marked
+      // it used between our initial SELECT and acquiring the lock.
+      const freshCode = await this.inviteCodeRepo.findOne({
+        where: { code, usedBy: IsNull(), expiresAt: MoreThan(new Date()) },
+      });
+      if (!freshCode) {
+        throw new BadRequestException('Invalid or expired invite code');
+      }
+
+      const workspace = await this.workspaceRepo.findOne({
+        where: { id: freshCode.workspaceId },
+        relations: ['members'],
+      });
+      if (!workspace) throw new NotFoundException('Workspace not found');
+
+      // Check not already member
+      if (
+        workspace.members.some(
+          (m) =>
+            m.userId === userId && m.status === WorkspaceMemberStatus.ACTIVE,
+        )
+      ) {
+        throw new BadRequestException(
+          'You are already a member of this workspace',
+        );
+      }
+
+      // Check not full
+      const activeCount = workspace.members.filter(
+        (m) => m.status === WorkspaceMemberStatus.ACTIVE,
+      ).length;
+      if (activeCount >= workspace.maxMembers) {
+        throw new BadRequestException('Workspace is full');
+      }
+
+      // Mark code as used
+      freshCode.usedBy = userId;
+      freshCode.usedAt = new Date();
+      await this.inviteCodeRepo.save(freshCode);
+
+      // Create member
+      const member = this.memberRepo.create({
+        workspaceId: workspace.id,
+        userId,
+        role: WorkspaceMemberRole.MEMBER,
+        status: WorkspaceMemberStatus.ACTIVE,
+      });
+      const savedMember = await this.memberRepo.save(member);
+
+      this.logger.log(
+        `Member joined workspace: userId=${userId} workspaceId=${workspace.id} via invite code`,
+      );
+
+      await this.audit.log({
+        userId,
+        action: 'workspace.member_joined',
+        resourceType: 'workspace_member',
+        resourceId: savedMember.id,
+        metadata: {
+          workspaceId: workspace.id,
+          inviteCodeId: freshCode.id,
+        },
+      });
+      await this.outbox.enqueue('amplitude.track', {
+        event: 'workspace.member_joined',
+        userId,
+        properties: {
+          workspaceId: workspace.id,
+          memberId: savedMember.id,
+          via: 'invite_code',
+        },
+      });
+
+      return this.findById(workspace.id);
+    } finally {
+      // Always release the join lock — leaving it would block legit
+      // joiners for the full 10s TTL after a transient DB error.
+      try {
+        await this.redis.del(lockKey);
+      } catch {
+        /* lock release is best-effort */
+      }
     }
-
-    // Mark code as used
-    inviteCode.usedBy = userId;
-    inviteCode.usedAt = new Date();
-    await this.inviteCodeRepo.save(inviteCode);
-
-    // Create member
-    const member = this.memberRepo.create({
-      workspaceId: workspace.id,
-      userId,
-      role: WorkspaceMemberRole.MEMBER,
-      status: WorkspaceMemberStatus.ACTIVE,
-    });
-    const savedMember = await this.memberRepo.save(member);
-
-    this.logger.log(
-      `Member joined workspace: userId=${userId} workspaceId=${workspace.id} via invite code`,
-    );
-
-    await this.audit.log({
-      userId,
-      action: 'workspace.member_joined',
-      resourceType: 'workspace_member',
-      resourceId: savedMember.id,
-      metadata: {
-        workspaceId: workspace.id,
-        inviteCodeId: inviteCode.id,
-      },
-    });
-    await this.outbox.enqueue('amplitude.track', {
-      event: 'workspace.member_joined',
-      userId,
-      properties: {
-        workspaceId: workspace.id,
-        memberId: savedMember.id,
-        via: 'invite_code',
-      },
-    });
-
-    return this.findById(workspace.id);
   }
 
   async leave(workspaceId: string, userId: string) {
@@ -515,7 +554,117 @@ export class WorkspaceService {
     }
 
     member.role = role;
+    await this.audit.log({
+      userId: requesterId,
+      action: 'workspace.member_role_changed',
+      resourceType: 'workspace_member',
+      resourceId: memberId,
+      metadata: { workspaceId, role },
+    });
     return this.memberRepo.save(member);
+  }
+
+  /**
+   * Hand workspace ownership to an existing active member. One-way
+   * action — the previous owner is demoted to ADMIN so they keep
+   * elevated access but lose owner-exclusive powers (delete, transfer,
+   * generate team report). The workspace.ownerId column is the
+   * billing source of truth (RevenueCat purchase ties to that user's
+   * RC ID), so changing it also requires a paired billing update
+   * elsewhere — outside the scope of this method, which only
+   * rotates the workspace-level role state.
+   *
+   * Why both ownerId + a member-row role flip:
+   *   - workspace.ownerId — used for billing / plan-gating queries
+   *     (`workspace.ownerId === userId` ⇒ paying owner)
+   *   - members[].role = OWNER — used for in-workspace RBAC checks
+   *     (invite, remove, role-change, etc.)
+   * Keeping them in sync prevents the half-transferred state where
+   * the new owner can pay but the old owner still controls invites.
+   */
+  async transferOwnership(
+    workspaceId: string,
+    requesterId: string,
+    newOwnerMemberId: string,
+  ) {
+    const workspace = await this.workspaceRepo.findOne({
+      where: { id: workspaceId },
+      relations: ['members'],
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    if (workspace.ownerId !== requesterId) {
+      throw new ForbiddenException(
+        'Only the current owner can transfer ownership',
+      );
+    }
+
+    const newOwnerMember = workspace.members.find(
+      (m) => m.id === newOwnerMemberId,
+    );
+    if (!newOwnerMember) {
+      throw new NotFoundException(
+        'Target member not found in this workspace',
+      );
+    }
+    if (newOwnerMember.userId === requesterId) {
+      throw new BadRequestException(
+        "You're already the owner — pick a different member.",
+      );
+    }
+    if (newOwnerMember.status !== WorkspaceMemberStatus.ACTIVE) {
+      throw new BadRequestException(
+        'New owner must be an active member (pending invites cannot receive ownership).',
+      );
+    }
+    if (!newOwnerMember.userId) {
+      throw new BadRequestException(
+        'Target member must have accepted their invite before receiving ownership.',
+      );
+    }
+
+    const currentOwnerMember = workspace.members.find(
+      (m) => m.userId === requesterId && m.role === WorkspaceMemberRole.OWNER,
+    );
+
+    // Mutate in two writes — no transaction needed since both rows
+    // are independent and the only intermediate state ("two OWNERs")
+    // is harmless to readers (no consumer depends on uniqueness of
+    // the OWNER role at the SQL level — billing reads workspace.ownerId).
+    newOwnerMember.role = WorkspaceMemberRole.OWNER;
+    await this.memberRepo.save(newOwnerMember);
+
+    if (currentOwnerMember) {
+      currentOwnerMember.role = WorkspaceMemberRole.ADMIN;
+      await this.memberRepo.save(currentOwnerMember);
+    }
+
+    const previousOwnerId = workspace.ownerId;
+    workspace.ownerId = newOwnerMember.userId;
+    await this.workspaceRepo.save(workspace);
+
+    this.logger.log(
+      `Workspace ${workspaceId} ownership transferred: ${previousOwnerId.slice(0, 8)} → ${newOwnerMember.userId.slice(0, 8)}`,
+    );
+
+    await this.audit.log({
+      userId: requesterId,
+      action: 'workspace.ownership_transferred',
+      resourceType: 'workspace',
+      resourceId: workspaceId,
+      metadata: {
+        from: previousOwnerId,
+        to: newOwnerMember.userId,
+        previousOwnerNewRole: 'ADMIN',
+      },
+    });
+    await this.outbox.enqueue('amplitude.track', {
+      event: 'workspace.ownership_transferred',
+      userId: requesterId,
+      properties: { workspaceId, newOwnerUserId: newOwnerMember.userId },
+    });
+
+    return this.findById(workspaceId);
   }
 
   private toMonthlyAmount(amount: number, period: BillingPeriod): number {

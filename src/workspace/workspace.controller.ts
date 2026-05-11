@@ -17,6 +17,7 @@ import {
 import { ApiBearerAuth, ApiTags, ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsDateString, IsString, IsInt, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PlanGuard } from '../common/guards/plan.guard';
 import { RequirePlanCapability } from '../common/decorators/require-plan-capability.decorator';
@@ -27,6 +28,9 @@ import { ReportType } from '../reports/entities/report.entity';
 import { AuditService } from '../common/audit/audit.service';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
 import { InviteMemberDto } from './dto/invite-member.dto';
+import { RenameWorkspaceDto } from './dto/rename-workspace.dto';
+import { ChangeMemberRoleDto } from './dto/change-member-role.dto';
+import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
 
 class GenerateTeamReportDto {
   @ApiProperty({ enum: ReportType }) @IsEnum(ReportType) type: ReportType;
@@ -66,9 +70,16 @@ export class WorkspaceController {
   // JwtAuthGuard here because method-level @UseGuards replaces the
   // class-level decorator in NestJS — skipping it would silently drop
   // authentication on this endpoint.
+  // Throttle the mutating endpoints below — workspace controller had
+  // zero rate limits, leaving join-by-code open to brute-force and
+  // invite open to email-spam from an abusive owner. Limits are
+  // per-user (JwtAuthGuard runs first, so ThrottlerGuard sees a
+  // resolved user id), generous enough that no legitimate workflow
+  // hits them, tight enough to defeat scripted attacks.
   @Post()
   @UseGuards(JwtAuthGuard, PlanGuard)
   @RequirePlanCapability('canCreateOrg')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
   create(@Request() req, @Body() dto: CreateWorkspaceDto) {
     return this.service.create(req.user.id, dto);
   }
@@ -106,6 +117,7 @@ export class WorkspaceController {
   @Post(':id/invite')
   @UseGuards(JwtAuthGuard, PlanGuard)
   @RequirePlanCapability('canInvite')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   invite(
     @Param('id') id: string,
     @Request() req,
@@ -124,11 +136,18 @@ export class WorkspaceController {
   }
 
   @Post(':id/invite-code')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async generateInviteCode(@Param('id') id: string, @Request() req: any) {
     return this.service.generateInviteCode(id, req.user.id);
   }
 
+  // Tight throttle on join: even with 50 bits of entropy on the code,
+  // a no-rate-limit endpoint lets a scripted attacker test millions of
+  // codes/day, raising the practical chance of hitting a live code. 10
+  // attempts/min/user makes brute force economically pointless without
+  // affecting legitimate "I mistyped my code" retries.
   @Post('join/:code')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async joinByCode(@Param('code') code: string, @Request() req: any) {
     return this.service.joinByCode(code, req.user.id);
   }
@@ -146,27 +165,43 @@ export class WorkspaceController {
   }
 
   @Patch(':id')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async rename(
     @Param('id') id: string,
     @Request() req: any,
-    @Body() body: { name: string },
+    @Body() dto: RenameWorkspaceDto,
   ) {
-    return this.service.renameWorkspace(id, req.user.id, body.name);
+    return this.service.renameWorkspace(id, req.user.id, dto.name);
   }
 
   @Patch(':id/members/:memberId/role')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async changeRole(
     @Param('id') id: string,
     @Param('memberId') memberId: string,
     @Request() req: any,
-    @Body() body: { role: string },
+    @Body() dto: ChangeMemberRoleDto,
   ) {
-    return this.service.changeMemberRole(
-      id,
-      req.user.id,
-      memberId,
-      body.role as any,
-    );
+    return this.service.changeMemberRole(id, req.user.id, memberId, dto.role);
+  }
+
+  // Owner can hand the workspace off to an existing admin / member.
+  // One-way action with a typed-string confirmation guard (see DTO).
+  // Limit is intentionally tight — there's no real use case for
+  // running this more than a handful of times in a session.
+  @Post(':id/transfer-owner')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  async transferOwnership(
+    @Param('id') id: string,
+    @Request() req: any,
+    @Body() dto: TransferOwnershipDto,
+  ) {
+    if (dto.confirm !== 'TRANSFER') {
+      throw new ForbiddenException(
+        'Type TRANSFER to confirm. Ownership transfer is irreversible.',
+      );
+    }
+    return this.service.transferOwnership(id, req.user.id, dto.newOwnerMemberId);
   }
 
   /** Owner/Admin can view a member's subscriptions (by workspace ID) */
