@@ -899,62 +899,106 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
       ],
     });
 
-    // Cap user content per message — chunked elsewhere by the controller
-    // (max 800 messages per request enforced by ParseBulkDto). Strip the
-    // delimiter sentinel out of the payload itself so a malicious sender
-    // can't close the UNTRUSTED block and then resume as "system" text.
-    // Belt-and-suspenders: even if the model honoured the closing tag,
-    // there's nothing to find.
+    // Strip the delimiter sentinel out of the payload itself so a
+    // malicious sender can't close the UNTRUSTED block and then
+    // resume as "system" text. Belt-and-suspenders: even if the
+    // model honoured the closing tag, there's nothing to find.
     const stripDelimiter = (s: string) =>
       (s ?? '').replace(/<\/?UNTRUSTED_EMAIL_DATA[^>]*>/gi, '[tag]');
-    const userPayload = JSON.stringify(
-      messages.map((m) => {
-        const cleanBody = stripDelimiter((m.bodyText ?? '').slice(0, 4000));
-        return {
-          id: m.id,
-          from: stripDelimiter(m.from),
-          subject: stripDelimiter(m.subject.slice(0, 300)),
-          snippet: stripDelimiter(m.snippet.slice(0, 1500)),
-          // bodyText is the real receipt content (HTML stripped upstream,
-          // capped at ~4 KB). Gives the AI the prices and "Manage
-          // subscription" / "renews on" cues the snippet often misses
-          // on image-heavy templates.
-          body: cleanBody,
-          // Pre-extracted hints. Cheap regex pass over body+subject so
-          // the AI doesn't have to do its own scan of a 4 KB block to
-          // find the figures and brand — gives it a shortlist to pick
-          // from. The AI is still the source of truth for which value
-          // ends up on the candidate (the body may contain upsell
-          // prices alongside the actual charge), but having the
-          // shortlist visible empirically halves the rate of
-          // "amountFromEmail: false" misses on Stripe/Link-style
-          // receipts where the price sits inside a small CSS block.
-          hints: extractReceiptHints(m, cleanBody),
-          receivedAt: m.receivedAt,
-        };
-      }),
-    );
-    const userContent = `<UNTRUSTED_EMAIL_DATA>\n${userPayload}\n</UNTRUSTED_EMAIL_DATA>`;
 
-    let raw: any;
-    try {
-      raw = await this.chat([
-        { role: 'system', content: sysPrompt },
-        { role: 'user', content: fewShotUser },
-        { role: 'assistant', content: fewShotAssistant },
-        { role: 'user', content: userContent },
-      ]);
-    } catch (err) {
-      this.logger.warn(`parseBulkEmails: AI call failed: ${err}`);
-      return [];
+    // Chunk size for AI calls. Production audit (May 9-10) showed a
+    // 500-message scan returning 0 candidates because the single AI
+    // call ran into context-window overflow: 500 messages × ~6 KB
+    // per-message payload ≈ 3 MB of user content ≈ 750K-1M tokens,
+    // while gpt-4o-mini's context window is 128K. The model returned
+    // an empty JSON, validation produced 0 candidates, the user saw
+    // "no subscriptions found" on an inbox full of them.
+    //
+    // 25 messages/chunk × ~6 KB ≈ 150 KB ≈ ~40K tokens — safely
+    // under the limit with room for the system prompt + few-shot.
+    // Parallel batches of 3 keep wall-clock low without hammering
+    // OpenAI's rate limit (chat() also has its own slot semaphore).
+    const CHUNK_SIZE = 25;
+    const PARALLEL_CHUNKS = 3;
+
+    const buildUserContent = (chunk: BulkEmailInput[]): string => {
+      const userPayload = JSON.stringify(
+        chunk.map((m) => {
+          const cleanBody = stripDelimiter((m.bodyText ?? '').slice(0, 4000));
+          return {
+            id: m.id,
+            from: stripDelimiter(m.from),
+            subject: stripDelimiter(m.subject.slice(0, 300)),
+            snippet: stripDelimiter(m.snippet.slice(0, 1500)),
+            // bodyText is the real receipt content (HTML stripped
+            // upstream, capped at ~4 KB). Gives the AI the prices
+            // and "Manage subscription" / "renews on" cues the
+            // snippet often misses on image-heavy templates.
+            body: cleanBody,
+            // Pre-extracted hints. Cheap regex pass over
+            // body+subject so the AI doesn't have to do its own
+            // scan of a 4 KB block to find the figures and brand.
+            // The AI is still the source of truth for which value
+            // ends up on the candidate; hints are advisory.
+            hints: extractReceiptHints(m, cleanBody),
+            receivedAt: m.receivedAt,
+          };
+        }),
+      );
+      return `<UNTRUSTED_EMAIL_DATA>\n${userPayload}\n</UNTRUSTED_EMAIL_DATA>`;
+    };
+
+    const runOneChunk = async (
+      chunk: BulkEmailInput[],
+      chunkIdx: number,
+      totalChunks: number,
+    ): Promise<any[]> => {
+      try {
+        const raw = await this.chat([
+          { role: 'system', content: sysPrompt },
+          { role: 'user', content: fewShotUser },
+          { role: 'assistant', content: fewShotAssistant },
+          { role: 'user', content: buildUserContent(chunk) },
+        ]);
+        const list = Array.isArray(raw?.candidates) ? raw.candidates : [];
+        this.logger.log(
+          `parseBulkEmails: chunk ${chunkIdx + 1}/${totalChunks} (${chunk.length} msgs) → ${list.length} candidates`,
+        );
+        return list;
+      } catch (err: any) {
+        this.logger.warn(
+          `parseBulkEmails: chunk ${chunkIdx + 1}/${totalChunks} failed: ${err?.message ?? err}`,
+        );
+        return [];
+      }
+    };
+
+    // Split into chunks, run in bounded parallel batches.
+    const chunks: BulkEmailInput[][] = [];
+    for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+      chunks.push(messages.slice(i, i + CHUNK_SIZE));
+    }
+    this.logger.log(
+      `parseBulkEmails: starting ${messages.length} msgs in ${chunks.length} chunks × ${CHUNK_SIZE} (${PARALLEL_CHUNKS} parallel)`,
+    );
+
+    const allRaw: any[] = [];
+    for (let i = 0; i < chunks.length; i += PARALLEL_CHUNKS) {
+      const batch = chunks.slice(i, i + PARALLEL_CHUNKS);
+      const results = await Promise.all(
+        batch.map((chunk, j) => runOneChunk(chunk, i + j, chunks.length)),
+      );
+      for (const list of results) allRaw.push(...list);
     }
 
-    const list = Array.isArray(raw?.candidates) ? raw.candidates : [];
     const validated: EmailCandidate[] = [];
-    for (const item of list) {
+    for (const item of allRaw) {
       const v = validateAndCoerceCandidate(item);
       if (v) validated.push(v);
     }
+    this.logger.log(
+      `parseBulkEmails: done — ${allRaw.length} raw → ${validated.length} validated (across ${chunks.length} chunks)`,
+    );
     return aggregateCandidates(validated);
   }
 }
