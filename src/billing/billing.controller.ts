@@ -21,6 +21,7 @@ import { BillingService } from './billing.service';
 import { UsersService } from '../users/users.service';
 import { EffectiveAccessResolver } from './effective-access/effective-access.service';
 import { BillingMeResponse } from './effective-access/billing-me.types';
+import { PLANS } from './plans.config';
 import { TrialsService } from './trials/trials.service';
 import { IdempotencyService } from '../common/idempotency/idempotency.service';
 
@@ -128,6 +129,13 @@ export class BillingController {
 
   @Get('plans')
   getPlans() {
+    // Values must stay in sync with src/billing/plans.config.ts — the
+    // user-facing labels here had drifted (Free was advertising 5
+    // subscriptions and 10 AI requests, real caps were 3 and 5).
+    // Sourcing the numbers from PLANS keeps the two from diverging
+    // silently again.
+    const free = PLANS.free;
+    const pro = PLANS.pro;
     return [
       {
         id: 'free',
@@ -136,8 +144,16 @@ export class BillingController {
         currency: 'USD',
         period: null,
         features: [
-          { key: 'subscriptions', value: 5, label: 'Up to 5 subscriptions' },
-          { key: 'ai_requests', value: 10, label: '10 AI requests/month' },
+          {
+            key: 'subscriptions',
+            value: free.subscriptionLimit,
+            label: `Up to ${free.subscriptionLimit} subscriptions`,
+          },
+          {
+            key: 'ai_requests',
+            value: free.aiRequestsLimit,
+            label: `${free.aiRequestsLimit} AI requests/month`,
+          },
         ],
       },
       {
@@ -150,7 +166,11 @@ export class BillingController {
         variantId: '1377270',
         features: [
           { key: 'subscriptions', value: null, label: 'Unlimited subscriptions' },
-          { key: 'ai_requests', value: 200, label: '200 AI requests/month' },
+          {
+            key: 'ai_requests',
+            value: pro.aiRequestsLimit,
+            label: `${pro.aiRequestsLimit} AI requests/month`,
+          },
           { key: 'analytics', value: true, label: 'Advanced analytics' },
           { key: 'invite', value: 1, label: '+1 invite slot' },
         ],
