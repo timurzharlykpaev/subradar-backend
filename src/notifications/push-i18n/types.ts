@@ -56,6 +56,31 @@ export interface PushI18n {
     title: string;
     body: string;
   };
+
+  /**
+   * Gmail bulk-scan finished. Intentionally low-precision body — we never
+   * surface dollar amounts or brand names on the lock screen because the
+   * scan ran against the user's real inbox.
+   */
+  gmailScanComplete: (params: { candidates: number }) => {
+    title: string;
+    body: string;
+  };
+
+  /**
+   * Individual subscription's free trial about to end (e.g. user added
+   * Netflix trial, it ends tomorrow). Fired from trial-checker.cron.
+   */
+  subscriptionTrialEnding: (params: { name: string; daysLeft: number }) => {
+    title: string;
+    body: string;
+  };
+
+  /** Pro plan trial ends tomorrow (backend trial, not RC/LS). */
+  proTrialExpiring: () => { title: string; body: string };
+
+  /** Pro plan trial has already expired — user was just downgraded. */
+  proTrialExpired: () => { title: string; body: string };
 }
 
 export const SUPPORTED_PUSH_LOCALES = [

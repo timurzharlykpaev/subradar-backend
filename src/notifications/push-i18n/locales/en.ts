@@ -48,4 +48,33 @@ export const en: PushI18n = {
     title: "👀 Don't miss upcoming charges",
     body: `${upcomingCount} subscription${upcomingCount === 1 ? '' : 's'} renewing this week`,
   }),
+
+  gmailScanComplete: ({ candidates }) =>
+    candidates > 0
+      ? {
+          title: '✨ Gmail scan ready',
+          body: `Found ${candidates} potential subscription${candidates === 1 ? '' : 's'} in your inbox`,
+        }
+      : {
+          title: 'Gmail scan finished',
+          body: 'No new subscriptions found — everything we detected is already in your list',
+        },
+
+  subscriptionTrialEnding: ({ name, daysLeft }) => ({
+    title: 'Trial ending soon',
+    body:
+      daysLeft <= 1
+        ? `Your ${name} trial ends tomorrow — cancel now to avoid charges`
+        : `Your ${name} trial ends in ${daysLeft} days`,
+  }),
+
+  proTrialExpiring: () => ({
+    title: '⏰ Your SubRadar trial ends tomorrow',
+    body: 'Subscribe now to keep unlimited access to all features',
+  }),
+
+  proTrialExpired: () => ({
+    title: '🔓 Your free trial has ended',
+    body: 'Subscribe to SubRadar Pro to restore unlimited access',
+  }),
 };

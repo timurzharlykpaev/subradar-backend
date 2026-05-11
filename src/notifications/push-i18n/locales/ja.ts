@@ -48,4 +48,33 @@ export const ja: PushI18n = {
     title: '👀 まもなくの請求をお見逃しなく',
     body: `今週 ${upcomingCount} 件のサブスクが更新されます`,
   }),
+
+  gmailScanComplete: ({ candidates }) =>
+    candidates > 0
+      ? {
+          title: '✨ Gmail スキャンが完了',
+          body: `受信箱から ${candidates} 件のサブスク候補が見つかりました`,
+        }
+      : {
+          title: 'Gmail スキャンが完了',
+          body: '新しいサブスクは見つかりませんでした — 検出されたものはすでにリストにあります',
+        },
+
+  subscriptionTrialEnding: ({ name, daysLeft }) => ({
+    title: 'トライアル終了間近',
+    body:
+      daysLeft <= 1
+        ? `${name} のトライアルは明日終了します — 課金を避けるには今すぐキャンセル`
+        : `${name} のトライアルは ${daysLeft} 日後に終了します`,
+  }),
+
+  proTrialExpiring: () => ({
+    title: '⏰ SubRadar のトライアルが明日終了します',
+    body: '今すぐ登録して、すべての機能への無制限アクセスを継続しましょう',
+  }),
+
+  proTrialExpired: () => ({
+    title: '🔓 無料トライアルが終了しました',
+    body: 'SubRadar Pro に登録して、無制限アクセスを取り戻しましょう',
+  }),
 };

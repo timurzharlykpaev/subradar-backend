@@ -56,6 +56,10 @@ describe('push-i18n', () => {
         renewingThisWeek: 2,
       },
       winBack: { upcomingCount: 3 },
+      gmailScanComplete: { candidates: 4 },
+      subscriptionTrialEnding: { name: 'Netflix', daysLeft: 3 },
+      proTrialExpiring: {},
+      proTrialExpired: {},
     };
 
     for (const code of SUPPORTED_PUSH_LOCALES) {
@@ -86,6 +90,22 @@ describe('push-i18n', () => {
       const en = pushT('en');
       expect(en.trialExpiry({ daysLeft: 1 }).title).toContain('1 day');
       expect(en.trialExpiry({ daysLeft: 3 }).title).toContain('3 days');
+    });
+  });
+
+  describe('pushT — gmailScanComplete empty vs non-empty', () => {
+    it('mentions candidate count when > 0', () => {
+      const en = pushT('en').gmailScanComplete({ candidates: 5 });
+      expect(en.body).toContain('5');
+      const ru = pushT('ru').gmailScanComplete({ candidates: 5 });
+      expect(ru.body).toContain('5');
+    });
+
+    it('renders distinct empty-state copy when candidates === 0', () => {
+      const en = pushT('en').gmailScanComplete({ candidates: 0 });
+      expect(en.body.toLowerCase()).toContain('no new');
+      const ru = pushT('ru').gmailScanComplete({ candidates: 0 });
+      expect(ru.body).toContain('не найдено');
     });
   });
 });
