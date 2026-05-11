@@ -782,6 +782,18 @@ Return top 3 matches. If no match, return { "matches": [] }.`,
   async parseBulkEmails(
     messages: BulkEmailInput[],
     locale = 'en',
+    /**
+     * Optional per-chunk progress callback. Fires once after each
+     * 25-message chunk completes; `processedMessages` is monotonic
+     * (counted in actual emails parsed, not chunk indices) so the
+     * mobile loader can display "parsing 75 / 500 emails" — same
+     * unit as the fetch stage. Fire-and-forget at the callsite;
+     * a slow downstream consumer never blocks the AI call chain.
+     */
+    onChunkComplete?: (info: {
+      processedMessages: number;
+      totalMessages: number;
+    }) => void,
   ): Promise<EmailCandidate[]> {
     if (messages.length === 0) return [];
 
@@ -996,12 +1008,27 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
     );
 
     const allRaw: any[] = [];
+    let processedMessages = 0;
     for (let i = 0; i < chunks.length; i += PARALLEL_CHUNKS) {
       const batch = chunks.slice(i, i + PARALLEL_CHUNKS);
       const results = await Promise.all(
         batch.map((chunk, j) => runOneChunk(chunk, i + j, chunks.length)),
       );
       for (const list of results) allRaw.push(...list);
+      // Count actual emails parsed in this batch — last batch is
+      // usually smaller than PARALLEL_CHUNKS × CHUNK_SIZE, so we
+      // sum the real chunk lengths instead of multiplying constants.
+      // Caller's callback may write to Redis; fire-and-forget so a
+      // slow Redis hop never blocks the next batch from starting.
+      processedMessages += batch.reduce((sum, chunk) => sum + chunk.length, 0);
+      try {
+        onChunkComplete?.({
+          processedMessages,
+          totalMessages: messages.length,
+        });
+      } catch {
+        /* progress reporting is best-effort */
+      }
     }
 
     const validated: EmailCandidate[] = [];

@@ -64,11 +64,22 @@ export interface ScanProgress {
 @Injectable()
 export class GmailScanService {
   private readonly logger = new Logger(GmailScanService.name);
-  // Bumped from 200 → 500: an active Gmail user with 3+ years of
-  // billing history easily blows past 200 receipts even within a
-  // single year. 500 strikes a balance between recall and OpenAI cost
-  // (parseBulkEmails chunks the prompt internally).
-  private readonly MAX_MESSAGES = 500;
+  // Bumped 500 → 1500 once parseBulkEmails moved to gpt-4o-mini
+  // (200K TPM headroom vs gpt-4o's 30K) and the chunked-parsing
+  // path got per-chunk progress. A real prod user reported a
+  // 3000-email inbox where the previous 500 cap hid 2500
+  // receipts behind a single "truncated, scan again" banner.
+  // 1500 covers ~95% of heavy users in one pass; cost stays
+  // negligible because mini is ~$0.05 per scan at this size.
+  //
+  // The pagination + fetch concurrency loops scale linearly,
+  // so wall-clock grows roughly proportionally — a 1500-msg
+  // scan completes in ~90-120s vs the previous 30-40s for 500.
+  // The live progress UI shipped alongside this change is what
+  // makes the longer wait acceptable: user sees real
+  // "X / 1500 emails" numbers throughout instead of an opaque
+  // spinner.
+  private readonly MAX_MESSAGES = 1500;
   // Bumped from 90 → 365 days: yearly subscriptions (Adobe Annual,
   // Netflix Annual, GitHub Pro yearly, domain registrations) only
   // generate ONE receipt per year. With a 90-day window we'd silently
@@ -1518,7 +1529,21 @@ export class GmailScanService {
         total: messages.length,
       });
       this.logger.log(`${userTag}[stage:ai-parse] starting…`);
-      const rawCandidates = await this.ai.parseBulkEmails(messages, locale);
+      const rawCandidates = await this.ai.parseBulkEmails(
+        messages,
+        locale,
+        // Per-chunk progress: forwards each batch's running tally
+        // into the job record so the mobile loader can render a
+        // monotonic "parsing X / Y emails" counter throughout the
+        // AI stage (which is the long pole on large inboxes).
+        ({ processedMessages, totalMessages }) => {
+          reportProgress({
+            stage: 'parsing',
+            current: processedMessages,
+            total: totalMessages,
+          });
+        },
+      );
       this.logger.log(
         `${userTag}[stage:ai-parse] done — ${rawCandidates.length} candidates`,
       );
