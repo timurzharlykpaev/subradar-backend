@@ -324,34 +324,110 @@ export class GmailScanService {
    * Exchange the stored refresh token for a fresh access token. Refresh
    * tokens are long-lived; access tokens last ~1h. We never persist the
    * access token — re-mint on every scan.
+   *
+   * When Google rejects the refresh token (revoked grant, password
+   * change, 6-month inactivity expiry — all return 4xx here), we clear
+   * the user's stored Gmail credentials before throwing. Without this
+   * step the next `/gmail/status` call still reports `connected: true`
+   * because the dead token is in our DB, the user retries scan, and
+   * gets the same 401 again — a loop the user can only break by
+   * manually tapping "Disconnect" then "Connect". Auto-clearing flips
+   * the next status read to `connected: false` so the UI naturally
+   * surfaces the "Connect Gmail" CTA again.
+   *
+   * We only clear on explicit 4xx ("invalid_grant", "invalid_client",
+   * etc.). 5xx and timeouts keep the token because they're transient —
+   * a Google outage shouldn't force every user to reconnect.
    */
-  private async getAccessToken(refreshToken: string): Promise<string> {
+  private async getAccessToken(
+    userId: string,
+    refreshToken: string,
+  ): Promise<string> {
     const { clientId, clientSecret } = this.requireConfig();
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }).toString(),
-      signal: AbortSignal.timeout(8000),
-    });
+    let res: Response;
+    try {
+      res = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: refreshToken,
+          grant_type: 'refresh_token',
+        }).toString(),
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch (err: any) {
+      // Network / timeout — token may still be valid, surface as a
+      // retryable error without auto-clearing.
+      this.logger.warn(`Gmail refresh network error: ${err?.message ?? err}`);
+      throw new InternalServerErrorException(
+        'Gmail authorization could not be refreshed (network). Please try again.',
+      );
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       this.logger.warn(
         `Gmail refresh failed (${res.status}): ${text.slice(0, 160)}`,
       );
+      // 4xx from Google's token endpoint is terminal for this refresh
+      // token: it won't start working again on its own. Clear our
+      // stored copy so the user is treated as disconnected from the
+      // next request onwards. 5xx is transient — leave it alone.
+      if (res.status >= 400 && res.status < 500) {
+        await this.clearGmailCredentials(userId, `refresh_${res.status}`);
+      }
       throw new UnauthorizedException(
         'Gmail authorization expired. Reconnect Gmail in settings.',
       );
     }
     const json = (await res.json()) as { access_token?: string };
     if (!json.access_token) {
-      throw new UnauthorizedException('Gmail token refresh returned no access_token');
+      // Same shape as a 4xx — Google accepted the request but won't
+      // hand out an access token. Treat as a dead grant.
+      await this.clearGmailCredentials(userId, 'no_access_token');
+      throw new UnauthorizedException(
+        'Gmail token refresh returned no access_token',
+      );
     }
     return json.access_token;
+  }
+
+  /**
+   * Null out a user's Gmail credentials and audit it. Used by the
+   * refresh-failure path so a dead grant doesn't keep reporting
+   * `connected: true` to the mobile client. Failures here are logged
+   * but never propagated — the upstream caller still throws the
+   * UnauthorizedException either way, and a DB hiccup shouldn't
+   * upgrade a 401 into a 500.
+   */
+  private async clearGmailCredentials(
+    userId: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.userRepo.update(
+        { id: userId },
+        {
+          gmailRefreshToken: null as any,
+          gmailConnectedAt: null,
+          gmailEmail: null as any,
+          gmailScopes: null as any,
+        },
+      );
+      await this.audit.log({
+        userId,
+        action: 'gmail.auto_disconnect',
+        metadata: { reason },
+      });
+      this.logger.log(
+        `[gmail.auto_disconnect] cleared credentials for ${userId.slice(0, 8)} (${reason})`,
+      );
+    } catch (err: any) {
+      this.logger.warn(
+        `[gmail.auto_disconnect] failed to clear credentials for ${userId}: ${err?.message ?? err}`,
+      );
+    }
   }
 
   /**
@@ -691,7 +767,10 @@ export class GmailScanService {
       const userTag = `[gmail.scan][user:${userId.slice(0, 8)}]`;
       this.logger.log(`${userTag}[stage:list] starting…`);
 
-      const accessToken = await this.getAccessToken(user.gmailRefreshToken);
+      const accessToken = await this.getAccessToken(
+        userId,
+        user.gmailRefreshToken,
+      );
       const { ids, truncated } = await this.listMessages(accessToken);
       this.logger.log(
         `${userTag}[stage:list] done — ${ids.length} ids${truncated ? ' (TRUNCATED)' : ''} (${maskEmail(user.gmailEmail ?? '')})`,
