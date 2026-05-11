@@ -103,11 +103,20 @@ export class GmailScanService {
     return candidates.filter((c) => {
       if (c.isCancellation) return false;
       const enriched = !!c.iconUrl || (c.availablePlans?.length ?? 0) > 0;
-      if (!c.isRecurring && !enriched) return false;
       // amountFromEmail is the strongest "this is a real subscription"
       // signal we have — a printed money figure on a sender's domain.
-      // Override the confidence floor when we have it.
-      if (c.confidence < 0.3 && !enriched && !c.amountFromEmail) return false;
+      // Keep the row even if AI couldn't confirm "recurring" and the
+      // brand isn't in our catalog: the user can decide on the review
+      // sheet, and the recall miss (eg. a small SaaS the AI was unsure
+      // about) was the main complaint from real scans.
+      if (c.amountFromEmail) return true;
+      if (!c.isRecurring && !enriched) return false;
+      // Lowered 0.3 → 0.2: 0.3 was rejecting borderline-correct
+      // candidates from small SaaS senders the AI hadn't seen before;
+      // 0.2 still strips obvious junk (unsubscribe-confirmation,
+      // shipping-update mails returning ≤0.1) without nuking the
+      // long-tail of real subscriptions.
+      if (c.confidence < 0.2 && !enriched) return false;
       return true;
     });
   }
@@ -324,34 +333,110 @@ export class GmailScanService {
    * Exchange the stored refresh token for a fresh access token. Refresh
    * tokens are long-lived; access tokens last ~1h. We never persist the
    * access token — re-mint on every scan.
+   *
+   * When Google rejects the refresh token (revoked grant, password
+   * change, 6-month inactivity expiry — all return 4xx here), we clear
+   * the user's stored Gmail credentials before throwing. Without this
+   * step the next `/gmail/status` call still reports `connected: true`
+   * because the dead token is in our DB, the user retries scan, and
+   * gets the same 401 again — a loop the user can only break by
+   * manually tapping "Disconnect" then "Connect". Auto-clearing flips
+   * the next status read to `connected: false` so the UI naturally
+   * surfaces the "Connect Gmail" CTA again.
+   *
+   * We only clear on explicit 4xx ("invalid_grant", "invalid_client",
+   * etc.). 5xx and timeouts keep the token because they're transient —
+   * a Google outage shouldn't force every user to reconnect.
    */
-  private async getAccessToken(refreshToken: string): Promise<string> {
+  private async getAccessToken(
+    userId: string,
+    refreshToken: string,
+  ): Promise<string> {
     const { clientId, clientSecret } = this.requireConfig();
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }).toString(),
-      signal: AbortSignal.timeout(8000),
-    });
+    let res: Response;
+    try {
+      res = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: refreshToken,
+          grant_type: 'refresh_token',
+        }).toString(),
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch (err: any) {
+      // Network / timeout — token may still be valid, surface as a
+      // retryable error without auto-clearing.
+      this.logger.warn(`Gmail refresh network error: ${err?.message ?? err}`);
+      throw new InternalServerErrorException(
+        'Gmail authorization could not be refreshed (network). Please try again.',
+      );
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       this.logger.warn(
         `Gmail refresh failed (${res.status}): ${text.slice(0, 160)}`,
       );
+      // 4xx from Google's token endpoint is terminal for this refresh
+      // token: it won't start working again on its own. Clear our
+      // stored copy so the user is treated as disconnected from the
+      // next request onwards. 5xx is transient — leave it alone.
+      if (res.status >= 400 && res.status < 500) {
+        await this.clearGmailCredentials(userId, `refresh_${res.status}`);
+      }
       throw new UnauthorizedException(
         'Gmail authorization expired. Reconnect Gmail in settings.',
       );
     }
     const json = (await res.json()) as { access_token?: string };
     if (!json.access_token) {
-      throw new UnauthorizedException('Gmail token refresh returned no access_token');
+      // Same shape as a 4xx — Google accepted the request but won't
+      // hand out an access token. Treat as a dead grant.
+      await this.clearGmailCredentials(userId, 'no_access_token');
+      throw new UnauthorizedException(
+        'Gmail token refresh returned no access_token',
+      );
     }
     return json.access_token;
+  }
+
+  /**
+   * Null out a user's Gmail credentials and audit it. Used by the
+   * refresh-failure path so a dead grant doesn't keep reporting
+   * `connected: true` to the mobile client. Failures here are logged
+   * but never propagated — the upstream caller still throws the
+   * UnauthorizedException either way, and a DB hiccup shouldn't
+   * upgrade a 401 into a 500.
+   */
+  private async clearGmailCredentials(
+    userId: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.userRepo.update(
+        { id: userId },
+        {
+          gmailRefreshToken: null as any,
+          gmailConnectedAt: null,
+          gmailEmail: null as any,
+          gmailScopes: null as any,
+        },
+      );
+      await this.audit.log({
+        userId,
+        action: 'gmail.auto_disconnect',
+        metadata: { reason },
+      });
+      this.logger.log(
+        `[gmail.auto_disconnect] cleared credentials for ${userId.slice(0, 8)} (${reason})`,
+      );
+    } catch (err: any) {
+      this.logger.warn(
+        `[gmail.auto_disconnect] failed to clear credentials for ${userId}: ${err?.message ?? err}`,
+      );
+    }
   }
 
   /**
@@ -414,14 +499,40 @@ export class GmailScanService {
       'abonnement',
       'paiement',
     ].join(' OR ');
+    // Generic billing-shaped local-parts ("billing@…", "invoice@…")
+    // plus a few payment-processor domains that route receipts under
+    // their own brand (Stripe, Paddle, Lemon Squeezy, Apple, Google
+    // Play, GitHub). Without these the previous query missed every
+    // Stripe-issued receipt from a small-SaaS subscription because the
+    // From address is `support@stripe.com` — which doesn't match any
+    // of the generic hints. Pure additive — these all OR with the
+    // existing pattern so we never *exclude* a mail that matched
+    // before.
     const senderHints = [
       'no-reply',
       'noreply',
       'billing',
       'invoice',
       'receipts',
+      'receipt',
       'support',
       'notifications',
+      'payments',
+      'team',
+      // Payment processors / app-stores that re-issue subscription
+      // receipts under their own brand. Catches Apple / Google Play
+      // family-share charges that don't carry the merchant's name in
+      // the From header.
+      'stripe.com',
+      'paddle.com',
+      'paddle.net',
+      'lemonsqueezy.com',
+      'apple.com',
+      'itunes.com',
+      'google.com',
+      'googleplay',
+      'github.com',
+      'paypal.com',
     ].join(' OR ');
     return `(category:purchases OR subject:(${subjectKeywords}) OR from:(${senderHints})) after:${afterStr}`;
   }
@@ -691,15 +802,21 @@ export class GmailScanService {
       const userTag = `[gmail.scan][user:${userId.slice(0, 8)}]`;
       this.logger.log(`${userTag}[stage:list] starting…`);
 
-      const accessToken = await this.getAccessToken(user.gmailRefreshToken);
+      const accessToken = await this.getAccessToken(
+        userId,
+        user.gmailRefreshToken,
+      );
       const { ids, truncated } = await this.listMessages(accessToken);
       this.logger.log(
         `${userTag}[stage:list] done — ${ids.length} ids${truncated ? ' (TRUNCATED)' : ''} (${maskEmail(user.gmailEmail ?? '')})`,
       );
 
-      // Sequential fetch with a small concurrency cap. Gmail's per-user
-      // rate limit is generous, but bursting 200 requests in parallel
-      // can still trigger 429s; 5-at-a-time is a safe sweet spot.
+      // Concurrent fetch. Gmail per-user budget is 250 quota units/s and
+      // a metadata GET costs 5 units → 50 GETs/s is the theoretical
+      // ceiling. 10-at-a-time stays comfortably under that while halving
+      // the wall-clock fetch stage on a 200-message scan compared with
+      // the previous 5. Bursting past 10 starts to risk per-second 429s,
+      // and the AI parse stage downstream is still the long pole anyway.
       this.logger.log(`${userTag}[stage:fetch] starting (${ids.length} msgs)…`);
       const messages: Array<{
         id: string;
@@ -708,7 +825,7 @@ export class GmailScanService {
         from: string;
         receivedAt: string;
       }> = [];
-      const concurrency = 5;
+      const concurrency = 10;
       for (let i = 0; i < ids.length; i += concurrency) {
         const slice = ids.slice(i, i + concurrency);
         const batch = await Promise.all(
