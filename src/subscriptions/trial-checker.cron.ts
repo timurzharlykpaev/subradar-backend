@@ -10,6 +10,7 @@ import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
 import { UserBillingRepository } from '../billing/user-billing.repository';
 import { TrialsService } from '../billing/trials/trials.service';
+import { buildTrialExpiredEmail } from './emails/trial-expired-email';
 
 @Injectable()
 export class TrialCheckerCron {
@@ -274,60 +275,11 @@ export class TrialCheckerCron {
         );
       }
 
-      const html = `
-<!DOCTYPE html>
-<html lang="ru">
-<head><meta charset="UTF-8"/></head>
-<body style="margin:0;padding:0;background:#0f0f1a;font-family:'Segoe UI',Roboto,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f1a;padding:40px 0;">
-    <tr><td align="center">
-      <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
-        <tr><td align="center" style="padding-bottom:32px;">
-          <span style="font-size:28px;font-weight:800;color:#fff;letter-spacing:-0.5px;">
-            Sub<span style="color:#8B5CF6;">Radar</span>
-          </span>
-        </td></tr>
-        <tr><td style="background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:16px;border:1px solid rgba(139,92,246,0.3);padding:40px;">
-          <p style="margin:0 0 8px;font-size:13px;color:#8B5CF6;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Пробный период завершён</p>
-          <h1 style="margin:0 0 16px;font-size:22px;color:#fff;font-weight:700;">Ваш 7-дневный пробный период истёк</h1>
-          <p style="margin:0 0 24px;color:#a0a0b8;font-size:15px;line-height:1.6;">
-            Ваш план был переведён на <strong style="color:#fff;">Free</strong>.<br/>
-            Оформите подписку <strong style="color:#8B5CF6;">SubRadar Pro</strong> чтобы вернуть неограниченный доступ.
-          </p>
-          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
-            <tr><td style="background:rgba(139,92,246,0.1);border-radius:12px;border:1px solid rgba(139,92,246,0.2);padding:20px;">
-              <table width="100%" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td style="color:#a0a0b8;font-size:13px;padding-bottom:8px;">Free план</td>
-                  <td align="right" style="color:#fff;font-size:13px;font-weight:600;padding-bottom:8px;">3 подписки, 5 AI запросов</td>
-                </tr>
-                <tr>
-                  <td style="color:#a0a0b8;font-size:13px;">Pro план</td>
-                  <td align="right" style="color:#8B5CF6;font-size:13px;font-weight:700;">∞ подписок, 200 AI запросов</td>
-                </tr>
-              </table>
-            </td></tr>
-          </table>
-          <table width="100%" cellpadding="0" cellspacing="0">
-            <tr><td align="center">
-              <a href="https://app.subradar.ai/paywall" style="display:inline-block;background:linear-gradient(135deg,#8B5CF6,#6D28D9);color:#fff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 36px;border-radius:10px;">
-                Оформить подписку →
-              </a>
-            </td></tr>
-          </table>
-        </td></tr>
-        <tr><td align="center" style="padding-top:24px;">
-          <p style="margin:0;font-size:12px;color:#4a4a6a;">SubRadar AI · <a href="https://app.subradar.ai" style="color:#6D28D9;text-decoration:none;">app.subradar.ai</a></p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+      const { subject, html } = buildTrialExpiredEmail(user.locale);
 
       await this.notifications.sendEmail(
         user.email,
-        '⏰ SubRadar: Пробный период завершён',
+        subject,
         html,
         { userId: user.id, unsubType: 'email_notifications' },
       );
