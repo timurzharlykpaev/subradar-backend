@@ -6,6 +6,7 @@ import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { UserBillingRepository } from '../billing/user-billing.repository';
+import { TrialsService } from '../billing/trials/trials.service';
 
 describe('TrialCheckerCron', () => {
   let cron: TrialCheckerCron;
@@ -30,6 +31,12 @@ describe('TrialCheckerCron', () => {
           useValue: {
             read: jest.fn(),
             applyTransition: jest.fn().mockResolvedValue({ applied: true, from: 'active', to: 'free', snapshot: {} }),
+          },
+        },
+        {
+          provide: TrialsService,
+          useValue: {
+            status: jest.fn().mockResolvedValue(null),
           },
         },
       ],

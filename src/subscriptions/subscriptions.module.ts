@@ -13,6 +13,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { AiModule } from '../ai/ai.module';
 import { AnalysisModule } from '../analysis/analysis.module';
 import { BillingModule } from '../billing/billing.module';
+import { TrialsModule } from '../billing/trials/trials.module';
 import { FxModule } from '../fx/fx.module';
 import { CatalogPlan } from '../catalog/entities/catalog-plan.entity';
 
@@ -26,6 +27,12 @@ import { CatalogPlan } from '../catalog/entities/catalog-plan.entity';
     FxModule,
     forwardRef(() => AnalysisModule),
     forwardRef(() => BillingModule),
+    // TrialsModule wired directly (not via BillingModule re-export)
+    // because trial-checker.cron reads user_trials.ends_at via
+    // TrialsService.status() to catch trials activated through the
+    // new POST /billing/trial path (legacy users.trialEndDate is
+    // no longer the only source of truth).
+    TrialsModule,
   ],
   providers: [SubscriptionsService, TrialCheckerCron, SubscriptionLimitGuard],
   controllers: [SubscriptionsController, EmailImportController],
