@@ -4,6 +4,8 @@ import {
   Controller,
   Delete,
   Get,
+  NotFoundException,
+  Param,
   Post,
   Query,
   Request,
@@ -160,5 +162,51 @@ export class GmailController {
       ...ctxFromReq(req),
       force: dto.force === true,
     });
+  }
+
+  /**
+   * Async / job-based scan. Returns immediately with a jobId; the
+   * mobile client polls /scan/status/:jobId for the result or
+   * receives a push notification when the scan completes. Designed
+   * for the "user backgrounded the app mid-scan" case where the
+   * old sync endpoint would lose the result the moment the HTTP
+   * connection drops.
+   *
+   * Reuses an in-flight job if one already exists for this user
+   * (double-tap, re-foreground retry) — never starts two scans in
+   * parallel for the same user.
+   */
+  @Post('scan/start')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RequireProGuard)
+  @Throttle({ default: { limit: 4, ttl: 60_000 } })
+  async scanStart(@Request() req, @Body() dto: ScanGmailDto) {
+    const plan: 'pro' | 'organization' =
+      req.proAccess?.plan === 'organization' ? 'organization' : 'pro';
+    return this.scanService.startScanJob(
+      req.user.id,
+      plan,
+      dto.locale ?? 'en',
+      { ...ctxFromReq(req), force: dto.force === true },
+    );
+  }
+
+  /**
+   * Poll for a job's current state. Returns 404 when the job ID is
+   * unknown OR belongs to a different user — exposing presence-
+   * information for arbitrary IDs would let a curious tenant probe
+   * for in-flight scans on other accounts. Same 404 for both cases
+   * by design.
+   */
+  @Get('scan/status/:jobId')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  async scanStatus(@Request() req, @Param('jobId') jobId: string) {
+    const status = await this.scanService.getScanJobStatus(jobId, req.user.id);
+    if (!status) {
+      throw new NotFoundException('Job not found');
+    }
+    return status;
   }
 }
