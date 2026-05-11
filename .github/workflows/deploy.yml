@@ -271,9 +271,18 @@ jobs:
           # then atomically swaps the nginx upstream + `nginx -s reload`.
           # If any step fails the new container is removed and the old one
           # keeps serving — deploy goes red but no traffic is dropped.
-          envs: TARGET
+          #
+          # We pin TARGET inside the script body at workflow render time
+          # rather than forwarding it via the action's `envs:` field — the
+          # previous deploy (run #545) crashed because the SSH binary's
+          # own env leaked into $TARGET when the var wasn't set in time,
+          # producing nonsense container names. Hardcoding the value here
+          # is safe because steps.env.outputs.target is computed from
+          # github.event_name / ref_name / inputs.environment — none of
+          # which are attacker-controlled.
           script: |
             set -euo pipefail
+            TARGET='${{ steps.env.outputs.target }}'
             CONTAINER="subradar-api-${TARGET}"
             LOCK="/tmp/deploy_locks/${CONTAINER}"
             mkdir -p /tmp/deploy_locks
@@ -300,5 +309,3 @@ jobs:
             echo "✅ deploy.sh completed (blue-green + migrations succeeded)"
             docker image prune -f || echo "image prune skipped (race with another deploy)"
             rm -f "$LOCK"
-        env:
-          TARGET: ${{ steps.env.outputs.target }}
