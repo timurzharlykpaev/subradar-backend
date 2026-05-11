@@ -178,4 +178,80 @@ describe('WorkspaceService', () => {
       await expect(service.getWorkspaceAnalytics('user-1')).rejects.toThrow(NotFoundException);
     });
   });
+
+  describe('transferOwnership', () => {
+    const wsWithAdmin = {
+      ...mockWorkspace,
+      members: [
+        ...mockWorkspace.members,
+        {
+          id: 'mem-2',
+          workspaceId: 'ws-1',
+          userId: 'user-2',
+          role: WorkspaceMemberRole.ADMIN,
+          status: WorkspaceMemberStatus.ACTIVE,
+        },
+      ],
+    };
+
+    it('rotates ownerId and demotes previous owner to ADMIN', async () => {
+      mockWorkspaceRepo.findOne.mockResolvedValue({ ...wsWithAdmin });
+      mockMemberRepo.save.mockImplementation((m) => Promise.resolve(m));
+      mockWorkspaceRepo.save.mockImplementation((w) => Promise.resolve(w));
+
+      // findById call at the end re-reads
+      mockWorkspaceRepo.findOne
+        .mockResolvedValueOnce({ ...wsWithAdmin })
+        .mockResolvedValueOnce({ ...wsWithAdmin, ownerId: 'user-2' });
+
+      const result = await service.transferOwnership('ws-1', 'user-1', 'mem-2');
+      expect(result.ownerId).toBe('user-2');
+      // The previous owner's role flip + new owner promotion + workspace
+      // ownerId update = 3 writes. (Order matters for the audit trail
+      // but not for the test.)
+      expect(mockMemberRepo.save).toHaveBeenCalledTimes(2);
+      expect(mockWorkspaceRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws ForbiddenException when caller is not the current owner', async () => {
+      mockWorkspaceRepo.findOne.mockResolvedValue(wsWithAdmin);
+      await expect(
+        service.transferOwnership('ws-1', 'user-2', 'mem-1'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws NotFoundException when target member id is unknown', async () => {
+      mockWorkspaceRepo.findOne.mockResolvedValue(wsWithAdmin);
+      await expect(
+        service.transferOwnership('ws-1', 'user-1', 'mem-nope'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when transferring to yourself', async () => {
+      mockWorkspaceRepo.findOne.mockResolvedValue(wsWithAdmin);
+      await expect(
+        service.transferOwnership('ws-1', 'user-1', 'mem-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when target is a pending invite', async () => {
+      const wsWithPending = {
+        ...mockWorkspace,
+        members: [
+          ...mockWorkspace.members,
+          {
+            id: 'mem-2',
+            workspaceId: 'ws-1',
+            userId: null,
+            role: WorkspaceMemberRole.MEMBER,
+            status: WorkspaceMemberStatus.PENDING,
+          },
+        ],
+      };
+      mockWorkspaceRepo.findOne.mockResolvedValue(wsWithPending);
+      await expect(
+        service.transferOwnership('ws-1', 'user-1', 'mem-2'),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
 });
