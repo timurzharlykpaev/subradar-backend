@@ -99,10 +99,44 @@ export class GmailScanService {
    *     real charge ($X.XX printed in the email body), that's a
    *     stronger signal than AI's self-reported confidence — keep.
    */
-  private filterNoise(candidates: EmailCandidate[]): EmailCandidate[] {
+  // Anything beyond this lookback has effectively turned into "old
+  // mail" from a subscription POV: a non-yearly receipt that's been
+  // silent for 6 months almost certainly means the user already
+  // cancelled — importing it as ACTIVE would create dashboard
+  // pollution the user has to manually delete. Yearly subscriptions
+  // legitimately go this long between receipts, so we exempt them.
+  private static readonly STALE_NONYEARLY_MS = 180 * 24 * 60 * 60 * 1000;
+
+  private filterNoise(
+    candidates: EmailCandidate[],
+    receivedAtById: Map<string, string>,
+  ): EmailCandidate[] {
+    const now = Date.now();
     return candidates.filter((c) => {
       if (c.isCancellation) return false;
       const enriched = !!c.iconUrl || (c.availablePlans?.length ?? 0) > 0;
+
+      // Stale-receipt filter — a non-YEARLY candidate whose freshest
+      // contributing receipt is >180d old is almost certainly a
+      // subscription the user has already dropped. We look across
+      // `aggregatedFrom` so a service with three receipts (two old,
+      // one recent) survives — only fully-cold services get culled.
+      if (c.billingPeriod !== 'YEARLY' && !c.isTrial) {
+        const sources = c.aggregatedFrom?.length
+          ? c.aggregatedFrom
+          : [c.sourceMessageId];
+        let latest = 0;
+        for (const id of sources) {
+          const iso = receivedAtById.get(id);
+          if (!iso) continue;
+          const t = Date.parse(iso);
+          if (Number.isFinite(t) && t > latest) latest = t;
+        }
+        if (latest > 0 && now - latest > GmailScanService.STALE_NONYEARLY_MS) {
+          return false;
+        }
+      }
+
       // amountFromEmail is the strongest "this is a real subscription"
       // signal we have — a printed money figure on a sender's domain.
       // Keep the row even if AI couldn't confirm "recurring" and the
@@ -178,6 +212,73 @@ export class GmailScanService {
       const key = `${normalized}|${c.currency.toUpperCase()}|${c.billingPeriod.toUpperCase()}`;
       return !seen.has(key);
     });
+  }
+
+  /**
+   * Allowlist of hosts we trust to serve subscription-management URLs.
+   * The catalog table is fed partly by AI web-search results, so a
+   * compromised LLM (or, more realistically, a hallucinated cancel-URL)
+   * could otherwise deep-link a Pro user to an attacker's site under
+   * the guise of "manage subscription". We restrict cancelUrl + the
+   * user-facing serviceUrl to known account-management domains.
+   *
+   * Entries are matched on host suffix (`endsWith`) so `*.apple.com`,
+   * `*.play.google.com` etc. pass; sub-paths are not constrained
+   * because each provider has a different URL structure.
+   */
+  private static readonly TRUSTED_CANCEL_HOSTS = [
+    'apple.com',
+    'play.google.com',
+    'paypal.com',
+    'amazon.com',
+    'github.com',
+    'stripe.com',
+    'paddle.com',
+    'paddle.net',
+    'lemonsqueezy.com',
+    'netflix.com',
+    'spotify.com',
+    'youtube.com',
+    'google.com',
+    'microsoft.com',
+    'adobe.com',
+    'openai.com',
+    'anthropic.com',
+    'notion.so',
+    'dropbox.com',
+    'figma.com',
+    'slack.com',
+    'discord.com',
+    'twitch.tv',
+    'hbomax.com',
+    'disneyplus.com',
+    'hulu.com',
+    'apple-services.com',
+    'subscribestar.com',
+    'patreon.com',
+  ];
+
+  /**
+   * Returns the URL unchanged if its host suffix matches the trusted
+   * allowlist, otherwise undefined. Used to scrub `cancelUrl` /
+   * `serviceUrl` before persisting them on a candidate — a malformed
+   * or attacker-shaped URL never leaves this method.
+   */
+  private safeCancelUrl(url: string | null | undefined): string | undefined {
+    if (!url || typeof url !== 'string') return undefined;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return undefined;
+      }
+      const host = parsed.hostname.toLowerCase();
+      for (const trusted of GmailScanService.TRUSTED_CANCEL_HOSTS) {
+        if (host === trusted || host.endsWith(`.${trusted}`)) return url;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Cap on OpenAI web-search calls per single scan. Catalog hits are
@@ -290,6 +391,20 @@ export class GmailScanService {
           // the user enters the real figure.
         }
 
+        // Cancel/service URLs go through an allowlist so a hallucinated
+        // or compromised catalog entry can't deep-link the user to an
+        // attacker domain under the guise of "Manage Subscription".
+        // Currently the catalog schema doesn't store cancelUrl/serviceUrl
+        // (see ServiceCatalog entity); this scrubs the AI-returned values
+        // and is the chokepoint for the day either field gets sourced
+        // from a less-trusted location (web-search, user-edits, etc).
+        const safeServiceUrl = this.safeCancelUrl(
+          (entry as any).serviceUrl ?? c.serviceUrl,
+        );
+        const safeCancelUrl = this.safeCancelUrl(
+          (entry as any).cancelUrl ?? c.cancelUrl,
+        );
+
         const enriched: EmailCandidate = {
           ...c,
           amount: c.amountFromEmail && c.amount > 0
@@ -303,6 +418,8 @@ export class GmailScanService {
               ? entry.category
               : c.category,
           iconUrl: entry.logoUrl ?? undefined,
+          serviceUrl: safeServiceUrl,
+          cancelUrl: safeCancelUrl,
           availablePlans: plans.length > 0 ? plans : undefined,
           amountIsApproximate: amountIsApproximate || undefined,
         };
@@ -424,6 +541,13 @@ export class GmailScanService {
           gmailScopes: null as any,
         },
       );
+      // Drop any cached scan result so a reconnect doesn't surface
+       // last-session candidates as if they were fresh.
+      try {
+        await this.redis.del(this.resultCacheKey(userId));
+      } catch {
+        /* cache eviction is best-effort */
+      }
       await this.audit.log({
         userId,
         action: 'gmail.auto_disconnect',
@@ -724,11 +848,27 @@ export class GmailScanService {
     return { key, count };
   }
 
+  // Result cache window. A returning user who comes back within this
+  // window (e.g. pulled the app from background after a 30-second scan)
+  // sees the same review sheet instead of being forced to scan again
+  // and burn another daily-quota slot. Bypassed via `force: true`.
+  private static readonly RESULT_CACHE_TTL_S = 600;
+
+  // Bump this when the shape of the cached object changes
+  // (EmailCandidate fields added/renamed, new required keys, etc) so
+  // a deploy doesn't serve old-shape blobs to new-shape clients for
+  // up to RESULT_CACHE_TTL_S. v1 is the initial cached-result version.
+  private static readonly RESULT_CACHE_VERSION = 'v1';
+
+  private resultCacheKey(userId: string): string {
+    return `gmail:scan:result:${GmailScanService.RESULT_CACHE_VERSION}:${userId}`;
+  }
+
   async scan(
     userId: string,
     plan: 'pro' | 'organization',
     locale = 'en',
-    ctx?: { ipAddress?: string; userAgent?: string },
+    ctx?: { ipAddress?: string; userAgent?: string; force?: boolean },
   ): Promise<{
     scanned: number;
     candidates: EmailCandidate[];
@@ -737,6 +877,11 @@ export class GmailScanService {
      * Mobile renders a banner inviting the user to re-scan. Old
      * clients (≤1.3.21) ignore unknown fields → no compat break. */
     truncated: boolean;
+    /** True when this response was served from a cached prior scan
+     * (within RESULT_CACHE_TTL_S). Mobile uses this to swap the loader
+     * for the review sheet without a fake delay, and to expose a
+     * "Scan again" CTA. Old clients ignore the field. */
+    cached?: boolean;
     /** Funnel breakdown so mobile can render a meaningful empty
      * state (e.g. "1 already in your list" vs "no receipts found"
      * vs "AI found nothing"). Without this `candidates: []` looks
@@ -750,6 +895,35 @@ export class GmailScanService {
     };
   }> {
     const startedAt = Date.now();
+
+    // Short-circuit on cached prior scan unless the caller forces a
+    // refresh. Done BEFORE acquiring the single-flight lock so the
+    // common "user briefly backgrounded the app and came back" path
+    // doesn't fight the lock with the in-flight scan they kicked off.
+    if (!ctx?.force) {
+      try {
+        const cached = await this.redis.get(this.resultCacheKey(userId));
+        if (cached) {
+          const parsed = JSON.parse(cached) as {
+            scanned: number;
+            candidates: EmailCandidate[];
+            durationMs: number;
+            truncated: boolean;
+            summary: { aiReturned: number; droppedNoise: number; droppedDup: number };
+          };
+          this.logger.log(
+            `[gmail.scan][user:${userId.slice(0, 8)}] returning cached result (${parsed.candidates.length} candidates)`,
+          );
+          return { ...parsed, cached: true };
+        }
+      } catch (err: any) {
+        // A cache read miss / parse error is non-fatal — fall through
+        // to a real scan.
+        this.logger.warn(
+          `[gmail.scan] cache read failed for ${userId}: ${err?.message ?? err}`,
+        );
+      }
+    }
 
     // Per-user single-flight lock first. A double-tap rejects here
     // without consuming a quota slot, so users can't accidentally burn
@@ -851,7 +1025,12 @@ export class GmailScanService {
         `${userTag}[stage:enrich] done — ${enriched.filter((c) => c.iconUrl).length} enriched`,
       );
 
-      const denoised = this.filterNoise(enriched);
+      // Index receivedAt by message id so the stale-filter can find each
+      // candidate's freshest contributing receipt without a second
+      // Gmail round-trip.
+      const receivedAtById = new Map<string, string>();
+      for (const m of messages) receivedAtById.set(m.id, m.receivedAt);
+      const denoised = this.filterNoise(enriched, receivedAtById);
       const candidates = await this.filterDuplicates(userId, denoised);
       this.logger.log(
         `${userTag}[stage:filter] noise=${enriched.length - denoised.length} dup=${denoised.length - candidates.length} → ${candidates.length} returned`,
@@ -903,7 +1082,7 @@ export class GmailScanService {
         },
       });
 
-      return {
+      const result = {
         scanned: messages.length,
         candidates,
         durationMs,
@@ -914,6 +1093,23 @@ export class GmailScanService {
           droppedDup: denoised.length - candidates.length,
         },
       };
+
+      // Cache for the briefly-backgrounded-app case. Failures here
+      // never block the scan return — the user gets results either way.
+      try {
+        await this.redis.set(
+          this.resultCacheKey(userId),
+          JSON.stringify(result),
+          'EX',
+          GmailScanService.RESULT_CACHE_TTL_S,
+        );
+      } catch (cacheErr: any) {
+        this.logger.warn(
+          `[gmail.scan] cache write failed for ${userId}: ${cacheErr?.message ?? cacheErr}`,
+        );
+      }
+
+      return result;
     } catch (err: any) {
       // Refund the daily-quota slot so an external-system failure (Gmail
       // 5xx, missing token, AI parse error) doesn't count against the

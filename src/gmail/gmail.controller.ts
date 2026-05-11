@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequireProGuard } from '../auth/guards/require-pro.guard';
@@ -24,6 +24,14 @@ class ScanGmailDto {
   @IsString()
   @MaxLength(10)
   locale?: string;
+
+  // When true, bypass the 10-min result cache and run a real scan.
+  // Used by the mobile "Scan again" CTA after the user reviews a
+  // cached result and wants to look for fresh receipts. The
+  // single-flight Redis lock + per-user daily quota still apply.
+  @IsOptional()
+  @IsBoolean()
+  force?: boolean;
 }
 
 function ctxFromReq(req: any): { ipAddress?: string; userAgent?: string } {
@@ -148,11 +156,9 @@ export class GmailController {
     // call safe rather than throwing on a missing field.
     const plan: 'pro' | 'organization' =
       req.proAccess?.plan === 'organization' ? 'organization' : 'pro';
-    return this.scanService.scan(
-      req.user.id,
-      plan,
-      dto.locale ?? 'en',
-      ctxFromReq(req),
-    );
+    return this.scanService.scan(req.user.id, plan, dto.locale ?? 'en', {
+      ...ctxFromReq(req),
+      force: dto.force === true,
+    });
   }
 }
