@@ -20,6 +20,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequireProGuard } from '../auth/guards/require-pro.guard';
 import { GmailService } from './gmail.service';
 import { GmailScanService } from './gmail-scan.service';
+import { BillingService } from '../billing/billing.service';
+import { UsersService } from '../users/users.service';
 
 class ScanGmailDto {
   @IsOptional()
@@ -49,6 +51,8 @@ export class GmailController {
   constructor(
     private readonly gmailService: GmailService,
     private readonly scanService: GmailScanService,
+    private readonly billingService: BillingService,
+    private readonly usersService: UsersService,
   ) {}
 
   /**
@@ -127,8 +131,36 @@ export class GmailController {
   @Get('status')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
-  status(@Request() req) {
-    return this.gmailService.getStatus(req.user.id);
+  async status(@Request() req) {
+    // Base Gmail connection state (everyone — Free can connect Gmail
+    // even though they can't scan, so the disconnect button still
+    // works regardless of plan).
+    const base = await this.gmailService.getStatus(req.user.id);
+    // Tack on the per-plan daily scan budget so the mobile UI can
+    // render an honest "0 / 1 scans left today" pill + disable the
+    // Scan button preemptively when the cap is hit. Additive change —
+    // old mobile clients ignore the extra field. Free users (and any
+    // unrecognised plan) get `dailyScans: null` to keep the field
+    // semantically meaningful ("no scan budget applies").
+    let dailyScans: { used: number; cap: number; resetAt: string } | null =
+      null;
+    try {
+      const user = await this.usersService.findById(req.user.id);
+      if (user) {
+        const access = await this.billingService.getEffectiveAccess(user);
+        if (access.plan === 'pro' || access.plan === 'organization') {
+          dailyScans = await this.scanService.getDailyQuotaUsage(
+            req.user.id,
+            access.plan,
+          );
+        }
+      }
+    } catch {
+      /* dailyScans stays null — never fail the status read on a
+         billing or Redis hiccup; the user can still see connection
+         state and the Scan endpoint will surface the real 429 if any */
+    }
+    return { ...base, dailyScans };
   }
 
   @Delete('disconnect')

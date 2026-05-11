@@ -97,13 +97,19 @@ export class GmailScanService {
   // spinner. 30s budget is generous for the realistic 1–2 page case
   // and bails the rare 5+ page edge case before the user gives up.
   private readonly LIST_PAGINATION_BUDGET_MS = 30_000;
-  // Per-user daily scan quota. Numbers are deliberately conservative —
-  // a typical Pro user runs 1 scan a week; 3/day covers re-scans if the
-  // first run missed something the user added later. Team plans get a
-  // higher cap because they roll up multiple members' inboxes.
-  private readonly DAILY_QUOTA: Record<string, number> = {
-    pro: 3,
-    organization: 10,
+  // Per-user daily scan quota. Tightened from {pro:3, org:10} → {pro:1,
+  // org:5} after AI cost audit: a worst-case full 1500-msg scan burns
+  // ~$0.50 in gpt-4o-mini tokens. Pro plan is $2.99/mo ≈ $0.10/day — at
+  // 3 scans/day this is a 15× loss-leader. Real-world average is much
+  // lower (~$0.05-0.20 per scan thanks to Gmail-side filtering + 10min
+  // result cache), but tighter caps protect the unit economics from
+  // power-user abuse while still covering the typical "scan once a
+  // week" pattern with 7× headroom. Team plans get 5/day because they
+  // roll up multiple members' inboxes — 1/day there would be too tight
+  // for an org of 5+ people.
+  public static readonly DAILY_QUOTA: Record<string, number> = {
+    pro: 1,
+    organization: 5,
   };
 
   constructor(
@@ -1257,6 +1263,38 @@ export class GmailScanService {
   }
 
   /**
+   * Read-only view of the user's daily quota for the /gmail/status
+   * response — lets the mobile UI render an honest "X of Y scans left
+   * today" indicator + disable the Scan button preemptively when the
+   * cap is hit (instead of blowing through a tap and getting a 429
+   * mid-flow). Pure GET, never increments. Returns `null` for plans
+   * with no cap defined (today: only pro/organization have one).
+   */
+  async getDailyQuotaUsage(
+    userId: string,
+    plan: 'pro' | 'organization',
+  ): Promise<{ used: number; cap: number; resetAt: string } | null> {
+    const cap = GmailScanService.DAILY_QUOTA[plan];
+    if (!cap) return null;
+    const key = this.dailyQuotaKey(userId);
+    const raw = await this.redis.get(key);
+    const used = raw ? Number(raw) || 0 : 0;
+    const now = new Date();
+    const resetAt = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + 1,
+        0,
+        0,
+        0,
+        0,
+      ),
+    ).toISOString();
+    return { used, cap, resetAt };
+  }
+
+  /**
    * Atomically increment the per-user-per-UTC-day scan counter and reject
    * if the plan-specific cap is exceeded. Pipelining INCR+EXPIRE in a
    * single MULTI keeps the TTL set even if the pod dies right after the
@@ -1276,7 +1314,7 @@ export class GmailScanService {
     userId: string,
     plan: 'pro' | 'organization',
   ): Promise<{ key: string; count: number }> {
-    const cap = this.DAILY_QUOTA[plan];
+    const cap = GmailScanService.DAILY_QUOTA[plan];
     const key = this.dailyQuotaKey(userId);
 
     if (!cap) {
