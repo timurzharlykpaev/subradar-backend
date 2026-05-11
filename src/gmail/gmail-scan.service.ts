@@ -729,11 +729,31 @@ export class GmailScanService {
     return { ids: ids.slice(0, this.MAX_MESSAGES), truncated };
   }
 
+  /** Max chars of body text we forward to the AI. Enough room for two-
+   * three screenfuls of receipt copy (typical receipts are 500–2,000
+   * chars) without ballooning the OpenAI token budget on the rare
+   * marketing-style billing email that ships kilobytes of HTML. */
+  private static readonly BODY_TEXT_CAP = 4000;
+
   /**
-   * Fetch a single message in `metadata` format (subject + from + snippet),
-   * strip HTML, and shape into the BulkEmailInput the AI expects. Metadata
-   * format is used to keep payload size bounded (full bodies can be
-   * megabytes); the AI snippet is enough for most receipt parsing.
+   * Fetch a single message with FULL body, extract plain-text content
+   * from whichever MIME parts are present, and shape into the
+   * BulkEmailInput the AI expects.
+   *
+   * Previously this ran on `format=metadata` which returns only
+   * Gmail's ~150-char `snippet` preview. That preview is heuristically
+   * picked by Gmail and for HTML-heavy receipts (logo + button +
+   * minimal copy — exactly the AppScreens-style template Stripe / Link
+   * issue) the snippet often contains zero billing signal: just the
+   * brand name and a blank line. With no body the AI couldn't tell a
+   * receipt from a marketing email and dropped legitimate candidates
+   * the user knew they were paying for.
+   *
+   * Full body fetch costs more bandwidth + OpenAI tokens, but the
+   * recall win (and the user-trust win — "scan actually finds my
+   * subscriptions") dwarfs the cost. We strip HTML / collapse
+   * whitespace and cap at BODY_TEXT_CAP chars to keep AI prompts
+   * bounded; a receipt has all its salient signal in the first ~2KB.
    */
   private async fetchMessage(
     accessToken: string,
@@ -742,14 +762,15 @@ export class GmailScanService {
     id: string;
     subject: string;
     snippet: string;
+    bodyText: string;
     from: string;
     receivedAt: string;
   } | null> {
     try {
-      const url = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`;
+      const url = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=full`;
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}` },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(10_000),
       });
       if (!res.ok) return null;
       const json = (await res.json()) as {
@@ -757,6 +778,13 @@ export class GmailScanService {
         internalDate?: string;
         payload?: {
           headers?: Array<{ name: string; value: string }>;
+          parts?: Array<{
+            mimeType?: string;
+            body?: { data?: string };
+            parts?: Array<{ mimeType?: string; body?: { data?: string } }>;
+          }>;
+          body?: { data?: string };
+          mimeType?: string;
         };
       };
       const headers = json.payload?.headers ?? [];
@@ -771,17 +799,99 @@ export class GmailScanService {
         : json.internalDate
           ? new Date(Number(json.internalDate)).toISOString()
           : new Date().toISOString();
-      // Snippet is plain text from Gmail but defensively strip any HTML
-      // remnants and collapse whitespace.
+
+      // Snippet remains as a quick-lookup; AI sees it too because for
+      // some messages it's higher-signal than the body's boilerplate
+      // wrapper (e.g. PayPal receipts where the user's amount lives in
+      // a header line Gmail picked for the snippet).
       const snippet = (json.snippet ?? '')
         .replace(/<[^>]*>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-      return { id: messageId, subject, snippet, from, receivedAt };
+
+      const bodyText = this.extractBodyText(json.payload);
+
+      return { id: messageId, subject, snippet, bodyText, from, receivedAt };
     } catch (err: any) {
       this.logger.warn(`Gmail fetch ${messageId} failed: ${err?.message ?? err}`);
       return null;
     }
+  }
+
+  /**
+   * Walk the Gmail message MIME tree, prefer `text/plain` parts, fall
+   * back to `text/html` (stripped of tags) when only HTML exists.
+   * Result is whitespace-collapsed and capped at BODY_TEXT_CAP.
+   *
+   * Multipart receipts typically carry both: `multipart/alternative`
+   * with text/plain + text/html siblings. We pick text/plain when
+   * available (less noise) and fall back to text/html otherwise — the
+   * stripped HTML still surfaces the brand, amount, and "Manage
+   * subscription" call-to-action labels the AI needs.
+   */
+  private extractBodyText(payload: any): string {
+    if (!payload) return '';
+    const decode = (data: string | undefined): string => {
+      if (!data) return '';
+      try {
+        const b64 = data.replace(/-/g, '+').replace(/_/g, '/');
+        return Buffer.from(b64, 'base64').toString('utf-8');
+      } catch {
+        return '';
+      }
+    };
+
+    // Two-pass walk: first try to find any text/plain leaf, then fall
+    // back to text/html. Recursing into nested multipart is required —
+    // Gmail wraps Apple/Google receipts in `multipart/mixed` →
+    // `multipart/alternative` → text/* leaves two levels deep.
+    const findByType = (
+      parts: any[] | undefined,
+      mime: 'text/plain' | 'text/html',
+    ): string => {
+      if (!Array.isArray(parts)) return '';
+      for (const p of parts) {
+        if (p?.mimeType === mime && p?.body?.data) {
+          return decode(p.body.data);
+        }
+        if (Array.isArray(p?.parts)) {
+          const nested = findByType(p.parts, mime);
+          if (nested) return nested;
+        }
+      }
+      return '';
+    };
+
+    let raw = '';
+    // Single-part body (rare for receipts but happens for plain-text
+    // notification emails).
+    if (payload.body?.data) {
+      raw = decode(payload.body.data);
+    }
+    if (!raw) raw = findByType(payload.parts, 'text/plain');
+    if (!raw) raw = findByType(payload.parts, 'text/html');
+
+    const stripped = raw
+      // Drop <style> / <script> content entirely (their text is junk).
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      // Surface alt text from images (often holds brand name in receipts).
+      .replace(/<img[^>]*alt=["']([^"']+)["'][^>]*>/gi, ' $1 ')
+      // Drop remaining tags.
+      .replace(/<[^>]+>/g, ' ')
+      // Decode the handful of HTML entities that show up in receipts.
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return stripped.length > GmailScanService.BODY_TEXT_CAP
+      ? stripped.slice(0, GmailScanService.BODY_TEXT_CAP)
+      : stripped;
   }
 
   /** Build today's daily-quota Redis key for a user, in UTC. */
@@ -996,6 +1106,7 @@ export class GmailScanService {
         id: string;
         subject: string;
         snippet: string;
+        bodyText: string;
         from: string;
         receivedAt: string;
       }> = [];
@@ -1006,7 +1117,13 @@ export class GmailScanService {
           slice.map((id) => this.fetchMessage(accessToken, id)),
         );
         for (const m of batch) {
-          if (m && m.snippet.length > 0) messages.push(m);
+          // Accept any message that has snippet OR body content — the
+          // body-only branch catches receipts whose Gmail-picked
+          // snippet came back blank (image-heavy templates) but whose
+          // body still has the price + brand.
+          if (m && (m.snippet.length > 0 || m.bodyText.length > 0)) {
+            messages.push(m);
+          }
         }
       }
       this.logger.log(
