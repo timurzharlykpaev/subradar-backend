@@ -831,7 +831,9 @@ Then extract:
 
 Each message includes a \`hints\` object pre-extracted by deterministic regex:
 - hints.candidateAmounts: top-3 money figures found in body/subject (raw text + parsed currency + numeric value). When the receipt has ONE dominant price (typical), it's the one you want; when several appear (upsell + actual charge), pick the one nearest a recurring cue or under the brand header.
-- hints.senderBrand: tentative brand name derived from the sender domain. Use it as a fallback when the body doesn't print the brand explicitly, but prefer the body-printed name when present (catches processor-issued receipts like "support@stripe.com" → real merchant in body).
+- hints.senderBrand: tentative brand name (curated registry hit OR domain-derived). Trust it when present unless the body clearly contradicts. Null for PSP-issued receipts (Stripe/Paddle/Link/Apple) — read the body for the merchant in that case.
+- hints.category: canonical category from the curated registry (STREAMING, MUSIC, AI_SERVICES, etc.). When present, use it as the category answer unless the body strongly suggests otherwise.
+- hints.defaultPeriod: typical billing cadence for this brand (MONTHLY or YEARLY). Use it as the default when the body doesn't print "/mo", "/yr", "monthly", "annually" etc.
 - hints.recurringCueCount / oneTimeCueCount: counts of recurring-shaped vs one-time-shaped phrases in the email. recurringCueCount ≥ 1 with no oneTimeCue is a strong recurring signal.
 
 These hints are advisory — your final answer is yours. If the body contradicts the hints, trust the body.
@@ -960,6 +962,134 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
 // ── Email-import types and helpers ────────────────────────────────────────
 
 /**
+ * Curated registry of known billing-sender domains → canonical brand
+ * + category + typical billing period. First-pass lookup inside
+ * extractReceiptHints; replaces the regex-derived "title-case the
+ * domain root" guess with deterministic display-correct values for
+ * the long tail of brands the model spells inconsistently
+ * (`Youtube` vs `YouTube`, `1password` vs `1Password`, …).
+ *
+ * Entries with `brand: null` are payment-service processors (Stripe,
+ * Paddle, Link, Apple, etc.) — they issue receipts on behalf of many
+ * merchants, so the merchant name has to come from the body. Marking
+ * them explicitly stops the derivation fallback from surfacing
+ * "Stripe" as a candidate brand for a Stripe-routed Notion receipt.
+ *
+ * Maintenance: add new entries as production logs surface frequent
+ * unknown senders. ~50 entries today covers the top SaaS users
+ * actually pay for; the long tail still works via the regex fallback
+ * inside extractReceiptHints. When we outgrow a code-only list,
+ * promote to a DB-backed `billing_sender_registry` (entity scaffold
+ * outlined in the audit notes).
+ */
+type KnownSenderInfo = {
+  brand: string | null; // null = PSP — read body for merchant
+  category?: string;
+  defaultPeriod?: 'MONTHLY' | 'YEARLY';
+};
+
+const KNOWN_BILLING_SENDERS: Record<string, KnownSenderInfo> = {
+  // ── Streaming ──────────────────────────────────────────────────
+  'netflix.com': { brand: 'Netflix', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
+  'disneyplus.com': { brand: 'Disney+', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
+  'hbomax.com': { brand: 'HBO Max', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
+  'hulu.com': { brand: 'Hulu', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
+  'youtube.com': { brand: 'YouTube', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
+  'twitch.tv': { brand: 'Twitch', category: 'STREAMING', defaultPeriod: 'MONTHLY' },
+  // ── Music ──────────────────────────────────────────────────────
+  'spotify.com': { brand: 'Spotify', category: 'MUSIC', defaultPeriod: 'MONTHLY' },
+  'tidal.com': { brand: 'Tidal', category: 'MUSIC', defaultPeriod: 'MONTHLY' },
+  'soundcloud.com': { brand: 'SoundCloud', category: 'MUSIC', defaultPeriod: 'MONTHLY' },
+  // ── AI ─────────────────────────────────────────────────────────
+  'openai.com': { brand: 'OpenAI', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
+  'anthropic.com': { brand: 'Anthropic', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
+  'cursor.sh': { brand: 'Cursor', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
+  'cursor.com': { brand: 'Cursor', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
+  'midjourney.com': { brand: 'Midjourney', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
+  'perplexity.ai': { brand: 'Perplexity', category: 'AI_SERVICES', defaultPeriod: 'MONTHLY' },
+  // ── Productivity ───────────────────────────────────────────────
+  'notion.so': { brand: 'Notion', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'figma.com': { brand: 'Figma', category: 'DESIGN', defaultPeriod: 'MONTHLY' },
+  'slack.com': { brand: 'Slack', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'discord.com': { brand: 'Discord', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'zoom.us': { brand: 'Zoom', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'linear.app': { brand: 'Linear', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'asana.com': { brand: 'Asana', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'monday.com': { brand: 'Monday', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'clickup.com': { brand: 'ClickUp', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'calendly.com': { brand: 'Calendly', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'loom.com': { brand: 'Loom', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  'dropbox.com': { brand: 'Dropbox', category: 'PRODUCTIVITY', defaultPeriod: 'MONTHLY' },
+  // ── Developer / Infra ──────────────────────────────────────────
+  'github.com': { brand: 'GitHub', category: 'DEVELOPER', defaultPeriod: 'MONTHLY' },
+  'gitlab.com': { brand: 'GitLab', category: 'DEVELOPER', defaultPeriod: 'MONTHLY' },
+  'vercel.com': { brand: 'Vercel', category: 'INFRASTRUCTURE', defaultPeriod: 'MONTHLY' },
+  'netlify.com': { brand: 'Netlify', category: 'INFRASTRUCTURE', defaultPeriod: 'MONTHLY' },
+  'digitalocean.com': { brand: 'DigitalOcean', category: 'INFRASTRUCTURE', defaultPeriod: 'MONTHLY' },
+  'cloudflare.com': { brand: 'Cloudflare', category: 'INFRASTRUCTURE', defaultPeriod: 'MONTHLY' },
+  // ── Design ─────────────────────────────────────────────────────
+  'adobe.com': { brand: 'Adobe', category: 'DESIGN', defaultPeriod: 'MONTHLY' },
+  'canva.com': { brand: 'Canva', category: 'DESIGN', defaultPeriod: 'MONTHLY' },
+  // ── Security / VPN ─────────────────────────────────────────────
+  '1password.com': { brand: '1Password', category: 'SECURITY', defaultPeriod: 'YEARLY' },
+  'nordvpn.com': { brand: 'NordVPN', category: 'SECURITY', defaultPeriod: 'YEARLY' },
+  'protonmail.com': { brand: 'Proton', category: 'SECURITY', defaultPeriod: 'MONTHLY' },
+  'proton.me': { brand: 'Proton', category: 'SECURITY', defaultPeriod: 'MONTHLY' },
+  // ── News / Reading ─────────────────────────────────────────────
+  'nytimes.com': { brand: 'New York Times', category: 'NEWS', defaultPeriod: 'MONTHLY' },
+  'wsj.com': { brand: 'Wall Street Journal', category: 'NEWS', defaultPeriod: 'MONTHLY' },
+  'substack.com': { brand: 'Substack', category: 'NEWS', defaultPeriod: 'MONTHLY' },
+  'medium.com': { brand: 'Medium', category: 'NEWS', defaultPeriod: 'MONTHLY' },
+  'audible.com': { brand: 'Audible', category: 'NEWS', defaultPeriod: 'MONTHLY' },
+  // ── Fitness / Health ───────────────────────────────────────────
+  'strava.com': { brand: 'Strava', category: 'HEALTH', defaultPeriod: 'YEARLY' },
+  'headspace.com': { brand: 'Headspace', category: 'HEALTH', defaultPeriod: 'YEARLY' },
+  // ── Education ──────────────────────────────────────────────────
+  'duolingo.com': { brand: 'Duolingo', category: 'EDUCATION', defaultPeriod: 'YEARLY' },
+  'coursera.org': { brand: 'Coursera', category: 'EDUCATION', defaultPeriod: 'MONTHLY' },
+  // ── Business ───────────────────────────────────────────────────
+  'linkedin.com': { brand: 'LinkedIn', category: 'BUSINESS', defaultPeriod: 'MONTHLY' },
+  // ── PSP — brand:null forces "read body for merchant" path ──────
+  'stripe.com': { brand: null },
+  'paddle.com': { brand: null },
+  'paddle.net': { brand: null },
+  'lemonsqueezy.com': { brand: null },
+  'paypal.com': { brand: null },
+  'link.com': { brand: null },
+  'apple.com': { brand: null },
+  'itunes.com': { brand: null },
+  'google.com': { brand: null },
+};
+
+/** Domains we know to be payment-service processors. Derived from the
+ * registry — anything with `brand: null` is a PSP. Used by the
+ * derivation fallback to suppress "Stripe" / "Apple" as a brand name. */
+const PSP_HOSTS = new Set<string>(
+  Object.entries(KNOWN_BILLING_SENDERS)
+    .filter(([, info]) => info.brand === null)
+    .map(([domain]) => domain),
+);
+
+/**
+ * Resolve a raw sender domain (already lowercased) against the curated
+ * registry. Tries an exact match first, then walks subdomain prefixes
+ * (`receipts.brand.com` → `brand.com`). Returns null for unknown
+ * domains — caller falls back to the regex derivation.
+ */
+function lookupKnownBillingSender(
+  rawDomain: string,
+): KnownSenderInfo | null {
+  if (KNOWN_BILLING_SENDERS[rawDomain]) return KNOWN_BILLING_SENDERS[rawDomain];
+  const parts = rawDomain.split('.');
+  while (parts.length > 2) {
+    parts.shift();
+    const candidate = parts.join('.');
+    if (KNOWN_BILLING_SENDERS[candidate]) return KNOWN_BILLING_SENDERS[candidate];
+  }
+  return null;
+}
+
+/**
  * Cheap regex pass that surfaces the three signals the AI most often
  * misses on image-heavy receipts:
  *
@@ -981,6 +1111,8 @@ export function extractReceiptHints(
 ): {
   candidateAmounts: Array<{ raw: string; currency: string; value: number }>;
   senderBrand: string | null;
+  category: string | null;
+  defaultPeriod: string | null;
   recurringCueCount: number;
   oneTimeCueCount: number;
 } {
@@ -1063,34 +1195,46 @@ export function extractReceiptHints(
   // `mg.`, `m.`) so `receipts@mail.appscreens.com` → "Appscreens".
   // Reject psp/processor domains that issue receipts on behalf of
   // many merchants — the merchant name lives in the body for those.
-  const PSP_HOSTS = new Set([
-    'stripe.com',
-    'paddle.com',
-    'paddle.net',
-    'lemonsqueezy.com',
-    'paypal.com',
-    'link.com',
-    'apple.com',
-    'itunes.com',
-    'google.com',
-  ]);
   let senderBrand: string | null = null;
+  let category: string | null = null;
+  let defaultPeriod: string | null = null;
   const fromAddr =
     (m.from ?? '').match(/<([^>]+)>/)?.[1] ?? (m.from ?? '').trim();
   const atIdx = fromAddr.lastIndexOf('@');
   if (atIdx > 0) {
-    const domain = fromAddr
-      .slice(atIdx + 1)
-      .toLowerCase()
-      .replace(/^(receipts|billing|invoices?|mail|email|mg|m|hello|notifications)\./, '');
-    if (domain && !PSP_HOSTS.has(domain)) {
-      const root = domain.replace(/\.(com|net|org|io|co|ai|app|so|me)$/, '');
-      if (root && root.length >= 2 && root.length <= 40 && /^[a-z0-9-]+$/.test(root)) {
-        // Title-case the root; multi-word brands like `lemonsqueezy`
-        // stay one word — the AI can re-spell if it knows the canonical
-        // form. The post-processor / catalog normaliser handles the
-        // brand-display layer.
-        senderBrand = root.charAt(0).toUpperCase() + root.slice(1);
+    const rawDomain = fromAddr.slice(atIdx + 1).toLowerCase();
+    // 1) Curated registry first — exact domain or subdomain (`*.brand.tld`)
+    //    match. For known brands this gives the canonical display name
+    //    ("YouTube" not "Youtube"), category, AND typical billing
+    //    period in one lookup. PSP entries return null brand so the
+    //    AI knows to read the body for the actual merchant.
+    const curated = lookupKnownBillingSender(rawDomain);
+    if (curated) {
+      senderBrand = curated.brand;
+      category = curated.category ?? null;
+      defaultPeriod = curated.defaultPeriod ?? null;
+    } else {
+      // 2) Derived fallback — strip well-known noise subdomains and
+      //    title-case the root. Skips PSP_HOSTS so a Stripe-issued
+      //    receipt doesn't surface "Stripe" as the candidate brand.
+      const domain = rawDomain.replace(
+        /^(receipts|billing|invoices?|mail|email|mg|m|hello|notifications)\./,
+        '',
+      );
+      if (domain && !PSP_HOSTS.has(domain)) {
+        const root = domain.replace(/\.(com|net|org|io|co|ai|app|so|me)$/, '');
+        if (
+          root &&
+          root.length >= 2 &&
+          root.length <= 40 &&
+          /^[a-z0-9-]+$/.test(root)
+        ) {
+          // Title-case the root; multi-word brands like `lemonsqueezy`
+          // stay one word — the AI can re-spell if it knows the canonical
+          // form. The post-processor / catalog normaliser handles the
+          // brand-display layer.
+          senderBrand = root.charAt(0).toUpperCase() + root.slice(1);
+        }
       }
     }
   }
@@ -1134,6 +1278,8 @@ export function extractReceiptHints(
   return {
     candidateAmounts: amounts,
     senderBrand,
+    category,
+    defaultPeriod,
     recurringCueCount,
     oneTimeCueCount,
   };

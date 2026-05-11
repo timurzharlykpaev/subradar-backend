@@ -101,4 +101,78 @@ describe('extractReceiptHints', () => {
     );
     expect(hints.senderBrand).toBe('Notion');
   });
+
+  describe('curated registry', () => {
+    it('returns the canonical display name (not the regex-derived title-case) for known brands', () => {
+      // Domain-root derivation would yield "Youtube"; the registry
+      // overrides with the official "YouTube" spelling.
+      const hints = extractReceiptHints(
+        {
+          from: 'no-reply@youtube.com',
+          subject: 'YouTube Premium receipt',
+          snippet: '$13.99',
+        },
+        'YouTube Premium $13.99 monthly',
+      );
+      expect(hints.senderBrand).toBe('YouTube');
+      expect(hints.category).toBe('STREAMING');
+      expect(hints.defaultPeriod).toBe('MONTHLY');
+    });
+
+    it('returns category + defaultPeriod for a YEARLY-default brand (1Password)', () => {
+      const hints = extractReceiptHints(
+        {
+          from: 'receipts@1password.com',
+          subject: 'Your 1Password receipt',
+          snippet: '$36.00',
+        },
+        '1Password Families $36.00',
+      );
+      expect(hints.senderBrand).toBe('1Password');
+      expect(hints.category).toBe('SECURITY');
+      expect(hints.defaultPeriod).toBe('YEARLY');
+    });
+
+    it('matches via subdomain walk (mail.spotify.com → Spotify)', () => {
+      const hints = extractReceiptHints(
+        {
+          from: 'no-reply@mail.spotify.com',
+          subject: 'Your receipt',
+          snippet: 'Spotify Premium',
+        },
+        '$10.99/month',
+      );
+      expect(hints.senderBrand).toBe('Spotify');
+      expect(hints.category).toBe('MUSIC');
+    });
+
+    it('returns null brand for known PSPs so AI reads body for merchant', () => {
+      const hints = extractReceiptHints(
+        {
+          from: 'support@stripe.com',
+          subject: 'Your Acme Pro receipt',
+          snippet: '$49',
+        },
+        'Acme Pro $49 monthly subscription',
+      );
+      expect(hints.senderBrand).toBeNull();
+      expect(hints.category).toBeNull();
+    });
+
+    it('falls back to regex derivation for unknown brands', () => {
+      const hints = extractReceiptHints(
+        {
+          from: 'receipts@somenewsaas.com',
+          subject: 'Receipt',
+          snippet: '',
+        },
+        'SomeNewSaaS $19.00 monthly',
+      );
+      // Derived from domain root — title-cased, no category/period
+      // because we don't know them.
+      expect(hints.senderBrand).toBe('Somenewsaas');
+      expect(hints.category).toBeNull();
+      expect(hints.defaultPeriod).toBeNull();
+    });
+  });
 });
