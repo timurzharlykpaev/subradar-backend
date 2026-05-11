@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../../users/entities/user.entity';
@@ -7,6 +7,7 @@ import { ReconciliationCron } from './reconciliation.cron';
 import { RevenueCatClientModule } from '../revenuecat/rc-client.module';
 import { AuditModule } from '../../common/audit/audit.module';
 import { OutboxModule } from '../outbox/outbox.module';
+import { BillingModule } from '../billing.module';
 
 /**
  * Wires the hourly billing-reconciliation job.
@@ -23,6 +24,9 @@ import { OutboxModule } from '../outbox/outbox.module';
     RevenueCatClientModule,
     AuditModule,
     OutboxModule,
+    // UserBillingRepository lives in BillingModule. Forward-ref because
+    // BillingModule already imports ReconciliationModule.
+    forwardRef(() => BillingModule),
   ],
   providers: [ReconciliationService, ReconciliationCron],
   exports: [ReconciliationService],
