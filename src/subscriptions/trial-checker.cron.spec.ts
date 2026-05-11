@@ -96,7 +96,7 @@ describe('TrialCheckerCron', () => {
 
     expect(mockNotifications.sendPushNotification).toHaveBeenCalledWith(
       'fcm-token',
-      'Trial Ending Soon',
+      expect.stringMatching(/trial/i),
       expect.stringContaining('Netflix'),
       expect.objectContaining({ subscriptionId: 'sub-1', type: 'trial_expiring' }),
       'u1',

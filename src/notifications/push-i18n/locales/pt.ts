@@ -48,4 +48,33 @@ export const pt: PushI18n = {
     title: '👀 Não perca as próximas cobranças',
     body: `${upcomingCount} assinatura${upcomingCount === 1 ? '' : 's'} renovando esta semana`,
   }),
+
+  gmailScanComplete: ({ candidates }) =>
+    candidates > 0
+      ? {
+          title: '✨ Escaneamento do Gmail pronto',
+          body: `${candidates} assinatura${candidates === 1 ? '' : 's'} potencial${candidates === 1 ? '' : 'is'} encontrada${candidates === 1 ? '' : 's'} na sua caixa`,
+        }
+      : {
+          title: 'Escaneamento do Gmail concluído',
+          body: 'Nenhuma assinatura nova encontrada — tudo que detectamos já está na sua lista',
+        },
+
+  subscriptionTrialEnding: ({ name, daysLeft }) => ({
+    title: 'Teste termina em breve',
+    body:
+      daysLeft <= 1
+        ? `Seu teste de ${name} termina amanhã — cancele agora para evitar cobranças`
+        : `Seu teste de ${name} termina em ${daysLeft} dias`,
+  }),
+
+  proTrialExpiring: () => ({
+    title: '⏰ Seu teste do SubRadar termina amanhã',
+    body: 'Assine agora para manter o acesso ilimitado a todos os recursos',
+  }),
+
+  proTrialExpired: () => ({
+    title: '🔓 Seu teste gratuito terminou',
+    body: 'Assine o SubRadar Pro para restaurar o acesso ilimitado',
+  }),
 };

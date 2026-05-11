@@ -48,4 +48,33 @@ export const ko: PushI18n = {
     title: '👀 다가오는 결제를 놓치지 마세요',
     body: `이번 주 ${upcomingCount}개 구독이 갱신됩니다`,
   }),
+
+  gmailScanComplete: ({ candidates }) =>
+    candidates > 0
+      ? {
+          title: '✨ Gmail 스캔 완료',
+          body: `받은편지함에서 잠재적 구독 ${candidates}개를 찾았습니다`,
+        }
+      : {
+          title: 'Gmail 스캔 완료',
+          body: '새 구독을 찾지 못했습니다 — 감지된 항목은 이미 목록에 있습니다',
+        },
+
+  subscriptionTrialEnding: ({ name, daysLeft }) => ({
+    title: '체험 종료 임박',
+    body:
+      daysLeft <= 1
+        ? `${name} 체험이 내일 종료됩니다 — 청구를 피하려면 지금 취소하세요`
+        : `${name} 체험이 ${daysLeft}일 후 종료됩니다`,
+  }),
+
+  proTrialExpiring: () => ({
+    title: '⏰ SubRadar 체험이 내일 종료됩니다',
+    body: '지금 구독하고 모든 기능에 대한 무제한 액세스를 유지하세요',
+  }),
+
+  proTrialExpired: () => ({
+    title: '🔓 무료 체험이 종료되었습니다',
+    body: 'SubRadar Pro를 구독하여 무제한 액세스를 복구하세요',
+  }),
 };

@@ -48,4 +48,33 @@ export const de: PushI18n = {
     title: '👀 Verpasse keine anstehenden Abbuchungen',
     body: `${upcomingCount} Abo${upcomingCount === 1 ? '' : 's'} verlänger${upcomingCount === 1 ? 't sich' : 'n sich'} diese Woche`,
   }),
+
+  gmailScanComplete: ({ candidates }) =>
+    candidates > 0
+      ? {
+          title: '✨ Gmail-Scan fertig',
+          body: `${candidates} mögliche${candidates === 1 ? 's' : ''} Abonnement${candidates === 1 ? '' : 's'} in deinem Postfach gefunden`,
+        }
+      : {
+          title: 'Gmail-Scan abgeschlossen',
+          body: 'Keine neuen Abos gefunden — alles Erkannte steht bereits in deiner Liste',
+        },
+
+  subscriptionTrialEnding: ({ name, daysLeft }) => ({
+    title: 'Testphase endet bald',
+    body:
+      daysLeft <= 1
+        ? `Deine ${name}-Testphase endet morgen — jetzt kündigen, um Abbuchungen zu vermeiden`
+        : `Deine ${name}-Testphase endet in ${daysLeft} Tagen`,
+  }),
+
+  proTrialExpiring: () => ({
+    title: '⏰ Deine SubRadar-Testphase endet morgen',
+    body: 'Jetzt abonnieren, um unbegrenzten Zugriff auf alle Funktionen zu behalten',
+  }),
+
+  proTrialExpired: () => ({
+    title: '🔓 Deine kostenlose Testphase ist abgelaufen',
+    body: 'Abonniere SubRadar Pro, um den unbegrenzten Zugriff wiederherzustellen',
+  }),
 };

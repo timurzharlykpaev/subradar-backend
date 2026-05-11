@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { Subscription, SubscriptionStatus } from './entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { pushT } from '../notifications/push-i18n';
 import { TelegramAlertService } from '../common/telegram-alert.service';
 import { runCronHandler } from '../common/cron/run-cron-handler';
 import { UserBillingRepository } from '../billing/user-billing.repository';
@@ -59,11 +60,10 @@ export class TrialCheckerCron {
         const user = await this.userRepo.findOne({ where: { id: sub.userId } });
         if (!user) continue;
 
-        const title = 'Trial Ending Soon';
-        const body =
-          daysLeft === 1
-            ? `Your ${sub.name} trial ends tomorrow! Cancel now to avoid charges.`
-            : `Your ${sub.name} trial ends in ${daysLeft} days.`;
+        const { title, body } = pushT(user.locale).subscriptionTrialEnding({
+          name: sub.name,
+          daysLeft,
+        });
 
         if (user.fcmToken) {
           await this.notifications.sendPushNotification(
@@ -75,15 +75,20 @@ export class TrialCheckerCron {
           );
         }
 
+        // Email body is intentionally a thin wrapper around the localized
+        // push title/body — the full per-locale email template treatment
+        // lives in a separate i18n module (TODO). Keeping push localized
+        // is the user-visible win; the email at least matches the user's
+        // language for the headline.
         await this.notifications.sendEmail(
           user.email,
           `${title}: ${sub.name}`,
           `
             <h2>${title}</h2>
             <p>${body}</p>
-            <p>Amount after trial: <strong>${sub.currency} ${sub.amount}</strong></p>
-            ${sub.cancelUrl ? `<p><a href="${sub.cancelUrl}">Cancel subscription</a></p>` : ''}
-            <p>Log in to <a href="https://app.subradar.ai">SubRadar AI</a> to manage your subscriptions.</p>
+            <p><strong>${sub.currency} ${sub.amount}</strong></p>
+            ${sub.cancelUrl ? `<p><a href="${sub.cancelUrl}">${sub.cancelUrl}</a></p>` : ''}
+            <p><a href="https://app.subradar.ai">SubRadar AI</a></p>
           `,
           { userId: user.id, unsubType: 'email_notifications' },
         );
@@ -133,8 +138,7 @@ export class TrialCheckerCron {
     for (const user of expiringUsers) {
       if (!user.trialEndDate) continue;
       try {
-        const title = '⏰ Your SubRadar trial ends tomorrow';
-        const body = 'Subscribe now to keep unlimited access to all features.';
+        const { title, body } = pushT(user.locale).proTrialExpiring();
 
         if (user.fcmToken) {
           await this.notifications.sendPushNotification(
@@ -146,15 +150,20 @@ export class TrialCheckerCron {
           );
         }
 
+        // Pass the user's actual locale to the email template + use it for
+        // the date format too. Previous version hardcoded 'ru' which sent
+        // a Russian-formatted/localized email to every user regardless of
+        // their language setting.
+        const emailLocale = user.locale || 'en';
         await this.notifications.sendUpcomingPaymentEmail(
           user.email,
           'SubRadar Pro',
           2.99,
           'USD',
           1,
-          new Date(user.trialEndDate).toLocaleDateString('ru-RU'),
+          new Date(user.trialEndDate).toLocaleDateString(emailLocale),
           'https://app.subradar.ai',
-          'ru',
+          emailLocale,
           user.id,
         );
 
@@ -225,8 +234,7 @@ export class TrialCheckerCron {
 
   private async sendTrialExpiredNotification(user: User): Promise<void> {
     try {
-      const title = '🔓 Your free trial has ended';
-      const body = 'Subscribe to SubRadar Pro to restore unlimited access.';
+      const { title, body } = pushT(user.locale).proTrialExpired();
 
       if (user.fcmToken) {
         await this.notifications.sendPushNotification(

@@ -20,6 +20,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { REDIS_CLIENT } from '../common/redis.module';
 import { maskEmail } from '../common/utils/pii';
 import { NotificationsService } from '../notifications/notifications.service';
+import { pushT } from '../notifications/push-i18n';
 import { randomUUID } from 'crypto';
 
 /**
@@ -413,20 +414,15 @@ export class GmailScanService {
     try {
       const user = await this.userRepo.findOne({
         where: { id: userId },
-        select: ['id', 'fcmToken'],
+        select: ['id', 'fcmToken', 'locale'],
       });
       if (!user?.fcmToken) return;
       const candidates = Array.isArray(result?.candidates)
         ? result.candidates.length
         : 0;
-      const title =
-        candidates > 0
-          ? '✨ SubRadar: Gmail scan ready'
-          : 'SubRadar: Gmail scan finished';
-      const body =
-        candidates > 0
-          ? `Found ${candidates} potential subscription${candidates === 1 ? '' : 's'} in your inbox.`
-          : "No new subscriptions found. Anything we detected was already in your list.";
+      const { title, body } = pushT(user.locale).gmailScanComplete({
+        candidates,
+      });
       await this.notifications.sendPushNotification(
         user.fcmToken,
         title,
