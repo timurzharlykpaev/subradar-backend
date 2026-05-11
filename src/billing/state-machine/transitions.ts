@@ -11,7 +11,7 @@ export function transition(
   e: BillingEvent,
 ): UserBillingSnapshot {
   switch (e.type) {
-    case 'RC_INITIAL_PURCHASE': {
+    case 'RC_INITIAL_PURCHASE':
       // Allow from `active`, `cancel_at_period_end`, `billing_issue` too —
       // those happen on Restore Purchases (new device, reinstall) where RC
       // re-emits INITIAL_PURCHASE for an entitlement we already track.
@@ -52,8 +52,10 @@ export function transition(
         graceExpiresAt: null,
         graceReason: null,
         billingIssueAt: null,
+        // Clear refund marker — a returning subscriber should not see
+        // a "refund processed" banner from a previous lifecycle.
+        refundedAt: null,
       };
-    }
 
     case 'RC_RENEWAL':
       // Apple may auto-renew a subscription that was flagged for
@@ -77,6 +79,7 @@ export function transition(
         currentPeriodEnd: e.periodEnd,
         billingIssueAt: null,
         cancelAtPeriodEnd: false,
+        refundedAt: null,
       };
 
     case 'RC_PRODUCT_CHANGE':
@@ -99,6 +102,7 @@ export function transition(
         // issues a fresh subscription for the new product.
         cancelAtPeriodEnd: false,
         billingIssueAt: null,
+        refundedAt: null,
       };
 
     case 'RC_CANCELLATION':
@@ -145,8 +149,11 @@ export function transition(
     case 'RC_REFUND':
       // Apple granted a refund. The receipt is reversed effective
       // immediately — no grace period, no period-end continuation. Drop
-      // the user to free right away. Idempotent: refund on an already-
-      // free row is a no-op.
+      // the user to free right away + stamp `refundedAt` so the UI can
+      // surface a localized "refund processed" banner for the next 7
+      // days (the window where the mobile UI distinguishes refund from
+      // ordinary expiration). Idempotent on already-free rows — they
+      // get the timestamp refreshed.
       return {
         ...s,
         plan: 'free',
@@ -159,6 +166,7 @@ export function transition(
         graceExpiresAt: null,
         graceReason: null,
         billingIssueAt: null,
+        refundedAt: new Date(),
       };
 
     case 'RC_BILLING_ISSUE':

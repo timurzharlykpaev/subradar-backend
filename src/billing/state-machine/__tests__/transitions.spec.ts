@@ -14,6 +14,7 @@ function freeSnapshot(): UserBillingSnapshot {
     graceExpiresAt: null,
     graceReason: null,
     billingIssueAt: null,
+        refundedAt: null,
   };
 }
 

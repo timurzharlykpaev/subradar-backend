@@ -77,4 +77,9 @@ export const en: PushI18n = {
     title: '🔓 Your free trial has ended',
     body: 'Subscribe to SubRadar Pro to restore unlimited access',
   }),
+
+  refundProcessed: () => ({
+    title: 'Refund processed',
+    body: 'Your subscription has been refunded and access removed',
+  }),
 };

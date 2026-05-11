@@ -8,6 +8,7 @@ describe('computeBannerPriority', () => {
     billingPeriod: 'monthly',
     cancelAtPeriodEnd: false,
     billingIssueAt: null,
+        refundedAt: null,
     currentPeriodEnd: null,
     graceExpiresAt: null,
     graceReason: null,

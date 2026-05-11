@@ -77,4 +77,9 @@ export const es: PushI18n = {
     title: '🔓 Tu prueba gratuita ha terminado',
     body: 'Suscríbete a SubRadar Pro para recuperar el acceso ilimitado',
   }),
+
+  refundProcessed: () => ({
+    title: 'Reembolso procesado',
+    body: 'Tu suscripción fue reembolsada y el acceso retirado',
+  }),
 };

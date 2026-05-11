@@ -272,6 +272,9 @@ export class User {
   get billingIssueAt(): Date | null {
     return this.billing?.billingIssueAt ?? null;
   }
+  get refundedAt(): Date | null {
+    return this.billing?.refundedAt ?? null;
+  }
 
   /**
    * Pro-invite seat graph: NULL for plan owners; set to the inviter's

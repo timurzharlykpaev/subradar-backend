@@ -15,6 +15,7 @@ describe('reconcile', () => {
       graceExpiresAt: null,
       graceReason: null,
       billingIssueAt: null,
+        refundedAt: null,
     };
     const rc: RCSubscriberSnapshot = {
       entitlements: {},
@@ -40,6 +41,7 @@ describe('reconcile', () => {
       graceExpiresAt: null,
       graceReason: null,
       billingIssueAt: null,
+        refundedAt: null,
     };
     const rc: RCSubscriberSnapshot = {
       entitlements: { pro: { expiresAt: end, productId: 'io.subradar.mobile.pro.monthly' } },
@@ -65,6 +67,7 @@ describe('reconcile', () => {
       graceExpiresAt: null,
       graceReason: null,
       billingIssueAt: null,
+        refundedAt: null,
     };
     const rc: RCSubscriberSnapshot = {
       entitlements: { pro: { expiresAt: end, productId: 'io.subradar.mobile.pro.monthly' } },
@@ -91,6 +94,7 @@ describe('reconcile', () => {
       graceExpiresAt: null,
       graceReason: null,
       billingIssueAt: null,
+        refundedAt: null,
     };
     const rc: RCSubscriberSnapshot = {
       entitlements: { pro: { expiresAt: end, productId: 'io.subradar.mobile.pro.monthly' } },

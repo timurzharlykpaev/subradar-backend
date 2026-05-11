@@ -94,6 +94,7 @@ export class ReconciliationService {
       graceExpiresAt: u.gracePeriodEnd,
       graceReason: (u.gracePeriodReason as GraceReason) ?? null,
       billingIssueAt: u.billingIssueAt,
+      refundedAt: u.refundedAt,
     };
   }
 

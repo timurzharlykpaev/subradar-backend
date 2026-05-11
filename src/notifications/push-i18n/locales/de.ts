@@ -77,4 +77,9 @@ export const de: PushI18n = {
     title: '🔓 Deine kostenlose Testphase ist abgelaufen',
     body: 'Abonniere SubRadar Pro, um den unbegrenzten Zugriff wiederherzustellen',
   }),
+
+  refundProcessed: () => ({
+    title: 'Rückerstattung bearbeitet',
+    body: 'Dein Abonnement wurde erstattet und der Zugriff entfernt',
+  }),
 };
