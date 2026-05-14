@@ -151,21 +151,38 @@ export class AnalysisProcessor {
         this.logger.warn(`FX rates unavailable, falling back to raw amounts: ${e?.message}`);
       }
 
+      const missingRates = new Set<string>();
       const monthlyInDisplay = (sub: Subscription): number => {
         const raw = toMonthly(sub);
         const from = (sub.currency || displayCurrency).toUpperCase();
-        if (from === displayCurrency || !fxRates[from] && from !== 'USD') {
-          return raw;
+        if (from === displayCurrency) return raw;
+        // Without an FX rate we can't safely convert. Adding `raw` (in `from`)
+        // straight into a `displayCurrency` total mixes scales (EUR → KZT is
+        // ~500× off), poisoning every downstream aggregate the LLM sees.
+        // Skip the row instead, surface the gap via warn log.
+        if (from !== 'USD' && !fxRates[from]) {
+          missingRates.add(from);
+          return 0;
         }
         try {
           return this.fx.convert(new Decimal(raw), from, displayCurrency, fxRates).toNumber();
-        } catch {
-          return raw;
+        } catch (e: any) {
+          missingRates.add(from);
+          this.logger.warn(
+            `FX convert failed (${from} → ${displayCurrency}) for sub ${sub.id}: ${e?.message}`,
+          );
+          return 0;
         }
       };
 
       // Deterministic analytics in display currency
       const totalMonthly = subscriptions.reduce((sum, s) => sum + monthlyInDisplay(s), 0);
+
+      if (missingRates.size > 0) {
+        this.logger.warn(
+          `Analysis ${jobId}: FX rates missing for [${Array.from(missingRates).join(', ')}] → ${displayCurrency}; affected subs counted as 0 to keep totals coherent`,
+        );
+      }
 
       const byCategoryMap = new Map<string, { total: number; count: number }>();
       for (const sub of subscriptions) {
@@ -377,6 +394,18 @@ export class AnalysisProcessor {
       analysisJob.error = error.message?.slice(0, 2000) || 'Unknown error';
       analysisJob.completedAt = new Date();
       await this.jobRepo.save(analysisJob);
+
+      // OpenAI may have already billed us before the failure (parse error,
+      // DB write error, etc). Record those tokens under the weekly usage so
+      // they count toward cost dashboards. We deliberately don't bump the
+      // manual/auto quota — failed runs shouldn't punish the user's allowance.
+      if (analysisJob.tokensUsed > 0) {
+        try {
+          await this.analysisService.recordFailedJobCost(userId, analysisJob.tokensUsed);
+        } catch (e: any) {
+          this.logger.warn(`Failed to record cost for failed job ${jobId}: ${e?.message}`);
+        }
+      }
 
       throw error;
     }

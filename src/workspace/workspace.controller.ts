@@ -229,7 +229,7 @@ export class WorkspaceController {
   async getAnalysisLatest(@Request() req: any) {
     const workspace = await this.service.getMyWorkspace(req.user.id);
     if (!workspace) return null;
-    return this.analysisService.getLatest(req.user.id, workspace.id);
+    return this.analysisService.getLatest(req.user.id, { workspaceId: workspace.id });
   }
 
   @Post('me/analysis/run')

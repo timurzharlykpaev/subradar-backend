@@ -1001,10 +1001,9 @@ export class WorkspaceService {
         'Only the workspace owner can view team overlaps',
       );
     }
-    const latest = await this.analysisService.getLatest(
-      requesterId,
-      workspace.id,
-    );
+    const latest = await this.analysisService.getLatest(requesterId, {
+      workspaceId: workspace.id,
+    });
     const result = (latest as any)?.latestResult;
     const overlaps = Array.isArray(result?.overlaps) ? result.overlaps : [];
     const teamSavings = Number(result?.teamSavings) || 0;

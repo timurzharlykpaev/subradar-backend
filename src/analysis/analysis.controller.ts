@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, UseGuards, Request, ForbiddenException, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Query, UseGuards, Request, ForbiddenException, HttpCode, HttpStatus } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AnalysisPlanGuard } from './guards/plan.guard';
@@ -13,8 +13,22 @@ export class AnalysisController {
 
   @Get('latest')
   @UseGuards(AnalysisPlanGuard)
-  async getLatest(@Request() req: any) {
-    const { latestResult, activeJob, canRunManual } = await this.analysisService.getLatest(req.user.id);
+  async getLatest(
+    @Request() req: any,
+    @Query('displayCurrency') displayCurrency?: string,
+  ) {
+    // `displayCurrency` is additive and optional. Old mobile builds never
+    // send it → service returns amounts in the result's stored currency
+    // (legacy behaviour). New builds send the user's UI currency → service
+    // converts via FX so the screen always matches the user's locale.
+    const normalized =
+      typeof displayCurrency === 'string' && /^[A-Za-z]{3}$/.test(displayCurrency)
+        ? displayCurrency.toUpperCase()
+        : undefined;
+    const { latestResult, activeJob, canRunManual } = await this.analysisService.getLatest(
+      req.user.id,
+      { displayCurrency: normalized },
+    );
     const result = latestResult;
     const job = activeJob;
     const nextAutoAnalysis: string | null = null;
