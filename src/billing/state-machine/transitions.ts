@@ -65,10 +65,22 @@ export function transition(
       // the user's paid period continues normally instead of crashing
       // the webhook (which would mean their money is taken but plan
       // stays "cancelling").
+      //
+      // Also accept from `grace_pro` / `grace_team`: RC can emit
+      // EXPIRATION followed by RENEWAL when Apple's first charge
+      // attempt fails and the second succeeds (common in
+      // billing-restricted regions — RU, KZ, BY, IR). Previously this
+      // threw, leaving the user stuck on a "Pro expired — renew" banner
+      // with a fully paid auto-renewing subscription. Plan is preserved
+      // during grace (see RC_EXPIRATION), so the row already has the
+      // correct plan; we just need to clear the grace marker and snap
+      // back to active.
       if (
         s.state !== 'active' &&
         s.state !== 'billing_issue' &&
-        s.state !== 'cancel_at_period_end'
+        s.state !== 'cancel_at_period_end' &&
+        s.state !== 'grace_pro' &&
+        s.state !== 'grace_team'
       ) {
         throw new InvalidTransitionError(s.state, e.type);
       }
@@ -79,6 +91,11 @@ export function transition(
         currentPeriodEnd: e.periodEnd,
         billingIssueAt: null,
         cancelAtPeriodEnd: false,
+        // Clear grace markers — leaving them set when exiting via
+        // RENEWAL would surface stale "expires in N days" copy on the
+        // mobile banner until the next reconcile.
+        graceExpiresAt: null,
+        graceReason: null,
         refundedAt: null,
       };
 

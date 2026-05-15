@@ -58,9 +58,25 @@ export class ReconciliationService {
       JOIN user_billing b ON b."userId" = u.id
       WHERE b."billingSource" = 'revenuecat'
         AND (
+          -- (a) Active/cancel/billing_issue rows whose period end is
+          -- already in the past — the RC webhook (EXPIRATION /
+          -- RENEWAL / CANCELLATION) was lost or hasn't arrived yet.
           (b."currentPeriodEnd" IS NOT NULL
            AND b."currentPeriodEnd" < now() - interval '10 minutes'
            AND b."billingStatus" NOT IN ('grace_pro','grace_team','free'))
+          -- (b) Rows stuck in grace whose grace window is still open
+          -- but RC may have flipped back to active (late RENEWAL).
+          -- Without this branch the cron skipped grace forever and
+          -- users with a working auto-renewing sub kept the "Pro
+          -- expired" banner until grace lapsed and they bought again.
+          -- Bounded by gracePeriodEnd so we don't re-check users whose
+          -- grace already ended (those drop to free via the cron's
+          -- own GRACE_EXPIRED path).
+          OR (b."billingStatus" IN ('grace_pro','grace_team')
+              AND b."gracePeriodEnd" IS NOT NULL
+              AND b."gracePeriodEnd" > now())
+          -- (c) Anyone whose recent webhook errored — likely got
+          -- partially applied and needs a fresh look against RC.
           OR u.id IN (
             SELECT DISTINCT user_id FROM webhook_events
             WHERE provider = 'revenuecat'

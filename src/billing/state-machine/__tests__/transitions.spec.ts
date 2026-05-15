@@ -144,6 +144,50 @@ describe('BillingStateMachine.transition', () => {
     expect(next.graceExpiresAt).toBeNull();
   });
 
+  // Regression: RC sometimes emits EXPIRATION followed by a RENEWAL when a
+  // retry charge succeeds (common in RU/KZ/BY/IR where the first attempt
+  // fails). Previously this threw InvalidTransitionError, leaving the user
+  // stuck in grace_pro with a "Pro expired" banner under a fully paid
+  // auto-renewing subscription.
+  it('grace_pro → active on RC_RENEWAL (retry-after-failure path)', () => {
+    const grace: UserBillingSnapshot = {
+      ...freeSnapshot(),
+      plan: 'pro',
+      state: 'grace_pro',
+      billingSource: 'revenuecat',
+      graceReason: 'pro_expired',
+      graceExpiresAt: new Date(Date.now() + 5 * 86400_000),
+    };
+    const start = new Date('2026-04-19');
+    const end = new Date('2026-05-19');
+    const next = transition(grace, { type: 'RC_RENEWAL', periodStart: start, periodEnd: end });
+    expect(next.state).toBe('active');
+    expect(next.plan).toBe('pro'); // plan preserved through grace
+    expect(next.graceExpiresAt).toBeNull();
+    expect(next.graceReason).toBeNull();
+    expect(next.currentPeriodEnd).toEqual(end);
+  });
+
+  it('grace_team → active on RC_RENEWAL', () => {
+    const grace: UserBillingSnapshot = {
+      ...freeSnapshot(),
+      plan: 'organization',
+      state: 'grace_team',
+      billingSource: 'revenuecat',
+      graceReason: 'team_expired',
+      graceExpiresAt: new Date(Date.now() + 5 * 86400_000),
+    };
+    const next = transition(grace, {
+      type: 'RC_RENEWAL',
+      periodStart: new Date(),
+      periodEnd: new Date(Date.now() + 30 * 86400_000),
+    });
+    expect(next.state).toBe('active');
+    expect(next.plan).toBe('organization');
+    expect(next.graceExpiresAt).toBeNull();
+    expect(next.graceReason).toBeNull();
+  });
+
   it('active → grace_team on TEAM_OWNER_EXPIRED when memberHasOwnSub=false', () => {
     const member: UserBillingSnapshot = {
       ...freeSnapshot(),
