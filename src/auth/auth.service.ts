@@ -328,7 +328,11 @@ export class AuthService {
     const token = randomBytes(32).toString('hex');
     const tokenHash = createHash('sha256').update(token).digest('hex');
 
-    const expiry = new Date(Date.now() + 15 * 60 * 1000);
+    // Out-of-band authenticator validity: 10 minutes per ASVS V2.7.4 / CASA
+    // Tier 2 SAQ #24. Previously 15 min — reduced after the May 2026 SAQ
+    // review. Backward compatibility: older magic links still in flight
+    // simply expire 5 minutes sooner; no client breakage.
+    const expiry = new Date(Date.now() + 10 * 60 * 1000);
     await this.usersService.update(user.id, {
       magicLinkToken: tokenHash,
       magicLinkExpiry: expiry,
@@ -770,7 +774,9 @@ export class AuthService {
     // Store sha256 of the code, never the plaintext. A Redis dump must not
     // disclose any live login codes.
     const codeHash = createHash('sha256').update(code).digest('hex');
-    await this.redis.set(`otp:${dto.email}`, codeHash, 'EX', 900);
+    // 600 seconds = 10-minute TTL per ASVS V2.7.4 (out-of-band verifier
+    // validity). Was 900s before the May 2026 SAQ review.
+    await this.redis.set(`otp:${dto.email}`, codeHash, 'EX', 600);
 
     const otpEmail = buildOtpEmail({
       locale: dto.locale ?? 'en',
