@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Readable } from 'stream';
 import { AuditService } from '../audit/audit.service';
 
 /**
@@ -116,11 +117,12 @@ export class AntivirusService implements OnModuleInit {
     }
 
     try {
-      const result = await this.clamscan.scanBuffer(
-        buffer,
-        // Pass the label so debug logs from clamscan are meaningful.
-        opts.label ?? 'upload',
-      );
+      // clamscan v2.x removed `scanBuffer` — wrap the buffer in a Readable
+      // and pump it through `scanStream` (which the daemon accepts via the
+      // INSTREAM command). This keeps a single round-trip to clamd and
+      // doesn't write the buffer to disk.
+      const stream = Readable.from(buffer);
+      const result = await this.clamscan.scanStream(stream);
       const { isInfected, viruses } = result || {};
       if (isInfected) {
         this.logger.warn(
