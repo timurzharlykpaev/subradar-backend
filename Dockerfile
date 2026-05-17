@@ -22,6 +22,9 @@ COPY package*.json ./
 RUN npm ci --omit=dev && npm audit fix --omit=dev || true
 
 COPY --from=builder /app/dist ./dist
+# scripts/ holds operational one-shots (CASA test-user seed). Plain JS, no
+# build step — runs against runtime deps (pg, bcrypt) already in the image.
+COPY --from=builder /app/scripts ./scripts
 
 RUN chown -R nodejs:nodejs /app
 
