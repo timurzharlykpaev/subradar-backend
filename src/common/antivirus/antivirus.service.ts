@@ -52,9 +52,11 @@ export class AntivirusService implements OnModuleInit {
     }
     try {
       // Dynamic require so dev environments without the optional native
-      // dep don't break NestFactory.create on module load.
+      // dep don't break NestFactory.create on module load. clamscan v2.x
+      // ships the class as the default export, so unwrap accordingly.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { NodeClam } = require('clamscan');
+      const mod = require('clamscan');
+      const NodeClam = mod?.default ?? mod;
       const host = this.cfg.get<string>('CLAMAV_HOST', 'subradar-clamav');
       const port = parseInt(
         this.cfg.get<string>('CLAMAV_PORT', '3310') ?? '3310',

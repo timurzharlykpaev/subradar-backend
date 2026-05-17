@@ -176,6 +176,10 @@ jobs:
             FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
             FIREBASE_CLIENT_EMAIL=${{ secrets.FIREBASE_CLIENT_EMAIL }}
             FIREBASE_PRIVATE_KEY=${{ secrets.FIREBASE_PRIVATE_KEY }}
+            AV_ENABLED=true
+            AV_FAIL_OPEN=true
+            CLAMAV_HOST=subradar-clamav
+            CLAMAV_PORT=3310
             ENVEOF
             echo "✅ .env.prod updated"
 
@@ -241,6 +245,10 @@ jobs:
             FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
             FIREBASE_CLIENT_EMAIL=${{ secrets.FIREBASE_CLIENT_EMAIL }}
             FIREBASE_PRIVATE_KEY=${{ secrets.FIREBASE_PRIVATE_KEY }}
+            AV_ENABLED=true
+            AV_FAIL_OPEN=true
+            CLAMAV_HOST=subradar-clamav
+            CLAMAV_PORT=3310
             ENVEOF
             echo "✅ .env.dev updated"
 
