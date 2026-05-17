@@ -29,6 +29,7 @@ import { CatalogModule } from './catalog/catalog.module';
 import { GmailModule } from './gmail/gmail.module';
 import { HealthModule } from './health/health.module';
 import { AuditModule } from './common/audit/audit.module';
+import { AntivirusModule } from './common/antivirus/antivirus.module';
 import { IdempotencyModule } from './common/idempotency/idempotency.module';
 
 @Module({
@@ -166,6 +167,7 @@ import { IdempotencyModule } from './common/idempotency/idempotency.module';
     GmailModule,
     HealthModule,
     AuditModule,
+    AntivirusModule,
     IdempotencyModule,
     ScheduleModule.forRoot(),
   ],

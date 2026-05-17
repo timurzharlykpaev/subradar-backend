@@ -3,6 +3,7 @@ import { AiController } from './ai.controller';
 import { AiService } from './ai.service';
 import { BillingService } from '../billing/billing.service';
 import { MarketDataService } from '../analysis/market-data.service';
+import { AntivirusService } from '../common/antivirus/antivirus.service';
 
 describe('AiController', () => {
   let controller: AiController;
@@ -42,6 +43,10 @@ describe('AiController', () => {
         { provide: AiService, useValue: mockAiService },
         { provide: BillingService, useValue: mockBillingService },
         { provide: MarketDataService, useValue: mockMarketDataService },
+        {
+          provide: AntivirusService,
+          useValue: { scanBuffer: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
 

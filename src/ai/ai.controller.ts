@@ -22,6 +22,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AiService } from './ai.service';
 import { BillingService } from '../billing/billing.service';
 import { MarketDataService } from '../analysis/market-data.service';
+import { AntivirusService } from '../common/antivirus/antivirus.service';
 import { WizardDto, MatchServiceDto } from './dto/ai.dto';
 
 function isValidImage(buffer: Buffer): boolean {
@@ -163,6 +164,7 @@ export class AiController {
     @Inject(forwardRef(() => BillingService))
     private readonly billingService: BillingService,
     private readonly marketDataService: MarketDataService,
+    private readonly antivirus: AntivirusService,
   ) {}
 
   @Post('lookup')
@@ -206,6 +208,15 @@ export class AiController {
     if (file?.buffer && !isValidImage(file.buffer)) {
       throw new BadRequestException('Invalid image file');
     }
+    // SAQ #10: scan untrusted bytes before sending them to a third party
+    // (OpenAI Vision). Even though we don't persist these locally, a
+    // malicious image bypasses no defences if the AV signature is current.
+    if (file?.buffer) {
+      await this.antivirus.scanBuffer(file.buffer, {
+        userId: req.user.id,
+        label: 'ai-screenshot',
+      });
+    }
     let imageBase64 = dto.imageBase64;
     if (!imageBase64 && file) {
       imageBase64 = file.buffer.toString('base64');
@@ -241,6 +252,12 @@ export class AiController {
     if (file?.buffer && !isValidAudio(file.buffer)) {
       throw new BadRequestException('Invalid audio file');
     }
+    if (file?.buffer) {
+      await this.antivirus.scanBuffer(file.buffer, {
+        userId: req.user.id,
+        label: 'ai-voice',
+      });
+    }
     let audioBase64 = dto.audioBase64;
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
@@ -268,6 +285,12 @@ export class AiController {
     await this.billingService.consumeAiRequest(req.user.id);
     if (file?.buffer && !isValidAudio(file.buffer)) {
       throw new BadRequestException('Invalid audio file');
+    }
+    if (file?.buffer) {
+      await this.antivirus.scanBuffer(file.buffer, {
+        userId: req.user.id,
+        label: 'ai-parse-audio',
+      });
     }
     let audioBase64 = dto.audioBase64;
     if (!audioBase64 && file) {

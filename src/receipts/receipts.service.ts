@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Receipt } from './entities/receipt.entity';
+import { AntivirusService } from '../common/antivirus/antivirus.service';
 
 // Allowed receipt content types — verified against magic bytes below, NOT
 // against client-supplied MIME (which is trivially spoofed). Keep the list
@@ -71,6 +72,7 @@ export class ReceiptsService {
   constructor(
     @InjectRepository(Receipt) private readonly repo: Repository<Receipt>,
     private readonly cfg: ConfigService,
+    private readonly antivirus: AntivirusService,
   ) {
     const endpoint = cfg.get(
       'DO_SPACES_ENDPOINT',
@@ -107,6 +109,13 @@ export class ReceiptsService {
         'Unsupported file type. Only JPEG, PNG, WebP, and PDF receipts are accepted.',
       );
     }
+    // CASA Tier 2 SAQ #10: scan untrusted uploads before any persistence /
+    // serving. No-op when AV_ENABLED is false; throws BadRequestException
+    // on a positive signature hit so the file is never written to Spaces.
+    await this.antivirus.scanBuffer(file.buffer, {
+      userId,
+      label: 'receipt-upload',
+    });
     const safeStem = sanitizeFilenameStem(file.originalname || 'receipt');
     const safeFilename = `${safeStem}.${detected.ext}`;
     const key = `receipts/${userId}/${Date.now()}-${safeFilename}`;

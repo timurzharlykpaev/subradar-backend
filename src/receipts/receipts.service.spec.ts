@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { BadRequestException } from '@nestjs/common';
 import { ReceiptsService } from './receipts.service';
 import { Receipt } from './entities/receipt.entity';
+import { AntivirusService } from '../common/antivirus/antivirus.service';
 
 jest.mock('@aws-sdk/client-s3', () => ({
   S3Client: jest.fn().mockImplementation(() => ({ send: jest.fn().mockResolvedValue({}) })),
@@ -36,6 +37,10 @@ describe('ReceiptsService', () => {
         ReceiptsService,
         { provide: getRepositoryToken(Receipt), useValue: mockRepo },
         { provide: ConfigService, useValue: mockConfigService },
+        {
+          provide: AntivirusService,
+          useValue: { scanBuffer: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
     service = module.get<ReceiptsService>(ReceiptsService);
