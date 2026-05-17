@@ -1,5 +1,9 @@
 import { NestFactory, Reflector } from '@nestjs/core';
-import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
+import {
+  ClassSerializerInterceptor,
+  ForbiddenException,
+  ValidationPipe,
+} from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import * as bodyParser from 'body-parser';
@@ -71,7 +75,11 @@ async function bootstrap() {
       // Note: we can't see the request here, so we fall through to a
       // second layer of validation via a middleware below.
       if (!origin) return cb(null, true);
-      cb(new Error(`CORS: origin ${origin} not allowed`));
+      // Reject as a typed 403 so AllExceptionsFilter routes it through the
+      // HttpException branch — a plain `new Error(...)` defaults to status
+      // 500, gets logged as "Unhandled exception", and pages oncall via
+      // Telegram for every drive-by scanner that probes our CORS policy.
+      cb(new ForbiddenException(`CORS: origin ${origin} not allowed`));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

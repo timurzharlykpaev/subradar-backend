@@ -11,7 +11,14 @@ import { Request, Response } from 'express';
 import { TelegramAlertService } from '../telegram-alert.service';
 
 // Paths that should never trigger Telegram alerts (health checks, bots, crawlers)
-const SILENT_PATHS = ['/api/v1/auth/me', '/health', '/metrics', '/favicon'];
+const SILENT_PATHS = [
+  '/api/v1/auth/me',
+  '/health',
+  '/metrics',
+  '/favicon',
+  '/robots.txt',
+  '/sitemap.xml',
+];
 
 // Strip session-bearing values out of strings before they end up in logs or
 // the Telegram alert channel. CASA / ASVS V7.1.1 forbids credential logging,
@@ -87,6 +94,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
           ? (exceptionResponse as any).message || exceptionResponse
           : exceptionResponse;
     } else {
+      // Plain (non-Nest) error carrying a `status` hint — middlewares like
+      // the CORS rejection callback set this so the filter can route them
+      // through the right status without defaulting to 500. Only honour
+      // it when it's an actual HTTP status code so a stray field doesn't
+      // silently downgrade a real 500.
+      const hintedStatus = Number((exception as any)?.status);
+      const hasHintedStatus =
+        Number.isInteger(hintedStatus) &&
+        hintedStatus >= 400 &&
+        hintedStatus < 600;
+
       // Always log the full stack server-side — we still need it for debugging.
       const cidTag = correlationId ? ` [cid=${correlationId}]` : '';
       const safeUrl = redactSecrets(request.url);
@@ -96,15 +114,31 @@ export class AllExceptionsFilter implements ExceptionFilter {
           : String(exception),
       );
       const safeStack = redactSecrets(rawStack);
-      this.logger.error(
-        `Unhandled exception on ${request.method} ${safeUrl}${cidTag}: ${safeMessage}`,
-        safeStack,
-      );
+      // Demote logging for hinted 4xx errors — those are expected client
+      // problems, not server faults. Keep ERROR for hinted 5xx and for the
+      // default (unknown) path so real crashes stay loud.
+      if (hasHintedStatus && hintedStatus < 500) {
+        this.logger.warn(
+          `Rejected ${request.method} ${safeUrl}${cidTag} (${hintedStatus}): ${safeMessage}`,
+        );
+      } else {
+        this.logger.error(
+          `Unhandled exception on ${request.method} ${safeUrl}${cidTag}: ${safeMessage}`,
+          safeStack,
+        );
+      }
+      if (hasHintedStatus) status = hintedStatus;
       // In production, return a generic message to prevent info leakage via
       // unhandled-exception messages (which can include stack-trace-like detail).
-      message = isProd
-        ? 'Internal server error'
-        : (exception as any)?.message || 'Internal server error';
+      // Hinted 4xx errors carry intentional client-facing messages (e.g. the
+      // CORS rejection text), so surface those even in prod.
+      if (hasHintedStatus && hintedStatus < 500) {
+        message = (exception as any)?.message || 'Forbidden';
+      } else {
+        message = isProd
+          ? 'Internal server error'
+          : (exception as any)?.message || 'Internal server error';
+      }
     }
 
     const safeUrl = redactSecrets(request.url);
