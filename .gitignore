@@ -4,3 +4,9 @@ dist
 .env.*
 !.env.example
 scripts/mark-baseline.js
+
+# OS
+.DS_Store
+
+# Compliance evidence (CASA, SAQ) — keep out of public repo
+casa-*/
