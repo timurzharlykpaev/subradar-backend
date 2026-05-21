@@ -86,6 +86,35 @@ const MB = 60;
 const CW = PW - ML - MR;
 const CONTENT_BOTTOM = PH - MB;
 
+// ─── Glyph sanitization ──────────────────────────────────────────────────
+// Roboto Regular/Bold (bundled fonts) cover Latin + Latin Extended + Cyrillic
+// + Greek + most ISO-4217 currency symbols, but NOT emojis, CJK, or rare
+// pictographs. Without stripping these the user sees PDF "boxes" (.notdef
+// glyphs) wherever they used "Netflix 🎬", "ChatGPT 💬", or pasted Chinese
+// plan names. Strip every code point in:
+//   - U+1F300..U+1FAFF (emoji blocks)
+//   - U+1F000..U+1F0FF (mahjong / playing cards)
+//   - U+2700..U+27BF  (dingbats)
+//   - U+2600..U+26FF  (misc symbols — partially in Roboto, but pictographs
+//                      like ☎ ☃ ♠ that aren't are dropped)
+//   - U+E000..U+F8FF  (private-use area — often from emoji fonts)
+//   - U+FE00..U+FE0F  (variation selectors that leave a phantom box)
+//   - U+200D          (ZWJ used by family/skin-tone emojis)
+//   - U+3000..U+9FFF + U+AC00..U+D7AF (CJK + Hangul — Roboto has no glyphs)
+// Result: keep everything Roboto can render; replace the rest with a single
+// space so word boundaries survive. Don't render the trailing space.
+function safeText(input: unknown): string {
+  if (input == null) return '';
+  const s = String(input);
+  // eslint-disable-next-line no-misleading-character-class
+  const stripped = s.replace(
+    /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{E000}-\u{F8FF}\u{FE00}-\u{FE0F}\u{200D}\u{3000}-\u{9FFF}\u{AC00}-\u{D7AF}]/gu,
+    '',
+  );
+  // Collapse the spaces our replacement may have left between words.
+  return stripped.replace(/\s+/g, ' ').trim();
+}
+
 // ─── Currency formatting ─────────────────────────────────────────────────
 function fmtMoney(amount: number, currency: string): string {
   const safe = isFinite(amount) ? amount : 0;
@@ -439,7 +468,7 @@ export class ReportsService {
         // PDF aggregates across members, not just the owner's own subs.
         doc.text(`${i18n.account}: Team (${teamMembers.length} members)`, ML);
       } else if (user?.email) {
-        doc.text(`${i18n.account}: ${user.email}`, ML);
+        doc.text(`${i18n.account}: ${safeText(user.email)}`, ML);
       }
       if (fxFailed) {
         doc.fillColor(C.orange).text(`⚠ ${i18n.fx_partial_failure}`, ML);
@@ -528,7 +557,10 @@ export class ReportsService {
       doc
         .fontSize(9)
         .fillColor(C.white, 0.7)
-        .text(user.name || user.email, ML, 70, { align: 'right', width: CW });
+        .text(safeText(user.name || user.email), ML, 70, {
+          align: 'right',
+          width: CW,
+        });
     doc.fillColor(C.text);
     doc.fillOpacity(1);
     doc.y = 105;
@@ -689,7 +721,7 @@ export class ReportsService {
           F,
           [
             `${i + 1}`,
-            s.name,
+            safeText(s.name),
             this.localizeCategory(s.category, i18n),
             fmtMoney(s.monthlyConverted, cur),
           ],
@@ -857,7 +889,7 @@ export class ReportsService {
       doc.fontSize(9).font(F.regular).fillColor(C.text);
       let x = ML + 22;
       const values = [
-        s.name,
+        safeText(s.name),
         `${fmtMoney(s.amountConverted, cur)}${this.periodLabel(s.billingPeriod, i18n)}`,
         this.localizeCategory(s.category, i18n),
         this.localizeStatus(s.status, i18n),
@@ -1045,7 +1077,7 @@ export class ReportsService {
         doc.fontSize(9).font(F.regular).fillColor(C.text);
         let x = ML + 22;
         const values = [
-          s.name,
+          safeText(s.name),
           this.localizeCategory(s.category, i18n),
           fmtMoney(s.amountConverted, cur),
           this.periodLabelFull(s.billingPeriod, i18n),
@@ -1109,7 +1141,7 @@ export class ReportsService {
         doc.fontSize(9).font(F.regular).fillColor(C.text);
         let x = ML + 22;
         const values = [
-          s.name,
+          safeText(s.name),
           this.localizeCategory(s.category, i18n),
           fmtMoney(s.amountConverted, cur),
           this.periodLabelFull(s.billingPeriod, i18n),
