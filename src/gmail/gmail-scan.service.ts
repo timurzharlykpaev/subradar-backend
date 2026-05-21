@@ -1433,10 +1433,30 @@ export class GmailScanService {
             truncated: boolean;
             summary: { aiReturned: number; droppedNoise: number; droppedDup: number };
           };
+          // Re-filter cached candidates against the user's CURRENT
+          // subscriptions. Without this, a user who imports a few rows
+          // from the cached scan, dismisses the banner, then re-opens
+          // gmail-import within the 10-min cache window sees the same
+          // candidates again — and can accidentally re-import the same
+          // brands as duplicates ("банер не уходит и можно повторно
+          // добавить" report, May 21 2026). filterDuplicates is cheap
+          // — one subscriptions read + an O(n) filter — so re-running
+          // it on every cache hit is the right trade-off vs blowing
+          // the cache up on every subscription.create.
+          const fresh = await this.filterDuplicates(userId, parsed.candidates);
+          const droppedNow = parsed.candidates.length - fresh.length;
           this.logger.log(
-            `[gmail.scan][user:${userId.slice(0, 8)}] returning cached result (${parsed.candidates.length} candidates)`,
+            `[gmail.scan][user:${userId.slice(0, 8)}] returning cached result (${fresh.length} after re-dedup; dropped ${droppedNow} now-imported)`,
           );
-          return { ...parsed, cached: true };
+          return {
+            ...parsed,
+            candidates: fresh,
+            summary: {
+              ...parsed.summary,
+              droppedDup: parsed.summary.droppedDup + droppedNow,
+            },
+            cached: true,
+          };
         }
       } catch (err: any) {
         // A cache read miss / parse error is non-fatal — fall through
