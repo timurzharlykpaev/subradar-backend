@@ -1206,11 +1206,34 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
       return `<UNTRUSTED_EMAIL_DATA>\n${userPayload}\n</UNTRUSTED_EMAIL_DATA>`;
     };
 
+    // Live progress counter shared across all parallel chunks. Each
+    // chunk bumps it on completion (success OR failure — failed chunks
+    // are still "done" from the user's perspective) and pings the
+    // caller. This makes the mobile loader's "X of Y" counter advance
+    // smoothly per chunk instead of waiting for the slowest member of
+    // a parallel batch to finish before any update lands. Prior wiring
+    // updated only after Promise.all() in the batch loop below, so a
+    // 70-sec OpenAI hiccup on one chunk froze the counter for the
+    // whole batch even when sibling chunks had already returned.
+    let processedMessages = 0;
+    let totalForProgress = 0;
+    const reportProgress = () => {
+      try {
+        onChunkComplete?.({
+          processedMessages,
+          totalMessages: totalForProgress,
+        });
+      } catch {
+        /* progress reporting is best-effort */
+      }
+    };
+
     const runOneChunk = async (
       chunk: BulkEmailInput[],
       chunkIdx: number,
       totalChunks: number,
     ): Promise<any[]> => {
+      const startedAt = Date.now();
       try {
         // gpt-4o-mini gives us 200K TPM (vs 30K on gpt-4o) — necessary
         // headroom because 3 parallel chunks × ~17K tokens each was
@@ -1231,15 +1254,31 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
           'gpt-4o-mini',
         );
         const list = Array.isArray(raw?.candidates) ? raw.candidates : [];
+        const elapsedMs = Date.now() - startedAt;
+        // Surface tail-latency outliers — a single chunk taking >30s
+        // is the signature of OpenAI tail latency that previously
+        // froze the user-facing progress bar with no operator signal.
+        if (elapsedMs > 30_000) {
+          this.logger.warn(
+            `parseBulkEmails: chunk ${chunkIdx + 1}/${totalChunks} slow — ${(elapsedMs / 1000).toFixed(1)}s for ${chunk.length} msgs`,
+          );
+        }
         this.logger.log(
-          `parseBulkEmails: chunk ${chunkIdx + 1}/${totalChunks} (${chunk.length} msgs) → ${list.length} candidates`,
+          `parseBulkEmails: chunk ${chunkIdx + 1}/${totalChunks} (${chunk.length} msgs) → ${list.length} candidates in ${(elapsedMs / 1000).toFixed(1)}s`,
         );
         return list;
       } catch (err: any) {
         this.logger.warn(
-          `parseBulkEmails: chunk ${chunkIdx + 1}/${totalChunks} failed: ${err?.message ?? err}`,
+          `parseBulkEmails: chunk ${chunkIdx + 1}/${totalChunks} failed after ${((Date.now() - startedAt) / 1000).toFixed(1)}s: ${err?.message ?? err}`,
         );
         return [];
+      } finally {
+        // Single-threaded event loop → `+=` is atomic. Bump in finally
+        // so the counter advances on both success and AI failure;
+        // otherwise a failed chunk would stall the progress bar
+        // indefinitely on the next batch wait.
+        processedMessages += chunk.length;
+        reportProgress();
       }
     };
 
@@ -1289,35 +1328,15 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
     // from 0% to (skipped/total)% only at the end as the AI batches
     // catch up. Seed the counter with skipped so the UI shows steady
     // progress from the first batch.
-    let processedMessages = skipped;
-    try {
-      onChunkComplete?.({
-        processedMessages,
-        totalMessages: messages.length,
-      });
-    } catch {
-      /* progress reporting is best-effort */
-    }
+    processedMessages = skipped;
+    totalForProgress = messages.length;
+    reportProgress();
     for (let i = 0; i < chunks.length; i += PARALLEL_CHUNKS) {
       const batch = chunks.slice(i, i + PARALLEL_CHUNKS);
       const results = await Promise.all(
         batch.map((chunk, j) => runOneChunk(chunk, i + j, chunks.length)),
       );
       for (const list of results) allRaw.push(...list);
-      // Count actual emails parsed in this batch — last batch is
-      // usually smaller than PARALLEL_CHUNKS × CHUNK_SIZE, so we
-      // sum the real chunk lengths instead of multiplying constants.
-      // Caller's callback may write to Redis; fire-and-forget so a
-      // slow Redis hop never blocks the next batch from starting.
-      processedMessages += batch.reduce((sum, chunk) => sum + chunk.length, 0);
-      try {
-        onChunkComplete?.({
-          processedMessages,
-          totalMessages: messages.length,
-        });
-      } catch {
-        /* progress reporting is best-effort */
-      }
     }
 
     const validated: EmailCandidate[] = [];
