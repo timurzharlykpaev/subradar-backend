@@ -1243,17 +1243,61 @@ Respond as STRICT JSON: { "candidates": [...] }. No prose, no markdown, no field
       }
     };
 
-    // Split into chunks, run in bounded parallel batches.
-    const chunks: BulkEmailInput[][] = [];
-    for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
-      chunks.push(messages.slice(i, i + CHUNK_SIZE));
+    // Deterministic pre-filter — skip AI entirely for messages with
+    // zero billing signals. The 'мусорных подписок' report on May
+    // 21 included Amazon shipping notifications, ticket confirmations,
+    // and marketing newsletters — none of these have a recurring cue
+    // OR a money figure OR a known billing-sender domain, but the AI
+    // sometimes still emitted low-confidence candidates for them which
+    // slipped past the noise filter (esp. with hint-derived senderBrand
+    // nudging the model to "find" a subscription).
+    //
+    // Skipping is cheap: extractReceiptHints is a regex scan, ~1ms per
+    // message. For a typical inbox where 40-60% of in-window messages
+    // are non-billing (newsletters, transactional, shipping), this cuts
+    // AI cost AND wall-clock by roughly the same fraction — directly
+    // addresses the "очень долгий парсинг" complaint.
+    const aiEligible: BulkEmailInput[] = [];
+    let skipped = 0;
+    for (const m of messages) {
+      const body = (m.bodyText ?? '').slice(0, 2500);
+      const hints = extractReceiptHints(m, body);
+      const hasSignal =
+        hints.recurringCueCount > 0 ||
+        hints.candidateAmounts.length > 0 ||
+        !!hints.senderBrand;
+      if (hasSignal) aiEligible.push(m);
+      else skipped++;
     }
     this.logger.log(
-      `parseBulkEmails: starting ${messages.length} msgs in ${chunks.length} chunks × ${CHUNK_SIZE} (${PARALLEL_CHUNKS} parallel)`,
+      `parseBulkEmails: pre-filter dropped ${skipped}/${messages.length} messages with no billing signal`,
+    );
+    if (aiEligible.length === 0) return [];
+
+    // Split into chunks, run in bounded parallel batches.
+    const chunks: BulkEmailInput[][] = [];
+    for (let i = 0; i < aiEligible.length; i += CHUNK_SIZE) {
+      chunks.push(aiEligible.slice(i, i + CHUNK_SIZE));
+    }
+    this.logger.log(
+      `parseBulkEmails: starting ${aiEligible.length} msgs in ${chunks.length} chunks × ${CHUNK_SIZE} (${PARALLEL_CHUNKS} parallel)`,
     );
 
     const allRaw: any[] = [];
-    let processedMessages = 0;
+    // Skipped messages count as "processed" from the user's perspective —
+    // they're already done. Without this, the progress bar would jump
+    // from 0% to (skipped/total)% only at the end as the AI batches
+    // catch up. Seed the counter with skipped so the UI shows steady
+    // progress from the first batch.
+    let processedMessages = skipped;
+    try {
+      onChunkComplete?.({
+        processedMessages,
+        totalMessages: messages.length,
+      });
+    } catch {
+      /* progress reporting is best-effort */
+    }
     for (let i = 0; i < chunks.length; i += PARALLEL_CHUNKS) {
       const batch = chunks.slice(i, i + PARALLEL_CHUNKS);
       const results = await Promise.all(

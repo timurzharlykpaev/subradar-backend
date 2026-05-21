@@ -500,19 +500,24 @@ export class GmailScanService {
       }
 
       // amountFromEmail is the strongest "this is a real subscription"
-      // signal we have — a printed money figure on a sender's domain.
-      // Keep the row even if AI couldn't confirm "recurring" and the
-      // brand isn't in our catalog: the user can decide on the review
-      // sheet, and the recall miss (eg. a small SaaS the AI was unsure
-      // about) was the main complaint from real scans.
-      if (c.amountFromEmail) return true;
+      // signal — a printed money figure on a sender's domain. But it's
+      // not sufficient on its own: Amazon order receipts and ticket
+      // confirmations also print amounts, and we were importing those
+      // as "subscriptions" (the "много мусорных подписок" report). Now
+      // we require amountFromEmail AND (isRecurring OR enriched) —
+      // both money AND a subscription signal.
+      if (c.amountFromEmail && (c.isRecurring || enriched)) return true;
+      // No money or no recurring/catalog signal? Only keep if BOTH
+      // recurring-flag AND enrichment corroborate. Single-signal
+      // candidates without an amount are almost always noise.
       if (!c.isRecurring && !enriched) return false;
-      // Lowered 0.3 → 0.2: 0.3 was rejecting borderline-correct
-      // candidates from small SaaS senders the AI hadn't seen before;
-      // 0.2 still strips obvious junk (unsubscribe-confirmation,
-      // shipping-update mails returning ≤0.1) without nuking the
-      // long-tail of real subscriptions.
-      if (c.confidence < 0.2 && !enriched) return false;
+      // Confidence gate. Without enrichment we need 0.5+ — AI's own
+      // ≥0.2 in isolation was producing ~30% false-positive rate on
+      // a real-inbox audit (May 2026). With enrichment (catalog hit
+      // or known iconUrl) we trust the model down to 0.2 because the
+      // catalog already corroborates the brand exists.
+      const minConfidence = enriched ? 0.2 : 0.5;
+      if (c.confidence < minConfidence) return false;
       return true;
     });
   }
