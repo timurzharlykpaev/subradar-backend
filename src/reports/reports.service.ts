@@ -189,12 +189,20 @@ export class ReportsService {
     displayCurrencyOverride?: string,
   ): Promise<Report> {
     const user = await this.userRepo.findOne({ where: { id: requesterId } });
-    // Whitelist team-eligible plans rather than blacklisting `free` —
-    // a Pro user (no team plan, no workspace ownership) should also
-    // be unable to generate team reports. Plan-Guard at the controller
-    // layer is the primary check; this is defense-in-depth.
-    const teamPlans = ['organization', 'team'];
-    if (!user || !teamPlans.includes(user.plan as string)) {
+    // Defense-in-depth — the controller already verified the requester is
+    // the workspace owner (workspace.controller.ts:293), so by the time
+    // we get here `requesterId === workspace.ownerId`. The remaining
+    // concern is preventing free-plan owners from generating team
+    // reports (a free user shouldn't be a workspace owner in the first
+    // place but a stale DB row might exist after a downgrade).
+    //
+    // Previously this rejected anything other than `['organization',
+    // 'team']`, which incorrectly forbade Pro users who own a Team
+    // workspace — BillingService treats `isTeamOwner && user.plan ===
+    // 'pro'` as effective `plan='organization'` (billing.service.ts:137),
+    // so this gate must mirror that compound rule. Free is still
+    // rejected: explicit `user.plan === 'free'` is the kill switch.
+    if (!user || user.plan === 'free') {
       throw new ForbiddenException(
         'Team reports require a Team plan. Upgrade to Team to enable.',
       );
