@@ -370,42 +370,86 @@ export class SubscriptionsService implements OnModuleInit {
     const filteredSubs = allowedIds
       ? subs.filter((s) => allowedIds!.has(s.id))
       : subs;
-    return filteredSubs.map((sub) => {
-      // Use the SUB'S CURRENT currency as the source for FX conversion,
-      // not `originalCurrency`. The two used to drift after a user edited
-      // a subscription and changed its currency: `currency` updated, but
-      // `originalCurrency` stayed at the create-time value. The converter
-      // then ran amount(in NEW currency) × rate(OLD currency → display),
-      // producing nonsense numbers. `originalCurrency` is now purely a
-      // historical record — never feeds display.
-      const sourceCurrency = sub.currency || sub.originalCurrency || displayCurrency;
-      let displayAmountStr: string;
-      let fxRate: number;
-      try {
-        const amount = new Decimal(sub.amount as unknown as string);
-        const converted = this.fx.convert(
-          amount,
-          sourceCurrency,
-          displayCurrency,
-          fx.rates,
-        );
-        displayAmountStr = converted.toFixed(2);
-        fxRate =
-          sourceCurrency === displayCurrency
-            ? 1
-            : (fx.rates[displayCurrency] ?? 1) /
-              (fx.rates[sourceCurrency] ?? 1);
-      } catch {
-        displayAmountStr = String(sub.amount);
-        fxRate = 1;
-      }
-      return Object.assign(sub, {
-        displayAmount: displayAmountStr,
+    return filteredSubs.map((sub) =>
+      this.enrichWithDisplay(sub, fx, displayCurrency),
+    );
+  }
+
+  /**
+   * Attach displayAmount / displayCurrency / fxRate / fxFetchedAt to a
+   * subscription so the client can render a single number regardless of
+   * the underlying `currency` field.
+   *
+   * Use the SUB'S CURRENT currency as the source for FX conversion, not
+   * `originalCurrency`. The two used to drift after a user edited a
+   * subscription and changed its currency: `currency` updated, but
+   * `originalCurrency` stayed at the create-time value. The converter
+   * then ran amount(in NEW currency) × rate(OLD currency → display),
+   * producing nonsense numbers. `originalCurrency` is now purely a
+   * historical record — never feeds display.
+   */
+  private enrichWithDisplay(
+    sub: Subscription,
+    fx: { rates: Record<string, number>; fetchedAt: Date },
+    displayCurrency: string,
+  ): Subscription & {
+    displayAmount: string;
+    displayCurrency: string;
+    fxRate: number;
+    fxFetchedAt: Date;
+  } {
+    const sourceCurrency = sub.currency || sub.originalCurrency || displayCurrency;
+    let displayAmountStr: string;
+    let fxRate: number;
+    try {
+      const amount = new Decimal(sub.amount as unknown as string);
+      const converted = this.fx.convert(
+        amount,
+        sourceCurrency,
         displayCurrency,
-        fxRate,
-        fxFetchedAt: fx.fetchedAt,
-      });
+        fx.rates,
+      );
+      displayAmountStr = converted.toFixed(2);
+      fxRate =
+        sourceCurrency === displayCurrency
+          ? 1
+          : (fx.rates[displayCurrency] ?? 1) /
+            (fx.rates[sourceCurrency] ?? 1);
+    } catch {
+      displayAmountStr = String(sub.amount);
+      fxRate = 1;
+    }
+    return Object.assign(sub, {
+      displayAmount: displayAmountStr,
+      displayCurrency,
+      fxRate,
+      fxFetchedAt: fx.fetchedAt,
     });
+  }
+
+  async findOneWithDisplay(
+    userId: string,
+    id: string,
+    displayCurrencyOverride: string | null | undefined,
+  ): Promise<Subscription & {
+    displayAmount: string;
+    displayCurrency: string;
+    fxRate: number;
+    fxFetchedAt: Date;
+  }> {
+    // Resolve display currency the same way findAllWithDisplay does so
+    // /subscriptions/:id and /subscriptions stay consistent for the same
+    // user / same query-param combination.
+    let displayCurrency = (displayCurrencyOverride ?? '').trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(displayCurrency)) {
+      const user = await this.usersService.findById(userId);
+      displayCurrency = (user?.displayCurrency || 'USD').toUpperCase();
+    }
+    const [sub, fx] = await Promise.all([
+      this.findOne(userId, id),
+      this.fx.getRates(),
+    ]);
+    return this.enrichWithDisplay(sub, fx, displayCurrency);
   }
 
   async findOne(userId: string, id: string): Promise<Subscription> {

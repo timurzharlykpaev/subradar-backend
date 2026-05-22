@@ -118,8 +118,11 @@ export class AnalyticsController {
   }
 
   @Get('savings')
-  async savings(@Request() req) {
-    return this.service.getSavings(req.user.id);
+  async savings(
+    @Request() req,
+    @Query('displayCurrency') displayCurrency?: string,
+  ) {
+    return this.service.getSavings(req.user.id, displayCurrency);
   }
 
   /** Mobile uses POST /analytics/report — stub that delegates to reports service */

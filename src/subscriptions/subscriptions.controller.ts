@@ -88,8 +88,12 @@ export class SubscriptionsController {
   }
 
   @Get(':id')
-  findOne(@Request() req, @Param('id') id: string) {
-    return this.service.findOne(req.user.id, id);
+  findOne(
+    @Request() req,
+    @Param('id') id: string,
+    @Query('displayCurrency') displayCurrency?: string,
+  ) {
+    return this.service.findOneWithDisplay(req.user.id, id, displayCurrency);
   }
 
   @Patch(':id')

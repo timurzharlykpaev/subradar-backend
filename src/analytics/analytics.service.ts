@@ -369,10 +369,20 @@ export class AnalyticsService {
     };
   }
 
-  async getSavings(userId: string) {
-    const subscriptions = await this.subRepo.find({
-      where: { userId, status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]) },
-    });
+  async getSavings(
+    userId: string,
+    displayCurrencyOverride?: string | null,
+  ) {
+    const displayCurrency = await this.resolveDisplayCurrency(
+      userId,
+      displayCurrencyOverride,
+    );
+    const [subscriptions, fx] = await Promise.all([
+      this.subRepo.find({
+        where: { userId, status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]) },
+      }),
+      this.fx.getRates(),
+    ]);
 
     const byCategory: Record<string, any[]> = {};
     for (const sub of subscriptions) {
@@ -381,14 +391,23 @@ export class AnalyticsService {
       byCategory[cat].push(sub);
     }
 
-    // Find duplicates: same category with 2+ subs, compare monthly amounts
+    // Find duplicates: same category with 2+ subs, compare monthly amounts.
+    // Per-sub monthly is converted to displayCurrency BEFORE comparison so a
+    // EUR sub and a USD sub in the same category aren't accidentally summed
+    // at face value.
     const duplicates: { subscriptionIds: string[]; name: string; category: string; count: number; totalMonthly: number; cheapest: number; potentialSavings: number }[] = [];
     for (const [cat, catSubs] of Object.entries(byCategory)) {
       if (catSubs.length > 1) {
-        const withMonthly = catSubs.map((s) => ({
-          ...s,
-          monthlyAmount: this.toMonthlyAmount(Number(s.amount) || 0, s.billingPeriod),
-        }));
+        const withMonthly = catSubs.map((s) => {
+          const rawMonthly = this.toMonthlyAmount(Number(s.amount) || 0, s.billingPeriod);
+          const monthlyAmount = this.convertAmount(
+            rawMonthly,
+            s.originalCurrency || s.currency,
+            displayCurrency,
+            fx.rates,
+          );
+          return { ...s, monthlyAmount };
+        });
         const sorted = [...withMonthly].sort((a, b) => a.monthlyAmount - b.monthlyAmount);
         const cheapest = sorted[0].monthlyAmount;
         const totalMonthly = sorted.reduce((sum, s) => sum + s.monthlyAmount, 0);
@@ -428,6 +447,8 @@ export class AnalyticsService {
       estimatedMonthlySavings: Math.round(estimatedMonthlySavings * 100) / 100,
       duplicates: duplicates.slice(0, 10), // Limit to top 10
       insights,
+      displayCurrency,
+      fxFetchedAt: fx.fetchedAt,
     };
   }
 
