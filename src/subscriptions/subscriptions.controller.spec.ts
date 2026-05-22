@@ -3,7 +3,7 @@ import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionsService } from './subscriptions.service';
 import { ReceiptsService } from '../receipts/receipts.service';
 
-const mockService = { findAll: jest.fn(), findAllWithDisplay: jest.fn(), findOne: jest.fn(), create: jest.fn(), update: jest.fn(), remove: jest.fn(), countActive: jest.fn(), updateStatus: jest.fn() };
+const mockService = { findAll: jest.fn(), findAllWithDisplay: jest.fn(), findOne: jest.fn(), findOneWithDisplay: jest.fn(), create: jest.fn(), update: jest.fn(), remove: jest.fn(), countActive: jest.fn(), updateStatus: jest.fn() };
 const mockReceiptsService = { parseScreenshot: jest.fn() };
 const mockReq = { user: { id: 'user-1', plan: 'pro' } };
 
@@ -38,9 +38,24 @@ describe('SubscriptionsController', () => {
     expect(result).toEqual([]);
   });
 
-  it('findOne calls service.findOne', async () => {
-    mockService.findOne.mockResolvedValue({ id: 'sub-1' });
-    expect(await controller.findOne(mockReq as any, 'sub-1')).toEqual({ id: 'sub-1' });
+  it('findOne delegates to service.findOneWithDisplay', async () => {
+    mockService.findOneWithDisplay.mockResolvedValue({
+      id: 'sub-1',
+      displayAmount: '9.99',
+      displayCurrency: 'USD',
+      fxRate: 1,
+    });
+    expect(await controller.findOne(mockReq as any, 'sub-1')).toEqual({
+      id: 'sub-1',
+      displayAmount: '9.99',
+      displayCurrency: 'USD',
+      fxRate: 1,
+    });
+    expect(mockService.findOneWithDisplay).toHaveBeenCalledWith(
+      'user-1',
+      'sub-1',
+      undefined,
+    );
   });
 
   it('create calls service.create', async () => {
