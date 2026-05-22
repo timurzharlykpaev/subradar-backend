@@ -259,6 +259,21 @@ export class GmailService {
       },
     );
 
+    // Always evict the prior scan cache on a successful (re-)connect.
+    // Mirror of the eviction in `disconnect()` — covers the case where
+    // the user re-runs the OAuth flow with a DIFFERENT Gmail account
+    // without tapping the Disconnect button first. The cache key is
+    // userId-scoped (not email-scoped) so without this purge the next
+    // scan would happily serve the old account's parsed subs.
+    try {
+      await Promise.all([
+        this.redis.del(`gmail:scan:result:v1:${userId}`),
+        this.redis.del(`gmail:scan:inflight:${userId}`),
+      ]);
+    } catch {
+      /* best-effort */
+    }
+
     this.logger.log(
       `Gmail connected for user ${userId} (${maskEmail(gmailEmail)})`,
     );
