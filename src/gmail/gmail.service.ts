@@ -352,6 +352,24 @@ export class GmailService {
         gmailScopes: null as any,
       },
     );
+    // Drop the 10-min scan result cache + inflight pointer. Without
+    // this, reconnecting to a DIFFERENT Gmail account within the
+    // cache window served the previous account's parsed subscriptions
+    // (cache is keyed by userId, not by gmail email) — the "old subs
+    // from the other mailbox" symptom users reported. Key shapes
+    // mirror GmailScanService.resultCacheKey(userId) +
+    // inflight key (`gmail:scan:inflight:${userId}`); keep in sync if
+    // they change there. The per-jobId entry expires on its own TTL.
+    try {
+      await Promise.all([
+        this.redis.del(`gmail:scan:result:v1:${userId}`),
+        this.redis.del(`gmail:scan:inflight:${userId}`),
+      ]);
+    } catch {
+      /* cache eviction is best-effort — credentials are already
+         cleared, so the next scan would fail with a clean
+         "not connected" error regardless. */
+    }
     await this.audit.log({
       userId,
       action: 'gmail.disconnect',
