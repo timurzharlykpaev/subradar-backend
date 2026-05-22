@@ -1,13 +1,19 @@
 ---
 title: Архитектура
-tags: [architecture, modules, guards, interceptors, middleware]
+tags: [architecture, modules, guards, interceptors, middleware, state-machine, outbox, idempotency, audit]
 sources:
   - src/app.module.ts
   - src/main.ts
   - src/common/filters/all-exceptions.filter.ts
   - src/common/redis.module.ts
   - src/common/telegram-alert.service.ts
-updated: 2026-04-16
+  - src/common/middleware/correlation-id.middleware.ts
+  - src/common/idempotency/idempotency.service.ts
+  - src/common/audit/audit.service.ts
+  - src/billing/outbox/outbox.service.ts
+  - src/billing/state-machine/transitions.ts
+  - src/billing/effective-access/effective-access.service.ts
+updated: 2026-05-22
 ---
 
 # Архитектура
@@ -111,4 +117,36 @@ Bull queues изолированы по NODE_ENV: prefix `bull:production` / `bu
 - URL: `/api/docs`
 - Автоматически генерируется из `@ApiTags`, `@ApiBearerAuth`
 
-Подробнее: [[overview]], [[database]], [[deploy]]
+## Cross-cutting patterns
+
+### Billing State Machine
+
+Все billing-транзишены проходят через **pure-functional state machine** (`src/billing/state-machine/`):
+- `transition(snapshot, event) -> snapshot` (`transitions.ts`) — детерминированная функция, кидает `InvalidTransitionError` если транзишн запрещён
+- `reconcile(snapshot, rcSubscriber)` — для пост-фактум sync с RevenueCat
+- `inferEventFromRcSnapshot(rcSub, current)` — из RC snapshot пытается вывести `BillingEvent`
+- `UserBillingRepository.applyTransition(userId, event, { actor })` — единственная точка мутации `user_billing`: открывает tx, читает snapshot, гоняет через `transition`, пишет результат, audit, outbox, инвалидирует [[effective-access]] cache
+
+Invalid-transition попадает в `billing_dead_letter` (queryable, replayable). См. [[billing-module]].
+
+### Transactional Outbox
+
+Side-effects (Amplitude, Telegram, FCM push) идут через `outbox_events`. Запись в БД + outbox-row живут в **одной транзакции** → не теряем события и не отправляем «призраков» от rollback'нутых tx. Воркер `OutboxWorker` (`@Cron(EVERY_10_SECONDS)`) с `FOR UPDATE SKIP LOCKED` + exponential backoff. Подробно — [[outbox]].
+
+### EffectiveAccess резолвер
+
+Единственный авторитет для `/billing/me`. Источник истины для всех guard'ов / features. Precedence: own > team > trial > grace > free. In-process TTL cache (60s, max 10k entries) с явным `invalidate(userId)` на каждый applyTransition. См. [[effective-access]].
+
+### Idempotency middleware
+
+`IdempotencyService.run(userId, endpoint, key, body, handler)` — RFC 9110-style. Replay с тем же body → cached response; с другим body → 409. TTL 24h. Используется на POST-эндпоинтах, которые мобилка может ретраить (purchase verify, sync). См. [[common-cross-cutting]].
+
+### Audit logging
+
+`audit_logs` — append-only лог чувствительных операций (account delete, plan changes, admin actions, billing transitions, gmail connect, workspace mutations). `AuditService.log()` никогда не throw'ит — провал audit не должен ломать бизнес-операцию. См. [[common-cross-cutting]].
+
+### Correlation ID
+
+`CorrelationIdMiddleware` — берёт `x-correlation-id` header или генерирует uuidv4, attach на `req.correlationId`, echo обратно. Mobile / web / ops могут коррелировать свои логи с серверными.
+
+Подробнее: [[overview]], [[database]], [[deploy]], [[cron-jobs]], [[common-cross-cutting]]

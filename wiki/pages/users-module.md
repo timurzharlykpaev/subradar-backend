@@ -1,12 +1,12 @@
 ---
 title: Модуль пользователей (Users)
-tags: [module, users, profile, region, displayCurrency, preferences]
+tags: [module, users, profile, region, displayCurrency, preferences, timezone, dateFormat]
 sources:
   - src/users/users.service.ts
   - src/users/users.controller.ts
   - src/users/entities/user.entity.ts
   - src/users/dto/update-user.dto.ts
-updated: 2026-04-16
+updated: 2026-05-22
 ---
 
 # Модуль пользователей
@@ -103,6 +103,18 @@ updated: 2026-04-16
 
 - `region` → `.toUpperCase()` (e.g. `"kz"` → `"KZ"`)
 - `displayCurrency` → `.toUpperCase()` (e.g. `"kzt"` → `"KZT"`)
+
+### Recent fix `73c03e3` — sync timezone + dateFormat с мобилы
+
+Раньше мобилка передавала `timezone` / `dateFormat` в local-only stored prefs (mock). После фикса они **синкаются на backend через `PATCH /users/me`** в реальном времени:
+- `timezone` — IANA tz string (`"Europe/Moscow"`, `"Asia/Almaty"`)
+- `dateFormat` — `"DD.MM.YYYY"` / `"MM/DD/YYYY"` / etc.
+
+Используется для:
+- Email digests — рендер дат в правильном locale
+- Push reminders — расчёт «за 3 дня до» в user'овском TZ
+- PDF reports — `pdf-i18n.ts` форматтер дат
+- Trial expiry — `expireTrials` cron сравнивает в user TZ
 
 ### Whitelist обновления
 

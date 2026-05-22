@@ -1,23 +1,22 @@
 ---
-title: Модуль AI
-tags: [module, ai, openai, wizard, voice, screenshot, lookup, analysis, catalog]
+title: Модуль AI (LLM gateway)
+tags: [module, ai, openai, wizard, voice, screenshot, lookup, gateway]
 sources:
   - src/ai/ai.service.ts
   - src/ai/ai.controller.ts
   - src/ai/dto/ai.dto.ts
-  - src/analysis/analysis.service.ts
-  - src/analysis/analysis.processor.ts
-  - src/analysis/analysis.cron.ts
-  - src/analysis/analysis.constants.ts
-  - src/analysis/market-data.service.ts
-  - src/catalog/catalog.service.ts
-  - src/catalog/ai-catalog.provider.ts
-  - src/catalog/entities/catalog-service.entity.ts
-  - src/catalog/entities/catalog-plan.entity.ts
-updated: 2026-04-16
+updated: 2026-05-22
 ---
 
 # Модуль AI
+
+> **Scope:** этот модуль — **gateway к LLM** (OpenAI). Все user-facing AI features где результат нужен «здесь и сейчас»: wizard, voice-to-subscription, screenshot parsing, service lookup, bulk parsing.
+>
+> **Глубокий AI-анализ подписок** (рекомендации, дубликаты, team overlaps) живёт в отдельном [[analysis-module]] — там BullMQ pipeline и persisted results.
+>
+> **Каталог сервисов** с regional pricing и фоновым AI research — в [[catalog-module]].
+>
+> **Gmail inbox scan** (Pro/Team feature) — в [[gmail-module]] (использует этот модуль для parseBulkEmails).
 
 ## Общая архитектура
 
@@ -192,76 +191,11 @@ URL и инструкции для отмены подписки:
 
 **Бесплатный** lookup из БД-каталога (без AI-вызова, без потребления лимита).
 
-## Модуль Analysis (глубокий AI-анализ)
+## См. также
 
-Отдельный от AiModule, использует BullMQ для асинхронной обработки.
-
-### Эндпоинты
-
-| Метод | Путь | Описание |
-|-------|------|----------|
-| `POST /analysis/run` | Запуск анализа | |
-| `GET /analysis/latest` | Последний результат + активный job | |
-| `GET /analysis/job/:id` | Статус конкретного job | |
-| `GET /analysis/usage` | Статистика использования | |
-
-### Job lifecycle
-
-```
-QUEUED → COLLECTING → NORMALIZING → LOOKING_UP → ANALYZING → COMPLETED | FAILED
-```
-
-### Дедупликация
-
-- SHA-256 хеш input data (userId + subscriptions + locale)
-- Если свежий результат с таким хешем уже есть — возвращается кешированный
-- Если job с таким хешем уже в работе — возвращается его ID
-
-### Trigger types
-
-- `MANUAL` — пользователь нажал кнопку
-- `AUTO` / `CRON` — автоматический
-- `SUBSCRIPTION_CHANGE` — при изменении подписок (debounced через Redis, TTL = `subscriptionChangeDebounceMins`)
-
-### Лимиты (по планам)
-
-| | Pro | Team |
-|-|-----|------|
-| Manual/week | ограничен | ограничен |
-| Auto/week | ограничен | ограничен |
-| Manual cooldown | 24h | — |
-
-## Модуль Catalog (каталог сервисов)
-
-Персистентный каталог сервисов и их планов.
-
-### Сущности
-
-**CatalogService** (таблица `catalog_services`):
-- `slug` (unique) — url-safe идентификатор
-- `name`, `category`, `iconUrl`, `websiteUrl`
-- `aliases` — альтернативные названия
-- `lastResearchedAt`, `researchCount`
-
-**CatalogPlan** (таблица `catalog_plans`):
-- `serviceId` → FK на CatalogService
-- `region` — код региона (US, KZ, etc.)
-- `planName`, `price`, `currency`, `period`
-- `trialDays`, `features`
-- `priceSource`: AI_RESEARCH
-- `priceConfidence`: HIGH/MEDIUM/LOW
-- `lastPriceRefreshAt`
-
-### Поиск
-
-`CatalogService.search(query, region)`:
-1. Нормализует query → slug
-2. Ищет в БД по slug
-3. Если найдено — проверяет свежесть (30 дней)
-   - Если stale — ставит в очередь фоновое обновление
-4. Если не найдено — блокирует через Redis lock → AI research → сохраняет
-5. Redis lock предотвращает параллельные AI-вызовы для того же сервиса
-
-**Фоновое обновление цен:** BullMQ queue `catalog-refresh`.
-
-Подробнее: [[billing-module]], [[fx-module]], [[subscriptions-module]]
+- [[analysis-module]] — глубокий AI-анализ подписок (рекомендации, дубликаты, team overlaps) на BullMQ
+- [[catalog-module]] — персистентный каталог сервисов с regional pricing (AI research)
+- [[gmail-module]] — Pro/Team Gmail inbox scan (использует `parseBulkEmails` отсюда)
+- [[billing-module]] — `consumeAiRequest()` — потребление AI-лимитов
+- [[fx-module]] — конвертация при presenting result в displayCurrency
+- [[subscriptions-module]] — куда импортируются результаты AI

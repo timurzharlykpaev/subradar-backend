@@ -1,15 +1,40 @@
 ---
 title: Известные проблемы и ограничения
-tags: [issues, bugs, limitations, displayCurrency, fx]
+tags: [issues, bugs, limitations, displayCurrency, fx, backward-compat, mobile]
 sources:
   - src/subscriptions/subscriptions.service.ts
   - src/analytics/analytics.service.ts
   - src/users/users.service.ts
   - src/billing/billing.service.ts
-updated: 2026-04-16
+  - src/reports/reports.service.ts
+updated: 2026-05-22
 ---
 
 # Известные проблемы и ограничения
+
+## 0. App Store backward compatibility (КРИТИЧНО)
+
+Мобильное приложение **уже выпущено в App Store**. Адопшен новой версии идёт постепенно — **~50% пользователей за неделю, ~90% за 4 недели**. Старые билды продолжают ходить на тот же `api.subradar.ai/api/v1` prod.
+
+### Правила backend-изменений
+
+1. **Default: additive only.** Новое поведение → новое поле / `/v2/...` / новый query-параметр. **Не меняй ответ существующего эндпоинта**, на который полагаются старые клиенты.
+2. **Новые request-поля делай optional с дефолтами**, совпадающими со старым поведением.
+3. **Не удаляй и не переименовывай** поля, которые читают старые клиенты (даже legacy/wrong — оставь и заполняй best-effort).
+4. **Server-side gating > client-side gating.** Новые лимиты/планы реализуй на сервере — старые клиенты получают fix без обновления.
+5. **Не ужесточай DTO-валидацию задним числом** (новое required, более строгий regex). Loosen first, tighten after adoption.
+6. **Не удаляй значения enum**, на которых клиент switch'ится (`SubscriptionStatus`, `BillingPeriod` и т.п.) — крэш на старых билдах.
+7. Если изменение нельзя сделать backward-compat — **предупреди явно**: «Это сломает X на версиях ≤ A.B.C, продолжать?»
+8. Bump версии в `app.json` мобилки **не помогает** старым пользователям — влияет только на новые билды.
+
+**Escape:** force-update / kill-switch через серверный «minimum supported version» endpoint + UI блокировка — только для critical security fixes.
+
+Конкретные примеры additive design в коде:
+- `GET /analysis/latest?displayCurrency=` — старые клиенты не шлют, получают результат в исходной валюте
+- `GET /gmail/status` → новое поле `dailyScans: null | {...}` — старый клиент игнорирует
+- `GET /catalog/popular` — fallback на private cache когда `region`/`currency` отсутствуют (новые клиенты явные → CDN-friendly)
+- Endpoint aliases (`POST /auth/google/mobile`, `POST /auth/verify`, `PUT /subscriptions/:id`, `GET /auth/profile`) — нельзя удалять
+- `EffectiveAccess` сообщение `'User not found'` — exact match в mobile ≤ v1.3.20 для force-logout stale JWT, wording стабилен
 
 ## 1. displayCurrency — несогласованность между endpoint'ами
 
@@ -98,8 +123,17 @@ Primary провайдер (open.er-api.com) поддерживает 166 вал
 
 ## 10. Email import controller
 
-### Статус: stub
+### Статус: stub / replaced
 
-`src/subscriptions/email-import.controller.ts` существует, но функциональность может быть не полностью реализована.
+`src/subscriptions/email-import.controller.ts` существует исторически. Боевая функциональность — Gmail OAuth + scan через [[gmail-module]] (`POST /gmail/scan` / `POST /gmail/scan/start`).
 
-Подробнее: [[subscriptions-module]], [[analytics-module]], [[fx-module]], [[billing-module]]
+## 11. Reports — freeze на interrupted PDF generation (исправлено `f0d2d2b`)
+
+### Статус: исправлено в мае 2026
+
+Раньше если worker крашился в середине `buildPdf` (OOM, OOMK, contianer kill), `Report.status` оставался `GENERATING` вечно → mobile UI показывал endless spinner. Фикс:
+- Try/catch вокруг `buildAndStorePdf` → UPDATE status=FAILED, error="..." при любом исключении
+- См. [[reports-module]] → recent fix `f0d2d2b`
+- Stuck-job recovery cron должен переводить `GENERATING > 1h` → FAILED (если ещё не реализовано — TODO)
+
+Подробнее: [[subscriptions-module]], [[analytics-module]], [[fx-module]], [[billing-module]], [[reports-module]], [[gmail-module]]
