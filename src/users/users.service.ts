@@ -156,6 +156,7 @@ export class UsersService {
       'trialUsed', 'trialStartDate', 'trialEndDate',
       'aiRequestsUsed', 'aiRequestsMonth', 'proInviteeEmail', 'invitedByUserId', 'isActive',
       'timezone', 'locale', 'country', 'defaultCurrency', 'dateFormat',
+      'region', 'displayCurrency',
       'onboardingCompleted', 'notificationsEnabled', 'emailNotifications', 'reminderDaysBefore',
       'weeklyDigestEnabled', 'weeklyDigestSentAt',
       'status', 'downgradedAt',
