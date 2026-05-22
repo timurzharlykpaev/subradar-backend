@@ -246,6 +246,37 @@ REDIS_URL=redis://subradar-redis:6379
 ## Прогресс
 См. `PROGRESS.md` в корне репозитория.
 
+## Смежные репозитории
+
+| Репо | Описание |
+|------|---------|
+| `subradar-mobile` | React Native (Expo) — мобильное приложение, App Store live |
+| `subradar-web` | React (Vite) — веб-приложение `app.subradar.ai` |
+| `subradar-landing` | Static HTML — лендинг `subradar.ai` |
+| `subradar-vault` | Obsidian knowledge graph — единая визуализация всех 4 репо (см. ниже) |
+
+## Knowledge Graph — `../subradar-vault`
+
+Соседний репо `subradar-vault/` — Obsidian vault с архитектурной картой всего продукта: модули backend, экраны mobile, pages web, секции landing, domain entities, cross-cutting flows (Auth / Billing / AI / API Contracts). 100+ нот, связанных `[[wiki-links]]`, цветные группы в graph view по тегам.
+
+**Открыть:** Obsidian → File → Open vault → `~/Desktop/repositories/subradar-vault/`. Начинать с `00 Index.md`.
+
+**Для этого репо релевантны:** `01 Backend/Modules/`, `05 Domain/`, `00 API Contracts.md`, `00 Billing Flow.md`, `00 AI Pipeline.md`.
+
+### Когда обновлять vault
+
+Обнови соответствующую ноту, если изменение этого репо меняет архитектурную карту:
+
+- ✅ Новый NestJS модуль → добавь ноту в `01 Backend/Modules/`
+- ✅ Новый endpoint → обнови `00 API Contracts.md` + соответствующий модуль в `01 Backend/Modules/`
+- ✅ Новая TypeORM сущность → добавь ноту в `05 Domain/`, обнови relations в `05 Domain/Domain.md`
+- ✅ Новый cron / BullMQ job → обнови `01 Backend/Modules/<module>.md` + `01 Backend/Backend.md` секцию "Cron / BullMQ jobs"
+- ✅ Изменение billing state machine / auth flow / AI pipeline → обнови `00 Billing Flow.md` / `00 Auth Flow.md` / `00 AI Pipeline.md`
+- ✅ App Store backward compat нюанс → пометь в релевантной ноте секцией ⚠️
+- ❌ Мелкий рефактор, изменение комментариев, фикс типа — vault не трогаем
+
+После обновления нот в vault → закоммить отдельным коммитом в `subradar-vault` (private repo).
+
 ## graphify
 
 This project has a graphify knowledge graph at graphify-out/.
