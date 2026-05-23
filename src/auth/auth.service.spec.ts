@@ -154,6 +154,47 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('accessToken');
       expect(result).toHaveProperty('user');
     });
+
+    it('persists locale on the new user from dto', async () => {
+      mockUsersService.findByEmail.mockResolvedValueOnce(null);
+      mockUsersService.create.mockResolvedValueOnce(mockUser);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      await service.register({
+        email: 'new@test.com',
+        password: 'pass123',
+        name: 'New',
+        locale: 'ru',
+      });
+      expect(mockUsersService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ locale: 'ru' }),
+      );
+    });
+
+    it('falls back to Accept-Language when dto.locale is missing', async () => {
+      mockUsersService.findByEmail.mockResolvedValueOnce(null);
+      mockUsersService.create.mockResolvedValueOnce(mockUser);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      await service.register(
+        { email: 'new@test.com', password: 'pass123' },
+        { acceptLanguage: 'kk' },
+      );
+      expect(mockUsersService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ locale: 'kk' }),
+      );
+    });
+
+    it('drops unsupported locale codes instead of persisting them', async () => {
+      mockUsersService.findByEmail.mockResolvedValueOnce(null);
+      mockUsersService.create.mockResolvedValueOnce(mockUser);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      await service.register({
+        email: 'new@test.com',
+        password: 'pass123',
+        locale: 'xx',
+      });
+      const call = mockUsersService.create.mock.calls.at(-1)?.[0] ?? {};
+      expect(call.locale).toBeUndefined();
+    });
   });
 
   describe('login', () => {
@@ -212,6 +253,39 @@ describe('AuthService', () => {
         providerId: 'g-123',
       });
       expect(result).toHaveProperty('user');
+    });
+
+    it('backfills locale on legacy users with no saved locale', async () => {
+      mockUsersService.findByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        locale: null,
+      });
+      mockUsersService.update.mockResolvedValueOnce(undefined);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      await service.googleLogin(
+        { email: 'test@test.com', name: 'T', avatarUrl: '', providerId: 'g' },
+        { acceptLanguage: 'de' },
+      );
+      expect(mockUsersService.update).toHaveBeenCalledWith(
+        mockUser.id,
+        { locale: 'de' },
+      );
+    });
+
+    it('never overwrites a non-null locale on existing users', async () => {
+      mockUsersService.findByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        locale: 'fr',
+      });
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      await service.googleLogin(
+        { email: 'test@test.com', name: 'T', avatarUrl: '', providerId: 'g' },
+        { acceptLanguage: 'ja' },
+      );
+      const localeUpdates = (mockUsersService.update.mock.calls as any[]).filter(
+        ([, patch]) => patch && 'locale' in patch,
+      );
+      expect(localeUpdates).toHaveLength(0);
     });
   });
 
