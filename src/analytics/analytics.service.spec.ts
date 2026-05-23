@@ -97,6 +97,51 @@ describe('AnalyticsService', () => {
       expect(result.length).toBe(3);
     });
 
+    it('includes cancelled subscriptions in months they were still active', async () => {
+      // A subscription cancelled this month should still appear in the
+      // previous month, otherwise the history graph silently understates
+      // past spend the moment someone cancels something.
+      const now = new Date();
+      const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+      const cancelledSub = {
+        ...activeSub,
+        status: SubscriptionStatus.CANCELLED,
+        startDate: sixMonthsAgo,
+        createdAt: sixMonthsAgo,
+        cancelledAt: now,
+      };
+      const qb = { where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), getMany: jest.fn().mockResolvedValue([cancelledSub]) };
+      mockSubRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMonthly('user-1', 3);
+
+      // All three months precede the cancellation → sub must appear.
+      expect(result.every((m) => m.total === 15)).toBe(true);
+    });
+
+    it('drops cancelled subscriptions from months that start after cancellation', async () => {
+      const now = new Date();
+      const twoMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+      const cancelledSub = {
+        ...activeSub,
+        status: SubscriptionStatus.CANCELLED,
+        startDate: new Date(now.getFullYear() - 1, 0, 1),
+        createdAt: new Date(now.getFullYear() - 1, 0, 1),
+        cancelledAt: twoMonthsAgo,
+      };
+      const qb = { where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), getMany: jest.fn().mockResolvedValue([cancelledSub]) };
+      mockSubRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMonthly('user-1', 3);
+
+      // result[0] = 2 months ago → cancelled mid-month, still counts.
+      // result[1] = 1 month ago → starts after cancellation, must be 0.
+      // result[2] = this month → must be 0.
+      expect(result[0].total).toBe(15);
+      expect(result[1].total).toBe(0);
+      expect(result[2].total).toBe(0);
+    });
+
     it('does NOT backfill subscription with null startDate into months before it was created', async () => {
       // Reproduces bug: subscription added today without explicit startDate
       // (common in AI parse / Gmail import paths) was previously included

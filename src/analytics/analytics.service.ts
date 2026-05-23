@@ -185,7 +185,11 @@ export class AnalyticsService {
         .createQueryBuilder('s')
         .where('s.userId = :userId', { userId })
         .andWhere('s.status IN (:...statuses)', {
-          statuses: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL],
+          statuses: [
+            SubscriptionStatus.ACTIVE,
+            SubscriptionStatus.TRIAL,
+            SubscriptionStatus.CANCELLED,
+          ],
         })
         .getMany(),
       this.fx.getRates(),
@@ -203,6 +207,7 @@ export class AnalyticsService {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const month = d.getMonth() + 1;
       const year = d.getFullYear();
+      const startOfMonth = d;
       const endOfMonth = new Date(year, month, 0);
 
       const monthSubs = allSubs.filter((s) => {
@@ -213,7 +218,16 @@ export class AnalyticsService {
         // signed up).
         const effectiveStart = s.startDate ?? s.createdAt;
         if (!effectiveStart) return false;
-        return new Date(effectiveStart) <= endOfMonth;
+        if (new Date(effectiveStart) > endOfMonth) return false;
+        // Cancelled subscriptions remain visible in months they were
+        // active — drop them only from months that begin after the
+        // cancellation. Without this branch the historical chart
+        // silently understates past spend for anyone who has cancelled
+        // anything.
+        if (s.cancelledAt && new Date(s.cancelledAt) < startOfMonth) {
+          return false;
+        }
+        return true;
       });
 
       const total = monthSubs.reduce((sum, s) => {
