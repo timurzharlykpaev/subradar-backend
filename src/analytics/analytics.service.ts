@@ -205,9 +205,16 @@ export class AnalyticsService {
       const year = d.getFullYear();
       const endOfMonth = new Date(year, month, 0);
 
-      const monthSubs = allSubs.filter(
-        (s) => !s.startDate || new Date(s.startDate) <= endOfMonth,
-      );
+      const monthSubs = allSubs.filter((s) => {
+        // Fall back to createdAt when startDate is null — AI parse / Gmail
+        // import paths can persist a subscription without a startDate, and
+        // treating those as existing-since-epoch backfilled identical sums
+        // into every requested month (including months before the user
+        // signed up).
+        const effectiveStart = s.startDate ?? s.createdAt;
+        if (!effectiveStart) return false;
+        return new Date(effectiveStart) <= endOfMonth;
+      });
 
       const total = monthSubs.reduce((sum, s) => {
         const monthly = this.toMonthlyAmount(Number(s.amount), s.billingPeriod);

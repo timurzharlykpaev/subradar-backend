@@ -96,6 +96,31 @@ describe('AnalyticsService', () => {
       const result = await service.getMonthly('user-1', 3);
       expect(result.length).toBe(3);
     });
+
+    it('does NOT backfill subscription with null startDate into months before it was created', async () => {
+      // Reproduces bug: subscription added today without explicit startDate
+      // (common in AI parse / Gmail import paths) was previously included
+      // in every past month of the requested window, producing identical
+      // sums for months that pre-date the subscription's existence.
+      const createdToday = new Date();
+      const subNoStartDate = {
+        ...activeSub,
+        startDate: null,
+        createdAt: createdToday,
+      };
+      const qb = { where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), getMany: jest.fn().mockResolvedValue([subNoStartDate]) };
+      mockSubRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMonthly('user-1', 6);
+
+      expect(result.length).toBe(6);
+      // Last month (current) should reflect the subscription
+      expect(result[result.length - 1].total).toBe(15);
+      // All earlier months must be zero — subscription didn't exist yet
+      for (let i = 0; i < result.length - 1; i++) {
+        expect(result[i].total).toBe(0);
+      }
+    });
   });
 
   describe('getByCard', () => {
