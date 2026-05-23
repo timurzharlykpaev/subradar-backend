@@ -32,11 +32,24 @@ import { EmailThrottlerGuard } from './guards/email-throttler.guard';
 // Honour X-Forwarded-For when present (DO App Platform terminates TLS at
 // the LB and forwards the original client IP). Trust only the leftmost
 // hop — anything else may be attacker-controlled.
-function ctxFromReq(req: any): { ipAddress?: string; userAgent?: string } {
+function ctxFromReq(req: any): {
+  ipAddress?: string;
+  userAgent?: string;
+  acceptLanguage?: string;
+} {
   const xff = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0]?.trim();
   const ipAddress = xff || req?.ip || req?.connection?.remoteAddress || undefined;
   const userAgent = String(req?.headers?.['user-agent'] || '').slice(0, 500) || undefined;
-  return { ipAddress, userAgent };
+  // Mobile/web clients forward `Accept-Language` with the current UI language
+  // (see mobile apiClient interceptor). Use it as a fallback when the
+  // explicit `dto.locale` is missing — solves the "user.locale stays null
+  // forever" bug that left every account stranded on English even though
+  // their device was clearly in another language.
+  const rawLang = String(req?.headers?.['accept-language'] || '').toLowerCase();
+  const acceptLanguage = rawLang
+    ? rawLang.split(',')[0].trim().split(/[-_;]/)[0] || undefined
+    : undefined;
+  return { ipAddress, userAgent, acceptLanguage };
 }
 
 @ApiTags('auth')

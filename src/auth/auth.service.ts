@@ -23,6 +23,25 @@ import { AuditService } from '../common/audit/audit.service';
 export interface AuthContext {
   ipAddress?: string;
   userAgent?: string;
+  /** Primary language code from the request's Accept-Language header
+   * (e.g. 'ru' from 'ru-RU,ru;q=0.9'). Used as a fallback when the
+   * caller didn't pass an explicit dto.locale, so new accounts land
+   * on the user's actual device language instead of 'en'. */
+  acceptLanguage?: string;
+}
+
+const SUPPORTED_LOCALES = new Set([
+  'en', 'ru', 'es', 'de', 'fr', 'pt', 'zh', 'ja', 'ko', 'kk',
+]);
+
+function pickLocale(
+  dtoLocale: string | undefined,
+  ctx?: AuthContext,
+): string | undefined {
+  const raw = (dtoLocale ?? ctx?.acceptLanguage ?? '').toLowerCase();
+  if (!raw) return undefined;
+  const code = raw.split(/[-_]/)[0];
+  return SUPPORTED_LOCALES.has(code) ? code : undefined;
 }
 import {
   buildMagicLinkEmail,
@@ -86,6 +105,29 @@ export class AuthService {
     });
   }
 
+  /**
+   * Persist a detected locale on an existing account if it never had one.
+   * Never overwrites a non-null value — once the user has explicitly
+   * picked a language, that choice wins for future requests.
+   *
+   * Best-effort: failures are logged, never thrown — the login path must
+   * not break because of a profile-enrichment hiccup.
+   */
+  private async backfillLocale(
+    user: User,
+    locale: string | undefined,
+  ): Promise<void> {
+    if (!locale || user.locale) return;
+    try {
+      await this.usersService.update(user.id, { locale });
+      user.locale = locale;
+    } catch (err: any) {
+      this.logger.warn(
+        `Failed to backfill locale=${locale} for user ${user.id}: ${err?.message ?? err}`,
+      );
+    }
+  }
+
   private generateTokens(user: User) {
     // Embed tokenVersion (V3.5.2). The JwtStrategy compares this against
     // the User row on every authenticated request; bumping it on logout
@@ -144,11 +186,13 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 12);
+    const locale = pickLocale(dto.locale, ctx);
     const user = await this.usersService.create({
       email: dto.email,
       password: hashedPassword,
       name: dto.name,
       provider: AuthProvider.LOCAL,
+      ...(locale ? { locale } : {}),
     });
 
     this.logger.log(`Account created: ${maskEmail(dto.email)}`);
@@ -211,6 +255,7 @@ export class AuthService {
 
     // Clear lockout on success
     await this.redis.del(lockKey);
+    await this.backfillLocale(user, pickLocale(dto.locale, ctx));
 
     this.logger.log(`Login success: ${maskEmail(dto.email)}`);
     await this.auditAuth('auth.login.success', {
@@ -227,6 +272,7 @@ export class AuthService {
   async googleLogin(googleUser: any, ctx?: AuthContext) {
     let user = await this.usersService.findByEmail(googleUser.email);
     const isNew = !user;
+    const locale = pickLocale(googleUser?.locale, ctx);
     if (!user) {
       user = await this.usersService.create({
         email: googleUser.email,
@@ -234,7 +280,10 @@ export class AuthService {
         avatarUrl: googleUser.avatarUrl,
         provider: AuthProvider.GOOGLE,
         providerId: googleUser.providerId,
+        ...(locale ? { locale } : {}),
       });
+    } else {
+      await this.backfillLocale(user, locale);
     }
     await this.auditAuth('auth.login.success', {
       userId: user.id,
@@ -294,13 +343,17 @@ export class AuthService {
 
     let user = await this.usersService.findByEmail(email);
     const isNew = !user;
+    const locale = pickLocale(dto.locale, ctx);
     if (!user) {
       user = await this.usersService.create({
         email,
         name: name || email.split('@')[0],
         provider: AuthProvider.APPLE,
         providerId: payload.sub,
+        ...(locale ? { locale } : {}),
       });
+    } else {
+      await this.backfillLocale(user, locale);
     }
 
     await this.auditAuth('auth.login.success', {
@@ -316,11 +369,15 @@ export class AuthService {
 
   async sendMagicLink(dto: MagicLinkDto, ctx?: AuthContext) {
     let user = await this.usersService.findByEmail(dto.email);
+    const locale = pickLocale(dto.locale, ctx);
     if (!user) {
       user = await this.usersService.create({
         email: dto.email,
         provider: AuthProvider.LOCAL,
+        ...(locale ? { locale } : {}),
       });
+    } else {
+      await this.backfillLocale(user, locale);
     }
 
     // Generate opaque random token (sent to user via email) and store only its
@@ -699,6 +756,7 @@ export class AuthService {
     try {
       let user = await this.usersService.findByEmail(email);
       const isNew = !user;
+      const locale = pickLocale(undefined, ctx);
       if (!user) {
         this.logger.log(
           `googleTokenLogin: creating new user ${maskEmail(email)}`,
@@ -709,7 +767,10 @@ export class AuthService {
           avatarUrl,
           provider: AuthProvider.GOOGLE,
           providerId,
+          ...(locale ? { locale } : {}),
         });
+      } else {
+        await this.backfillLocale(user, locale);
       }
       await this.auditAuth('auth.login.success', {
         userId: user.id,
@@ -859,12 +920,16 @@ export class AuthService {
 
     let user = await this.usersService.findByEmail(dto.email);
     const isNew = !user;
+    const locale = pickLocale(undefined, ctx);
     if (!user) {
       user = await this.usersService.create({
         email: dto.email,
         provider: AuthProvider.LOCAL,
+        ...(locale ? { locale } : {}),
       });
       this.logger.log(`Account created via OTP: ${maskEmail(dto.email)}`);
+    } else {
+      await this.backfillLocale(user, locale);
     }
 
     this.logger.log(`Login success via OTP: ${maskEmail(dto.email)}`);

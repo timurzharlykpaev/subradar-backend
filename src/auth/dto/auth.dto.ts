@@ -18,6 +18,10 @@ export class RegisterDto {
   @MinLength(12, { message: 'Password must be at least 12 characters long' })
   password: string;
   @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
+  /** ISO-639 locale of the requesting client (en/ru/es/de/fr/pt/zh/ja/ko/kk).
+   * Stored on the new user so subsequent email/push content matches the
+   * UI language. Falls back to Accept-Language, then 'en'. */
+  @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
 }
 
 export class LoginDto {
@@ -25,6 +29,10 @@ export class LoginDto {
   // No MinLength on login — old users may still have an 8-char password
   // from before the V2.1.1 policy change. Reject only at bcrypt.compare.
   @ApiProperty() @IsString() password: string;
+  /** Optional locale — backfills user.locale on login for legacy accounts
+   * created before locale capture was wired up. Never overwrites a
+   * non-null existing value. */
+  @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
 }
 
 export class MagicLinkDto {
@@ -41,6 +49,8 @@ export class RefreshTokenDto {
 export class AppleAuthDto {
   @ApiProperty() @IsString() idToken: string;
   @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
+  /** ISO-639 locale of the requesting client. Stored on the new user. */
+  @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
 }
 
 export class OtpSendDto {
@@ -57,6 +67,8 @@ export class OtpVerifyDto {
 export class GoogleTokenDto {
   @ApiPropertyOptional() @IsOptional() @IsString() idToken?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() accessToken?: string;
+  /** ISO-639 locale of the requesting client. Stored on the new user. */
+  @ApiPropertyOptional() @IsOptional() @IsString() locale?: string;
 }
 
 export class VerifyTokenDto {
