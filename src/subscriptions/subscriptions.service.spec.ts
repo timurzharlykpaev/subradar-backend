@@ -101,11 +101,13 @@ describe('SubscriptionsService', () => {
               return cb({
                 query: jest.fn().mockResolvedValue([]),
                 findOne: jest.fn().mockResolvedValue(null),
+                find: jest.fn().mockResolvedValue([]),
                 save: jest.fn().mockImplementation((_ent, data) => data),
                 count: jest.fn().mockResolvedValue(activeCount),
                 create: jest.fn((_ent, data) => data),
                 getRepository: jest.fn().mockReturnValue({
                   findOne: jest.fn().mockResolvedValue(null),
+                  find: jest.fn().mockResolvedValue([]),
                   save: jest.fn().mockImplementation((data) => data),
                   count: jest.fn().mockResolvedValue(activeCount),
                   create: jest.fn((data) => data),
