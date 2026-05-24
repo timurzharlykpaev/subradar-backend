@@ -724,6 +724,57 @@ export class GmailScanService {
     }
   }
 
+  /**
+   * Best-effort favicon fallback for candidates whose catalog row didn't
+   * carry a logoUrl (today: 100% of catalog rows — the seed migration
+   * never populated the column, so prod has 33 rows with logoUrl=null).
+   * Without this every candidate rendered as an empty grey square in
+   * the review sheet, which the user reported May 24 2026 as "иконки
+   * не найдены".
+   *
+   * Sources, in order:
+   *   1. serviceUrl host (catalog or AI-extracted) → most accurate.
+   *   2. Slugified candidate name + `.com` → best-effort for the
+   *      common case where the brand domain matches its name.
+   *
+   * URL endpoint: Google's s2/favicons service — stable, free, returns
+   * 128x128 PNG with a generic browser-tab fallback when the domain
+   * doesn't exist. We deliberately don't use unavatar.io: it resolves
+   * to generic Gravatar shapes for any miss, which looks worse than
+   * Google's standard "world" icon and confuses the user about whether
+   * the right service was matched.
+   */
+  private inferFaviconUrl(
+    name: string,
+    serviceUrl?: string | null,
+  ): string | undefined {
+    const fromUrl = (() => {
+      if (!serviceUrl) return null;
+      try {
+        const host = new URL(serviceUrl).hostname.toLowerCase();
+        if (host && host.includes('.')) return host;
+      } catch {
+        /* fall through */
+      }
+      return null;
+    })();
+    if (fromUrl) {
+      return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(fromUrl)}&sz=128`;
+    }
+    // Slugify name: strip plan/tier noise, keep [a-z0-9], drop short
+    // tokens. "Adobe Creative Cloud" → "adobe", "Spotify Premium" →
+    // "spotify". Beats fabricating "adobecreativecloud.com" which 404s.
+    const slug = name
+      .toLowerCase()
+      .replace(/\s+(premium|basic|standard|pro|plus|family|team|enterprise|business|starter|individual|duo|student|monthly|yearly|annual|lifetime|plan|subscription|tier|membership)\b/gi, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+      .split(/\s+/)
+      .filter((tok) => tok.length >= 3)[0];
+    if (!slug) return undefined;
+    return `https://www.google.com/s2/favicons?domain=${slug}.com&sz=128`;
+  }
+
   /** Cap on OpenAI web-search calls per single scan. Catalog hits are
    * cached forever in `service_catalog`, so subsequent users for the
    * same brand pay zero — but a *first* scan over a pathological inbox
@@ -795,7 +846,17 @@ export class GmailScanService {
       try {
         const normalized = this.market.normalizeServiceName(c.name);
         const entry = catalogByName.get(normalized);
-        if (!entry) return c;
+        if (!entry) {
+          // Catalog miss is the common case (33-row prod catalog vs.
+          // hundreds of brands in real inboxes). Still backfill at
+          // least the icon — an empty review-sheet row tile is what
+          // most "иконки не найдены" complaints come from.
+          if (!c.iconUrl) {
+            const fallbackIcon = this.inferFaviconUrl(c.name, c.serviceUrl);
+            if (fallbackIcon) return { ...c, iconUrl: fallbackIcon };
+          }
+          return c;
+        }
 
         // Catalog stores plan price as `priceMonthly` only — no
         // weekly/quarterly tiers, no annual-discount figure. So we
@@ -822,6 +883,17 @@ export class GmailScanService {
 
         let fallbackAmount = c.amount;
         let amountIsApproximate = false;
+        // When the AI didn't pull a real printed amount from the email
+        // AND the catalog can't backfill a real plan price either, the
+        // value the user sees in the review sheet is fabricated (often
+        // 0). Mark it approximate so the UI can render "—" instead of
+        // "$0.00" — a literal zero is the worst case: it survives Add
+        // All and lands in their dashboard as a real subscription
+        // costing nothing, which is what "цены неправильные" reports
+        // come from.
+        if (!c.amountFromEmail && (!defaultPlan || (c.amount ?? 0) === 0)) {
+          amountIsApproximate = true;
+        }
         if (!c.amountFromEmail && defaultPlan) {
           if (c.billingPeriod === 'MONTHLY') {
             fallbackAmount = defaultPlan.amount;
@@ -860,7 +932,12 @@ export class GmailScanService {
             entry.category && entry.category !== 'OTHER'
               ? entry.category
               : c.category,
-          iconUrl: entry.logoUrl ?? undefined,
+          iconUrl:
+            entry.logoUrl ??
+            this.inferFaviconUrl(
+              c.name,
+              safeServiceUrl ?? (entry as any).serviceUrl ?? c.serviceUrl,
+            ),
           serviceUrl: safeServiceUrl,
           cancelUrl: safeCancelUrl,
           availablePlans: plans.length > 0 ? plans : undefined,
@@ -1692,7 +1769,7 @@ export class GmailScanService {
       this.logger.log(`${userTag}[stage:enrich] starting…`);
       const enriched = await this.enrichWithCatalog(rawCandidates);
       this.logger.log(
-        `${userTag}[stage:enrich] done — ${enriched.filter((c) => c.iconUrl).length} enriched`,
+        `${userTag}[stage:enrich] done — ${enriched.filter((c) => c.iconUrl || (c.availablePlans?.length ?? 0) > 0).length} enriched`,
       );
 
       reportProgress({ stage: 'filtering' });
