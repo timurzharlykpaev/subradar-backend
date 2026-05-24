@@ -257,7 +257,7 @@ jobs:
       # of the deploy procedure itself are auditable in git, and the workflow
       # body stays small + readable.
       - name: Upload deploy.sh to server
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: 46.101.197.19
           username: root
