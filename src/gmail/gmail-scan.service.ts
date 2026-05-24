@@ -216,6 +216,49 @@ export class GmailScanService {
   }
 
   /**
+   * Re-run filterDuplicates against the user's CURRENT subscriptions on
+   * a previously-cached scan result. Used on every cache-hit path so the
+   * mobile review sheet never re-shows candidates the user already
+   * imported in this 10-min / 30-min window. Without this, after Add All
+   * → return to gmail-import → start sees the cache → returns the same
+   * 26 candidates → user can re-import (creating duplicates).
+   *
+   * Idempotent: callable multiple times with the same input. Failures
+   * are non-fatal — the cached candidates flow through unchanged so a
+   * Postgres hiccup doesn't break the review screen, only its dedup.
+   */
+  private async refreshDedupOnCachedResult(
+    userId: string,
+    cachedResult: any,
+  ): Promise<any> {
+    if (!cachedResult || !Array.isArray(cachedResult.candidates)) {
+      return cachedResult;
+    }
+    try {
+      const before = cachedResult.candidates.length;
+      const fresh = await this.filterDuplicates(userId, cachedResult.candidates);
+      const droppedNow = before - fresh.length;
+      if (droppedNow === 0) return cachedResult;
+      return {
+        ...cachedResult,
+        candidates: fresh,
+        summary: cachedResult.summary
+          ? {
+              ...cachedResult.summary,
+              droppedDup:
+                (cachedResult.summary.droppedDup ?? 0) + droppedNow,
+            }
+          : cachedResult.summary,
+      };
+    } catch (err: any) {
+      this.logger.warn(
+        `refreshDedupOnCachedResult failed for ${userId.slice(0, 8)}: ${err?.message ?? err}`,
+      );
+      return cachedResult;
+    }
+  }
+
+  /**
    * Start a scan in the background. Returns immediately with a jobId
    * the mobile client uses to poll /status or that the push handler
    * deep-links to. If the user already has an in-flight job (e.g.
@@ -240,12 +283,18 @@ export class GmailScanService {
       try {
         const cached = await this.redis.get(this.resultCacheKey(userId));
         if (cached) {
-          const cachedResult = JSON.parse(cached);
+          const parsed = JSON.parse(cached);
+          // Re-dedup against current subs — see refreshDedupOnCachedResult.
+          // Without this, the user who just imported 26 candidates sees the
+          // same 26 again on the next visit because filterDuplicates only
+          // ran at scan time, not on cache hit. Sync scan() already does
+          // this; without the same step here the async path leaks the bug.
+          const fresh = await this.refreshDedupOnCachedResult(userId, parsed);
           const jobId = randomUUID();
           await this.writeJob(jobId, {
             userId,
             status: 'completed',
-            result: { ...cachedResult, cached: true },
+            result: { ...fresh, cached: true },
             startedAt: new Date().toISOString(),
             completedAt: new Date().toISOString(),
           });
@@ -400,6 +449,14 @@ export class GmailScanService {
       return null;
     }
     if (job.userId !== userId) return null;
+    // Re-dedup completed jobs against the user's current subscriptions so
+    // a stale jobId (re-opened via push notification, deep link, or a
+    // polling reconnect after import) never re-surfaces candidates the
+    // user already saved. Job records live 30 min in Redis — plenty of
+    // time for the user to import, return, and see ghosts without this.
+    if (job.status === 'completed' && job.result) {
+      job.result = await this.refreshDedupOnCachedResult(userId, job.result);
+    }
     return { jobId, ...job };
   }
 
@@ -504,19 +561,38 @@ export class GmailScanService {
       // not sufficient on its own: Amazon order receipts and ticket
       // confirmations also print amounts, and we were importing those
       // as "subscriptions" (the "много мусорных подписок" report). Now
-      // we require amountFromEmail AND (isRecurring OR enriched) —
-      // both money AND a subscription signal.
-      if (c.amountFromEmail && (c.isRecurring || enriched)) return true;
+      // we require amountFromEmail AND (isRecurring OR enriched) AND
+      // a non-trivial confidence — the previous threshold of 0 here was
+      // letting through anything the AI bothered to return, including
+      // "Subscription to McKinsey newsletter" zero-amount placeholders.
+      if (c.amountFromEmail && (c.isRecurring || enriched)) {
+        // Even with a printed amount, refuse <0.3 confidence rows — an AI
+        // that's genuinely unsure here is almost always wrong on the
+        // "is this a subscription" question (vs. a one-off charge).
+        if (c.confidence < 0.3) return false;
+        return true;
+      }
       // No money or no recurring/catalog signal? Only keep if BOTH
       // recurring-flag AND enrichment corroborate. Single-signal
       // candidates without an amount are almost always noise.
       if (!c.isRecurring && !enriched) return false;
-      // Confidence gate. Without enrichment we need 0.5+ — AI's own
-      // ≥0.2 in isolation was producing ~30% false-positive rate on
-      // a real-inbox audit (May 2026). With enrichment (catalog hit
-      // or known iconUrl) we trust the model down to 0.2 because the
-      // catalog already corroborates the brand exists.
-      const minConfidence = enriched ? 0.2 : 0.5;
+      // Drop zero-amount candidates that came without a printed amount
+      // AND without catalog enrichment that could backfill a real plan
+      // price. These render in the review sheet as "Service — 0 USD"
+      // which is exactly the "нулевые / левые подписки" reported by
+      // the user on May 24 2026 — visually meaningless rows the user
+      // has to manually uncheck, when we already know they aren't
+      // actionable.
+      if ((c.amount == null || c.amount <= 0) && !c.amountFromEmail && !enriched) {
+        return false;
+      }
+      // Confidence gate. Tightened from 0.5/0.2 to 0.6/0.35 after the
+      // same May 2026 audit: real-inbox noise on the previous bands was
+      // ~25% (mostly Amazon order receipts the AI labelled as one-off
+      // recurring charges). With enrichment (catalog hit or known
+      // iconUrl) we trust the model down to 0.35 — the brand existing
+      // in our catalog corroborates the signal — but no further.
+      const minConfidence = enriched ? 0.35 : 0.6;
       if (c.confidence < minConfidence) return false;
       return true;
     });

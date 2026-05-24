@@ -6,6 +6,7 @@ import { ServiceCatalog, ServicePlan, ServiceSource } from './entities/service-c
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import OpenAI from 'openai';
+import { normalizeServiceName } from '../common/utils/normalize-service-name';
 
 @Injectable()
 export class MarketDataService {
@@ -22,15 +23,7 @@ export class MarketDataService {
   }
 
   normalizeServiceName(raw: string): string {
-    return raw
-      .toLowerCase()
-      .trim()
-      .replace(/\s+(premium|basic|standard|pro|plus|family|team|enterprise|business|starter|individual|duo|student)\b/gi, '')
-      .replace(/\s+(monthly|yearly|annual|lifetime)\b/gi, '')
-      .replace(/\s+(plan|subscription|tier|membership)\b/gi, '')
-      .replace(/[^a-z0-9\s]/g, '')
-      .replace(/\s+/g, '_')
-      .replace(/^_|_$/g, '');
+    return normalizeServiceName(raw);
   }
 
   async getNormalizedName(raw: string): Promise<string> {

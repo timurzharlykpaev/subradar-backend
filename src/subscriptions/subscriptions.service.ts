@@ -38,6 +38,7 @@ import { AnalysisService } from '../analysis/analysis.service';
 import Decimal from 'decimal.js';
 import { FxService } from '../fx/fx.service';
 import { CatalogPlan } from '../catalog/entities/catalog-plan.entity';
+import { normalizeServiceName } from '../common/utils/normalize-service-name';
 
 function computeNextPaymentDate(
   startDate: Date,
@@ -199,8 +200,48 @@ export class SubscriptionsService implements OnModuleInit {
     // transaction — prevents race condition where concurrent requests bypass
     // subscriptionLimit (both read count < limit before either writes).
     const lockKey = this.hashUserIdForLock(userId);
-    const saved = await this.dataSource.transaction(async (em) => {
+    const { sub: saved, deduped } = await this.dataSource.transaction(async (em) => {
       await em.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
+
+      // Idempotent dedup. Under the advisory lock we look for an existing
+      // ACTIVE/TRIAL subscription with the same (normalized name, currency,
+      // billing period) tuple and return it instead of inserting a duplicate
+      // row. This fixes the "Add All" bug surfaced May 24 2026: client
+      // re-applied the cached Gmail-scan candidate list and re-POSTed every
+      // row, creating N duplicates. The Gmail-scan-side dedup already drops
+      // these from the candidate list at scan time, but a stale cache, a
+      // racy double-tap, or any other client glitch can still land two
+      // identical POSTs here — so we make the server idempotent as the
+      // belt under the suspenders.
+      //
+      // Normalisation key is shared with GmailScanService.filterDuplicates
+      // via the common util — keeping them in lockstep means a scan candidate
+      // and a hand-typed entry collapse the same way.
+      const candidateName = (dto.name ?? '').trim();
+      const candidatePeriod = dto.billingPeriod;
+      if (candidateName && candidatePeriod) {
+        const normalisedNew = normalizeServiceName(candidateName);
+        if (normalisedNew) {
+          const existingActive = await em.find(Subscription, {
+            where: [
+              { userId, status: SubscriptionStatus.ACTIVE },
+              { userId, status: SubscriptionStatus.TRIAL },
+            ],
+          });
+          const dup = existingActive.find(
+            (s) =>
+              normalizeServiceName(s.name ?? '') === normalisedNew &&
+              (s.currency ?? '').toUpperCase() === resolvedCurrency.toUpperCase() &&
+              s.billingPeriod === candidatePeriod,
+          );
+          if (dup) {
+            this.logger.log(
+              `[subscriptions.create] dedup hit for user ${userId.slice(0, 8)}: returning existing ${dup.id} for "${candidateName}"`,
+            );
+            return { sub: dup, deduped: true };
+          }
+        }
+      }
 
       if (planConfig.subscriptionLimit !== null) {
         const activeCount = await em.count(Subscription, {
@@ -242,22 +283,44 @@ export class SubscriptionsService implements OnModuleInit {
         sub.nextPaymentDate = next as Date;
       }
 
-      return em.save(Subscription, sub);
+      const inserted = await em.save(Subscription, sub);
+      return { sub: inserted, deduped: false };
     });
 
     // Post-commit side effects — never throw from here (the subscription is
     // already persisted). Cache + analysis failures are best-effort and should
-    // surface in logs only.
-    this.invalidateAnalyticsCache(userId).catch((err) =>
-      this.logger.warn(
-        `invalidateAnalyticsCache failed for user ${userId} (sub ${saved.id}): ${err?.message}`,
-      ),
-    );
-    this.analysisService.onSubscriptionChange(userId).catch((err) =>
-      this.logger.warn(
-        `Analysis trigger failed for user ${userId} (sub ${saved.id}): ${err?.message}`,
-      ),
-    );
+    // surface in logs only. Skip everything when the dedup short-circuit
+    // returned an existing row — nothing changed in the user's list and
+    // rerunning analytics / blasting the Gmail-scan cache would be wasted
+    // work + spurious analytics events.
+    if (!deduped) {
+      this.invalidateAnalyticsCache(userId).catch((err) =>
+        this.logger.warn(
+          `invalidateAnalyticsCache failed for user ${userId} (sub ${saved.id}): ${err?.message}`,
+        ),
+      );
+      this.analysisService.onSubscriptionChange(userId).catch((err) =>
+        this.logger.warn(
+          `Analysis trigger failed for user ${userId} (sub ${saved.id}): ${err?.message}`,
+        ),
+      );
+      // Invalidate the cached Gmail-scan result so a return visit to the
+      // import screen never re-surfaces the candidate the user just saved.
+      // GmailScanService re-runs filterDuplicates on cache hits — but a
+      // stale cached row also means a stale "summary" + a delay until the
+      // candidate count drops on the dashboard banner. Dropping the cache
+      // outright makes the next visit reflect reality immediately. Best-
+      // effort: a Redis hiccup is logged, not propagated.
+      if (this.redis) {
+        this.redis
+          .del(`gmail:scan:result:v1:${userId}`)
+          .catch((err: any) =>
+            this.logger.debug(
+              `Failed to invalidate gmail scan cache for user ${userId}: ${err?.message}`,
+            ),
+          );
+      }
+    }
     return saved;
   }
 
