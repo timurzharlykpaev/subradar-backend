@@ -16,7 +16,7 @@
 - No OCR/photo AI
 - No advanced insights
 
-### Pro ($2.99/mo)
+### Pro ($4.99/mo)
 - Unlimited subscriptions
 - AI add by text
 - AI photo/screenshot parsing
@@ -28,7 +28,7 @@
 - Custom categories/tags
 - Export history
 
-### Team ($9.99/mo)
+### Team ($14.99/mo)
 - Everything in Pro
 - Workspace with multiple members
 - Dashboards per employee

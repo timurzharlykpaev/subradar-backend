@@ -58,8 +58,8 @@ export const PLAN_DETAILS = [
   {
     id: 'pro',
     name: 'Pro',
-    price: 2.99,
-    yearlyPrice: 24.99,
+    price: 4.99,
+    yearlyPrice: 29.99,
     currency: 'USD',
     variantIdMonthly: '1377270',
     variantIdYearly: '1377270',
@@ -76,7 +76,7 @@ export const PLAN_DETAILS = [
   {
     id: 'organization',
     name: 'Organization',
-    price: 9.99,
+    price: 14.99,
     yearlyPrice: 99.99,
     currency: 'USD',
     variantIdMonthly: '1377279',

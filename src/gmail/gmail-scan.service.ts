@@ -99,8 +99,8 @@ export class GmailScanService {
   private readonly LIST_PAGINATION_BUDGET_MS = 30_000;
   // Per-user daily scan quota. Tightened from {pro:3, org:10} → {pro:1,
   // org:5} after AI cost audit: a worst-case full 1500-msg scan burns
-  // ~$0.50 in gpt-4o-mini tokens. Pro plan is $2.99/mo ≈ $0.10/day — at
-  // 3 scans/day this is a 15× loss-leader. Real-world average is much
+  // ~$0.50 in gpt-4o-mini tokens. Pro plan is $4.99/mo ≈ $0.16/day — at
+  // 3 scans/day this is a 9× loss-leader. Real-world average is much
   // lower (~$0.05-0.20 per scan thanks to Gmail-side filtering + 10min
   // result cache), but tighter caps protect the unit economics from
   // power-user abuse while still covering the typical "scan once a

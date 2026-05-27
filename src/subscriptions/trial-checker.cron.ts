@@ -178,7 +178,7 @@ export class TrialCheckerCron {
         await this.notifications.sendUpcomingPaymentEmail(
           user.email,
           'SubRadar Pro',
-          2.99,
+          4.99,
           'USD',
           1,
           new Date(effectiveEnd).toLocaleDateString(emailLocale),

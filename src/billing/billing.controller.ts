@@ -159,7 +159,7 @@ export class BillingController {
       {
         id: 'pro',
         name: 'Pro',
-        price: 2.99,
+        price: 4.99,
         currency: 'USD',
         period: 'month',
         trialDays: 7,
@@ -178,7 +178,7 @@ export class BillingController {
       {
         id: 'organization',
         name: 'Organization',
-        price: 9.99,
+        price: 14.99,
         currency: 'USD',
         period: 'month',
         variantId: '1377279',

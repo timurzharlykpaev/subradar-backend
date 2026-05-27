@@ -111,7 +111,7 @@ Pays for employee subscriptions, wants to see: who uses what, where are duplicat
 - 1 PDF summary per month
 - No AI audit, no OCR/photo AI, no advanced insights
 
-### Pro ($2.99/mo)
+### Pro ($4.99/mo)
 - Unlimited subscriptions
 - AI add by text
 - AI photo parsing
@@ -123,7 +123,7 @@ Pays for employee subscriptions, wants to see: who uses what, where are duplicat
 - Custom categories/tags
 - Export history
 
-### Team ($9.99/mo)
+### Team ($14.99/mo)
 - Workspace with multiple members
 - Dashboards per employee
 - Shared reports
