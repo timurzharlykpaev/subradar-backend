@@ -24,6 +24,25 @@ import { SubscriptionStatus } from './entities/subscription.entity';
 import { ReceiptsService } from '../receipts/receipts.service';
 import { SubscriptionLimitGuard, PLAN_LIMITS } from './guards/subscription-limit.guard';
 
+/**
+ * Strip legacy fields from older mobile clients (≤1.4.7) before they
+ * reach the service layer. `nextChargeDate` is remapped to the canonical
+ * `nextPaymentDate` only when the new field isn't already set, so a
+ * client that sends both (transitional builds) wins on the new name.
+ * Lower-case `billingPeriod` is already normalised by the @Transform on
+ * the DTO; this helper exists for the date-field rename which can't be
+ * expressed declaratively without a custom decorator. Once the legacy
+ * builds drop below ~1 % adoption, delete `nextChargeDate` from the
+ * DTO and remove this helper.
+ */
+function normaliseLegacyDto<T extends Partial<CreateSubscriptionDto>>(dto: T): T {
+  if (dto.nextChargeDate && !dto.nextPaymentDate) {
+    dto.nextPaymentDate = dto.nextChargeDate;
+  }
+  delete dto.nextChargeDate;
+  return dto;
+}
+
 @ApiTags('subscriptions')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -71,7 +90,7 @@ export class SubscriptionsController {
   @UseGuards(SubscriptionLimitGuard)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   create(@Request() req, @Body() dto: CreateSubscriptionDto) {
-    return this.service.create(req.user.id, dto);
+    return this.service.create(req.user.id, normaliseLegacyDto(dto));
   }
 
   @Get()
@@ -102,7 +121,7 @@ export class SubscriptionsController {
     @Param('id') id: string,
     @Body() dto: Partial<CreateSubscriptionDto>,
   ) {
-    return this.service.update(req.user.id, id, dto);
+    return this.service.update(req.user.id, id, normaliseLegacyDto(dto));
   }
 
   /** PUT alias for mobile clients that use PUT instead of PATCH */
@@ -112,7 +131,7 @@ export class SubscriptionsController {
     @Param('id') id: string,
     @Body() dto: Partial<CreateSubscriptionDto>,
   ) {
-    return this.service.update(req.user.id, id, dto);
+    return this.service.update(req.user.id, id, normaliseLegacyDto(dto));
   }
 
   @Delete(':id')
