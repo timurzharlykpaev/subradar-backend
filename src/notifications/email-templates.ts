@@ -256,6 +256,90 @@ const STRINGS: Record<string, I18nStrings> = {
     dateLabel: 'Есептен шығару күні',
     openApp: 'SubRadar ашу →',
   },
+  it: {
+    greeting: (name: string) => `Ciao ${name} 👋`,
+    reportTitle: (month: string) => `Report di ${month}`,
+    reportSubtitle: 'Ecco com\'è andato il tuo mese di abbonamenti',
+    totalLabel: 'TOTALE SPESO QUESTO MESE',
+    activeCount: (n: number) => `${n} abbonament${n === 1 ? 'o attivo' : 'i attivi'}`,
+    topSubs: '💳 Top abbonamenti',
+    perMonth: '/mese',
+    ctaText: 'Apri SubRadar →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'Previsione spese · AI auto-aggiunta · Promemoria intelligenti',
+    proCtaText: 'Prova Pro gratis →',
+    unsubscribe: 'Annulla iscrizione alle notifiche',
+    footerTagline: 'Gestisci i tuoi abbonamenti in modo più intelligente con SubRadar AI',
+    paymentReminderLabel: 'PROMEMORIA PAGAMENTO',
+    chargesIn: (days: number) => days === 1 ? 'addebito domani' : `addebito tra ${days} giorni`,
+    subscriptionLabel: 'Abbonamento',
+    amountLabel: 'Importo',
+    dateLabel: 'Data di addebito',
+    openApp: 'Apri SubRadar →',
+  },
+  tr: {
+    greeting: (name: string) => `Selam ${name} 👋`,
+    reportTitle: (month: string) => `${month} raporu`,
+    reportSubtitle: 'İşte bu ay aboneliklerin nasıl geçti',
+    totalLabel: 'BU AY TOPLAM HARCAMA',
+    activeCount: (n: number) => `${n} aktif abonelik`,
+    topSubs: '💳 Üst abonelikler',
+    perMonth: '/ay',
+    ctaText: 'SubRadar\'ı aç →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'Harcama tahmini · AI otomatik ekleme · Akıllı hatırlatmalar',
+    proCtaText: 'Pro\'yu ücretsiz dene →',
+    unsubscribe: 'Bildirim aboneliğini iptal et',
+    footerTagline: 'Aboneliklerini SubRadar AI ile daha akıllı yönet',
+    paymentReminderLabel: 'ÖDEME HATIRLATMASI',
+    chargesIn: (days: number) => days === 1 ? 'yarın ücretlendirilir' : `${days} gün içinde ücretlendirilir`,
+    subscriptionLabel: 'Abonelik',
+    amountLabel: 'Tutar',
+    dateLabel: 'Fatura tarihi',
+    openApp: 'SubRadar\'ı aç →',
+  },
+  pl: {
+    greeting: (name: string) => `Cześć, ${name} 👋`,
+    reportTitle: (month: string) => `Raport za ${month}`,
+    reportSubtitle: 'Oto jak wyglądał Twój miesiąc subskrypcji',
+    totalLabel: 'CAŁKOWITE WYDATKI W TYM MIESIĄCU',
+    activeCount: (n: number) => `${n} ${n === 1 ? 'aktywna subskrypcja' : 'aktywnych subskrypcji'}`,
+    topSubs: '💳 Top subskrypcje',
+    perMonth: '/mies.',
+    ctaText: 'Otwórz SubRadar →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'Prognoza wydatków · AI auto-dodawanie · Inteligentne przypomnienia',
+    proCtaText: 'Wypróbuj Pro za darmo →',
+    unsubscribe: 'Wypisz się z powiadomień',
+    footerTagline: 'Zarządzaj subskrypcjami mądrzej z SubRadar AI',
+    paymentReminderLabel: 'PRZYPOMNIENIE O PŁATNOŚCI',
+    chargesIn: (days: number) => days === 1 ? 'obciążenie jutro' : `obciążenie za ${days} dni`,
+    subscriptionLabel: 'Subskrypcja',
+    amountLabel: 'Kwota',
+    dateLabel: 'Data obciążenia',
+    openApp: 'Otwórz SubRadar →',
+  },
+  ar: {
+    greeting: (name: string) => `مرحبًا، ${name} 👋`,
+    reportTitle: (month: string) => `تقرير ${month}`,
+    reportSubtitle: 'هذا ما حدث في شهر اشتراكاتك',
+    totalLabel: 'إجمالي الإنفاق هذا الشهر',
+    activeCount: (n: number) => `${n} اشتراك نشط`,
+    topSubs: '💳 أهم الاشتراكات',
+    perMonth: '/شهر',
+    ctaText: 'افتح SubRadar →',
+    proTitle: '⚡ SubRadar Pro',
+    proDesc: 'توقع الإنفاق · إضافة AI تلقائية · تذكيرات ذكية',
+    proCtaText: 'جرب Pro مجانًا →',
+    unsubscribe: 'إلغاء الاشتراك في الإشعارات',
+    footerTagline: 'أدر اشتراكاتك بذكاء أكبر مع SubRadar AI',
+    paymentReminderLabel: 'تذكير بالدفع',
+    chargesIn: (days: number) => days === 1 ? 'الخصم غدًا' : `الخصم خلال ${days} أيام`,
+    subscriptionLabel: 'اشتراك',
+    amountLabel: 'المبلغ',
+    dateLabel: 'تاريخ الخصم',
+    openApp: 'افتح SubRadar →',
+  },
 };
 
 function t(locale: string): I18nStrings {
@@ -274,6 +358,10 @@ const MONTHLY_REPORT_SUBJECT: Record<string, (month: string) => string> = {
   ja: (m) => `📊 ${m} の SubRadar レポート`,
   ko: (m) => `📊 ${m} SubRadar 리포트`,
   kk: (m) => `📊 ${m} SubRadar есебі`,
+  it: (m) => `📊 Il tuo report SubRadar di ${m}`,
+  tr: (m) => `📊 ${m} için SubRadar raporun`,
+  pl: (m) => `📊 Twój raport SubRadar za ${m}`,
+  ar: (m) => `📊 تقرير SubRadar الخاص بك لشهر ${m}`,
 };
 
 /** Localized subject line for the monthly spending report email. */
@@ -403,11 +491,60 @@ const AUTH_STRINGS: Record<string, AuthStrings> = {
     otpBody: 'SubRadar-ға кіру үшін осы кодты енгізіңіз. 15 минуттан кейін жарамсыз болады.',
     ignoreNote: 'Сіз сұрамасаңыз, бұл хатты елемеңіз.',
   },
+  it: {
+    magicSubject: 'Il tuo link di accesso a SubRadar',
+    magicHeading: 'Accedi a SubRadar',
+    magicBody: 'Clicca sul pulsante qui sotto per accedere. Il link scade tra 15 minuti.',
+    magicCta: 'Accedi a SubRadar',
+    otpSubject: 'Il tuo codice di verifica SubRadar',
+    otpHeading: 'Il tuo codice di verifica',
+    otpBody: 'Inserisci questo codice per accedere a SubRadar. Scade tra 15 minuti.',
+    ignoreNote: 'Se non hai richiesto questo, ignora questa email.',
+  },
+  tr: {
+    magicSubject: 'SubRadar giriş bağlantın',
+    magicHeading: 'SubRadar\'a giriş yap',
+    magicBody: 'Giriş yapmak için aşağıdaki düğmeye tıkla. Bağlantı 15 dakika içinde sona erer.',
+    magicCta: 'SubRadar\'a giriş yap',
+    otpSubject: 'SubRadar doğrulama kodun',
+    otpHeading: 'Doğrulama kodun',
+    otpBody: 'SubRadar\'a giriş yapmak için bu kodu gir. 15 dakika içinde sona erer.',
+    ignoreNote: 'Bunu sen istemediysen, bu e-postayı yoksay.',
+  },
+  pl: {
+    magicSubject: 'Twój link logowania do SubRadar',
+    magicHeading: 'Zaloguj się do SubRadar',
+    magicBody: 'Kliknij przycisk poniżej, aby się zalogować. Link wygasa za 15 minut.',
+    magicCta: 'Zaloguj się do SubRadar',
+    otpSubject: 'Twój kod weryfikacyjny SubRadar',
+    otpHeading: 'Twój kod weryfikacyjny',
+    otpBody: 'Wpisz ten kod, aby zalogować się do SubRadar. Wygasa za 15 minut.',
+    ignoreNote: 'Jeśli tego nie zażądałeś, zignoruj ten e-mail.',
+  },
+  ar: {
+    magicSubject: 'رابط تسجيل الدخول إلى SubRadar',
+    magicHeading: 'تسجيل الدخول إلى SubRadar',
+    magicBody: 'انقر على الزر أدناه لتسجيل الدخول. ينتهي الرابط خلال 15 دقيقة.',
+    magicCta: 'تسجيل الدخول إلى SubRadar',
+    otpSubject: 'رمز التحقق الخاص بك في SubRadar',
+    otpHeading: 'رمز التحقق الخاص بك',
+    otpBody: 'أدخل هذا الرمز لتسجيل الدخول إلى SubRadar. ينتهي خلال 15 دقيقة.',
+    ignoreNote: 'إذا لم تطلب هذا، تجاهل هذا البريد الإلكتروني.',
+  },
 };
 
 function authT(locale: string): AuthStrings {
   const lang = (locale ?? 'en').split('-')[0].toLowerCase();
   return AUTH_STRINGS[lang] ?? AUTH_STRINGS.en;
+}
+
+// RTL languages get `dir="rtl"` on the email container so the layout
+// (button → text alignment, paragraph flow) mirrors correctly in Gmail
+// and Apple Mail. Without this Arabic copy reads right-to-left but
+// punctuation and CTA buttons drift to the left edge.
+function emailDir(locale: string): string {
+  const lang = (locale ?? 'en').split('-')[0].toLowerCase();
+  return lang === 'ar' ? 'rtl' : 'ltr';
 }
 
 /** Localized magic link email. */
@@ -416,8 +553,9 @@ export function buildMagicLinkEmail(opts: {
   link: string;
 }): { subject: string; html: string } {
   const s = authT(opts.locale);
+  const dir = emailDir(opts.locale);
   const html = `
-    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+    <div dir="${dir}" style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
       <h2 style="margin-bottom:8px">${s.magicHeading}</h2>
       <p style="color:#666;margin-bottom:24px">${s.magicBody}</p>
       <a href="${opts.link}" style="display:inline-block;background:#8B5CF6;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-weight:600">
@@ -435,8 +573,9 @@ export function buildOtpEmail(opts: {
   code: string;
 }): { subject: string; html: string } {
   const s = authT(opts.locale);
+  const dir = emailDir(opts.locale);
   const html = `
-    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+    <div dir="${dir}" style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
       <h2 style="margin-bottom:8px">${s.otpHeading}</h2>
       <p style="color:#666;margin-bottom:24px">${s.otpBody}</p>
       <div style="background:#f4f0ff;border-radius:12px;padding:20px;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#8B5CF6;">
@@ -1074,6 +1213,38 @@ const DIGEST_STRINGS: Record<
     chargesIn: (d) => (d === 0 ? 'бүгін' : d === 1 ? 'ертең' : `${d} күннен кейін`),
     todayLabel: 'бүгін',
     cta: 'SubRadar ашу',
+  },
+  it: {
+    heading: (n) => `${n} abbonament${n === 1 ? 'o si rinnova' : 'i si rinnovano'} presto`,
+    intro: 'Ecco cosa controllare:',
+    totalLabel: 'TOTALE',
+    chargesIn: (d) => (d === 0 ? 'oggi' : d === 1 ? 'tra 1 giorno' : `tra ${d} giorni`),
+    todayLabel: 'oggi',
+    cta: 'Apri SubRadar',
+  },
+  tr: {
+    heading: (n) => `${n} abonelik yakında yenileniyor`,
+    intro: 'İncelemen gerekenler:',
+    totalLabel: 'TOPLAM',
+    chargesIn: (d) => (d === 0 ? 'bugün' : d === 1 ? '1 gün içinde' : `${d} gün içinde`),
+    todayLabel: 'bugün',
+    cta: 'SubRadar\'ı aç',
+  },
+  pl: {
+    heading: (n) => `${n} ${n === 1 ? 'subskrypcja odnawia się' : 'subskrypcji odnawia się'} wkrótce`,
+    intro: 'Co warto sprawdzić:',
+    totalLabel: 'ŁĄCZNIE',
+    chargesIn: (d) => (d === 0 ? 'dziś' : d === 1 ? 'za 1 dzień' : `za ${d} dni`),
+    todayLabel: 'dziś',
+    cta: 'Otwórz SubRadar',
+  },
+  ar: {
+    heading: (n) => `${n} ${n === 1 ? 'اشتراك يتجدد' : 'اشتراكات تتجدد'} قريبًا`,
+    intro: 'إليك ما يجب مراجعته:',
+    totalLabel: 'الإجمالي',
+    chargesIn: (d) => (d === 0 ? 'اليوم' : d === 1 ? 'خلال يوم واحد' : `خلال ${d} أيام`),
+    todayLabel: 'اليوم',
+    cta: 'افتح SubRadar',
   },
 };
 

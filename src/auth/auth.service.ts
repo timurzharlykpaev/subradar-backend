@@ -32,6 +32,7 @@ export interface AuthContext {
 
 const SUPPORTED_LOCALES = new Set([
   'en', 'ru', 'es', 'de', 'fr', 'pt', 'zh', 'ja', 'ko', 'kk',
+  'it', 'tr', 'pl', 'ar',
 ]);
 
 function pickLocale(

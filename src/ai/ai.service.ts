@@ -852,7 +852,7 @@ A) Single plan: { "done": true, "subscription": { "name": string, "amount": numb
 B) Multiple plans: { "done": true, "plans": [{ "name": string, "amount": number, "billingPeriod": "MONTHLY"|"YEARLY", "currency": "USD" }], "serviceName": string, "iconUrl": string, "serviceUrl": string, "cancelUrl": string|null, "category": string }
 C) Need info: { "done": false, "question": string, "field": "name"|"amount"|"period"|"clarify", "partialContext": {} }
 
-LANGUAGE: Always write the "question" field in "${ctx.locale}" (russian if locale starts with "ru", kazakh if "kk", german if "de", spanish if "es", french if "fr", portuguese if "pt", chinese if "zh", japanese if "ja", korean if "ko", english otherwise).
+LANGUAGE: Always write the "question" field in the user's locale "${ctx.locale}". Supported locales: en, ru, es, de, fr, it, pt, pl, tr, ar, zh, ja, ko, kk. Use the most natural phrasing for that language. Fall back to English only if the locale is none of the above.
 
 CURRENCY (REPEAT, CRITICAL):
 - User's preferred currency is ${ctx.currency}, region ${ctx.country}.
@@ -897,11 +897,30 @@ CURRENCY (REPEAT, CRITICAL):
     try {
       return JSON.parse(String(result));
     } catch {
+      // Localized fallback question shown when the model returned an
+      // unparseable string. Keeps the wizard in the user's language for
+      // the 14 locales the mobile app ships translations for; English
+      // for everything else (matches the LANGUAGE instruction above).
+      const FALLBACK_QUESTION: Record<string, string> = {
+        en: 'What service is this?',
+        ru: 'Какой это сервис?',
+        es: '¿Qué servicio es este?',
+        de: 'Welcher Dienst ist das?',
+        fr: 'Quel service est-ce ?',
+        it: 'Che servizio è questo?',
+        pt: 'Que serviço é este?',
+        pl: 'Jaka to usługa?',
+        tr: 'Bu hangi servis?',
+        ar: 'ما هذه الخدمة؟',
+        zh: '这是什么服务？',
+        ja: 'これはどのサービスですか？',
+        ko: '이것은 어떤 서비스인가요?',
+        kk: 'Бұл қандай қызмет?',
+      };
+      const lang = (locale ?? 'en').split(/[-_]/)[0].toLowerCase();
       return {
         done: false,
-        question: locale.startsWith('ru')
-          ? 'Какой это сервис?'
-          : 'What service is this?',
+        question: FALLBACK_QUESTION[lang] ?? FALLBACK_QUESTION.en,
         field: 'name',
         partialContext: {},
       };

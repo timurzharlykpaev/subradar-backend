@@ -8,6 +8,10 @@ import { zh } from './locales/zh';
 import { ja } from './locales/ja';
 import { ko } from './locales/ko';
 import { kk } from './locales/kk';
+import { it } from './locales/it';
+import { tr } from './locales/tr';
+import { pl } from './locales/pl';
+import { ar } from './locales/ar';
 import { PushI18n, SupportedPushLocale, SUPPORTED_PUSH_LOCALES } from './types';
 
 const DICTIONARIES: Record<SupportedPushLocale, PushI18n> = {
@@ -21,6 +25,10 @@ const DICTIONARIES: Record<SupportedPushLocale, PushI18n> = {
   ja,
   ko,
   kk,
+  it,
+  tr,
+  pl,
+  ar,
 };
 
 /**

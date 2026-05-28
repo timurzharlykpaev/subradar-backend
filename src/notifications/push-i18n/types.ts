@@ -103,6 +103,10 @@ export const SUPPORTED_PUSH_LOCALES = [
   'ja',
   'ko',
   'kk',
+  'it',
+  'tr',
+  'pl',
+  'ar',
 ] as const;
 
 export type SupportedPushLocale = (typeof SUPPORTED_PUSH_LOCALES)[number];

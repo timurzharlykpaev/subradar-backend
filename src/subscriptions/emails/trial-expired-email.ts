@@ -24,7 +24,11 @@ type EmailLocale =
   | 'zh'
   | 'ja'
   | 'ko'
-  | 'kk';
+  | 'kk'
+  | 'it'
+  | 'tr'
+  | 'pl'
+  | 'ar';
 
 interface EmailStrings {
   subject: string;
@@ -173,6 +177,62 @@ const TEMPLATES: Record<EmailLocale, EmailStrings> = {
     proLabel: 'Pro жоспары',
     proValue: '∞ жазылым, 200 AI сұранысы',
     cta: 'Жазылу →',
+  },
+  it: {
+    subject: '⏰ SubRadar: La tua prova gratuita è terminata',
+    preheader: 'Prova gratuita terminata',
+    title: 'La tua prova gratuita di 7 giorni è terminata',
+    body1:
+      'Il tuo piano è stato spostato a <strong style="color:#fff;">Free</strong>.',
+    body2:
+      'Iscriviti a <strong style="color:#8B5CF6;">SubRadar Pro</strong> per ripristinare l\'accesso illimitato.',
+    freeLabel: 'Piano Free',
+    freeValue: '3 abbonamenti, 5 richieste AI',
+    proLabel: 'Piano Pro',
+    proValue: '∞ abbonamenti, 200 richieste AI',
+    cta: 'Iscriviti →',
+  },
+  tr: {
+    subject: '⏰ SubRadar: Ücretsiz denemen sona erdi',
+    preheader: 'Ücretsiz deneme sona erdi',
+    title: '7 günlük ücretsiz denemen sona erdi',
+    body1:
+      'Planın <strong style="color:#fff;">Free</strong>\'e taşındı.',
+    body2:
+      'Sınırsız erişimi geri kazanmak için <strong style="color:#8B5CF6;">SubRadar Pro</strong>\'ya abone ol.',
+    freeLabel: 'Free planı',
+    freeValue: '3 abonelik, 5 AI isteği',
+    proLabel: 'Pro planı',
+    proValue: '∞ abonelik, 200 AI isteği',
+    cta: 'Abone ol →',
+  },
+  pl: {
+    subject: '⏰ SubRadar: Twoja darmowa próba zakończyła się',
+    preheader: 'Darmowa próba zakończona',
+    title: 'Twoja 7-dniowa darmowa próba zakończyła się',
+    body1:
+      'Twój plan został przeniesiony na <strong style="color:#fff;">Free</strong>.',
+    body2:
+      'Subskrybuj <strong style="color:#8B5CF6;">SubRadar Pro</strong>, aby przywrócić nielimitowany dostęp.',
+    freeLabel: 'Plan Free',
+    freeValue: '3 subskrypcje, 5 żądań AI',
+    proLabel: 'Plan Pro',
+    proValue: '∞ subskrypcji, 200 żądań AI',
+    cta: 'Subskrybuj →',
+  },
+  ar: {
+    subject: '⏰ SubRadar: انتهت تجربتك المجانية',
+    preheader: 'انتهت التجربة المجانية',
+    title: 'انتهت تجربتك المجانية لمدة 7 أيام',
+    body1:
+      'تم نقل خطتك إلى <strong style="color:#fff;">Free</strong>.',
+    body2:
+      'اشترك في <strong style="color:#8B5CF6;">SubRadar Pro</strong> لاستعادة الوصول غير المحدود.',
+    freeLabel: 'خطة Free',
+    freeValue: '3 اشتراكات، 5 طلبات AI',
+    proLabel: 'خطة Pro',
+    proValue: '∞ اشتراكات، 200 طلب AI',
+    cta: 'اشترك →',
   },
 };
 
