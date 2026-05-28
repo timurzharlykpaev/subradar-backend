@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEmail, Length, Matches } from 'class-validator';
+import { IsString, IsOptional, IsEmail, IsIn, Length, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -72,4 +72,15 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   timezoneDetected?: string;
+
+  // Whitelisted on UsersService.update — listing here so the strict
+  // ValidationPipe (whitelist + forbidNonWhitelisted) doesn't drop the
+  // value when the mobile Settings screen mirrors a date-format choice.
+  // Restricted to the three formats the mobile UI offers; anything else
+  // gets a 400 instead of silently corrupting the field.
+  @ApiPropertyOptional({ enum: ['DD/MM', 'MM/DD', 'YYYY-MM-DD'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['DD/MM', 'MM/DD', 'YYYY-MM-DD'])
+  dateFormat?: string;
 }

@@ -15,6 +15,7 @@ import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UsersService } from './users.service';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -47,25 +48,19 @@ export class UsersController {
     res.json(data);
   }
 
+  // Use UpdateUserDto (class-validator) instead of an inline TS type so the
+  // global ValidationPipe actually validates each field — previously the
+  // inline `Partial<{...}>` had no metatype, so class-validator was
+  // bypassed entirely and any string slipped through: a typo like
+  // "USDT" landed in `displayCurrency` and a malformed "kazakh" went
+  // into `region`, then later renders showed broken totals because the
+  // currency code couldn't be looked up. The DTO enforces ISO-3166
+  // alpha-2 for region and ISO-4217 for displayCurrency, with @Transform
+  // up-casing the values before the regex check so client-side
+  // lowercase doesn't 400.
   @Patch('me')
-  updateMe(
-    @Request() req,
-    @Body()
-    body: Partial<{
-      name: string;
-      avatarUrl: string;
-      fcmToken: string;
-      region: string;
-      displayCurrency: string;
-      timezoneDetected: string;
-      locale: string;
-    }>,
-  ) {
+  updateMe(@Request() req, @Body() body: UpdateUserDto) {
     const payload: Record<string, any> = { ...body };
-    if (typeof payload.region === 'string') payload.region = payload.region.toUpperCase();
-    if (typeof payload.displayCurrency === 'string') {
-      payload.displayCurrency = payload.displayCurrency.toUpperCase();
-    }
     if (typeof payload.locale === 'string') {
       // Normalize "ru-RU" → "ru" so cron-side resolvePushLocale stays cheap.
       payload.locale = payload.locale.split(/[-_]/)[0].toLowerCase();
