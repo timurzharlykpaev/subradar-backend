@@ -596,10 +596,12 @@ export class SubscriptionsService implements OnModuleInit {
   }
 
   async remove(userId: string, id: string): Promise<void> {
-    const sub = await this.findOne(userId, id);
-    await this.repo.remove(sub);
+    // Idempotent DELETE: re-deleting an already-removed sub (or one not owned
+    // by the user) returns 204 instead of 404. Old mobile builds were spamming
+    // "Subscription not found" errors on retries and concurrent taps.
+    const result = await this.repo.delete({ id, userId });
+    if (!result.affected) return;
     await this.invalidateAnalyticsCache(userId);
-    // Trigger analysis re-evaluation (debounced)
     this.analysisService.onSubscriptionChange(userId).catch(err =>
       this.logger.warn(`Analysis trigger failed: ${err.message}`),
     );

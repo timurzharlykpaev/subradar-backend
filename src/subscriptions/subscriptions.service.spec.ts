@@ -209,8 +209,13 @@ describe('SubscriptionsService', () => {
 
   describe('remove', () => {
     it('should remove subscription', async () => {
-      mockRepo.findOne.mockResolvedValue(mockSub);
-      mockRepo.remove.mockResolvedValue(undefined);
+      mockRepo.delete.mockResolvedValue({ affected: 1, raw: [] });
+      await expect(service.remove('user-1', 'sub-1')).resolves.toBeUndefined();
+      expect(mockRepo.delete).toHaveBeenCalledWith({ id: 'sub-1', userId: 'user-1' });
+    });
+
+    it('is idempotent when subscription is already gone', async () => {
+      mockRepo.delete.mockResolvedValue({ affected: 0, raw: [] });
       await expect(service.remove('user-1', 'sub-1')).resolves.toBeUndefined();
     });
   });
