@@ -35,7 +35,10 @@ export class ReconciliationCron {
     private readonly cfg: ConfigService,
   ) {}
 
-  @Cron('0 * * * *') // hourly on the hour
+  // Hourly at :40 — offset from the top of the hour so this scan doesn't
+  // compete with outbox/health-watch and the other hourly crons for the
+  // small shared DO managed PG connection pool. See reminders.expireTrials.
+  @Cron('40 * * * *')
   async run(): Promise<void> {
     const enabled =
       this.cfg.get<string>('BILLING_RECONCILIATION_ENABLED') === 'true';

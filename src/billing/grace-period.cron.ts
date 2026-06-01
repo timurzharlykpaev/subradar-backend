@@ -43,7 +43,10 @@ export class GracePeriodCron {
     });
   }
 
-  @Cron('0 9 * * *')
+  // 09:45 daily — offset off the 09:00 morning cron cluster (trial checks,
+  // grace reset) so this cleanup scan doesn't fight them for the shared DO
+  // managed PG connection pool.
+  @Cron('45 9 * * *')
   async cleanupAbandonedWorkspaces() {
     await runCronHandler('cleanupAbandonedWorkspaces', this.logger, this.tg, async () => {
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);

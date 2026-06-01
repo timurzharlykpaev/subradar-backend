@@ -595,8 +595,15 @@ export class RemindersService {
     this.logger.log(`Weekly push digests sent: ${sent}`);
   }
 
-  /** Downgrade users whose trial has expired — runs every hour */
-  @Cron('0 * * * *')
+  /**
+   * Downgrade users whose trial has expired — runs hourly at :33.
+   * Deliberately offset from the top of the hour: outbox (10s tick),
+   * health-watch (every minute) and the other hourly crons all fire at
+   * :00, and the simultaneous burst saturated our small shared DO managed
+   * PG connection pool (timeouts / ECONNREFUSED on the :00 tick). :33 sits
+   * clear of the reminder cluster (:02–:22) and the other hourly jobs.
+   */
+  @Cron('33 * * * *')
   async expireTrials() {
     return runCronHandler('expireTrials', this.logger, this.tg, () =>
       this.expireTrialsImpl(),

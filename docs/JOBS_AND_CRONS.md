@@ -4,6 +4,38 @@
 
 Heavy operations run asynchronously via BullMQ jobs and scheduled cron tasks. PDF generation, AI audits, and batch notifications must NOT be synchronous request-response.
 
+## Actual `@Cron` schedule registry (source of truth)
+
+The sections further below describe intended product behaviour; this table mirrors the **real** `@Cron(...)` decorators in code. Keep it in sync when changing any schedule, and mirror hourly/daily expectations in `CRON_EXPECTED_INTERVAL_MS` (`src/common/heartbeat.service.ts`).
+
+> **Connection-budget rule:** prod and dev share ONE DigitalOcean managed-PG Basic cluster (`max_connections=25`, ~17 usable slots after DO internals/superuser). The always-on `outbox` tick (every 10s) and `health-watch` (every minute) both fire at `:00`. **No new cron may be scheduled at the top of the hour (`:00`)** — past `:00` pile-ups saturated the pool and produced `timeout of 2000ms exceeded` / `ECONNREFUSED …:25060` bursts at midnight. Stagger across the hour instead.
+
+| Handler | Schedule | File |
+|---|---|---|
+| `outbox` tick | every 10s | `billing/outbox/outbox.worker.ts` |
+| `health-watch` | every minute | `common/health-watch.cron.ts` |
+| `sendDailyReminders` | `2 * * * *` | `reminders/reminders.service.ts` |
+| `sendTrialExpiryReminders` | `7 * * * *` | `reminders/reminders.service.ts` |
+| `sendProExpirationReminders` | `12 * * * *` | `reminders/reminders.service.ts` |
+| `sendWeeklyPushDigest` | `17 * * * *` | `reminders/reminders.service.ts` |
+| `sendWinBackPush` | `22 * * * *` | `reminders/reminders.service.ts` |
+| `expireTrials` | `33 * * * *` | `reminders/reminders.service.ts` |
+| `reconciliation` | `40 * * * *` | `billing/reconciliation/reconciliation.cron.ts` |
+| `heartbeatMonitor` | `50 * * * *` | `common/heartbeat.cron.ts` |
+| `resetExpiredGrace` | `5 0 * * *` | `billing/grace-period.cron.ts` |
+| `downgradeExpiredTrials` | `30 0 * * *` | `subscriptions/trial-checker.cron.ts` |
+| `subscriptions` daily date-advance | `0 1 * * *` | `subscriptions/subscriptions.service.ts` |
+| `fxRefreshDaily` | `0 3 * * *` | `fx/fx.cron.ts` |
+| `checkExpiringTrials` | `0 9 * * *` | `subscriptions/trial-checker.cron.ts` |
+| `warnExpiringProTrials` | `15 9 * * *` | `subscriptions/trial-checker.cron.ts` |
+| `cleanupAbandonedWorkspaces` | `45 9 * * *` | `billing/grace-period.cron.ts` |
+| `sendMonthlyReports` | `0 10 1 * *` | `reminders/monthly-report.service.ts` |
+| weekly analysis / catalog | `0 9/12 * * 1`, `0 3 * * 0`, `0 4 * * 1` | `analysis/`, `catalog/` |
+
+**Diagnostics:** every PG connection is tagged `application_name = subradar-<NODE_ENV>` (see `app.module.ts`), so `SELECT application_name, count(*) FROM pg_stat_activity GROUP BY 1` in the DO console shows whether prod or dev is consuming slots.
+
+**Scaling fix (recommended):** enable the DO **connection pool** (transaction mode, port `25061`) and point `DATABASE_URL` at it — this lifts the 25-slot ceiling. See the `extra` block / `.env.example` notes. Compatible with current TypeORM usage (unnamed prepared statements only).
+
 ## Daily Job (runs once per day)
 
 ### Triggers

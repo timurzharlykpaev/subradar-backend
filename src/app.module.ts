@@ -120,11 +120,24 @@ import { IdempotencyModule } from './common/idempotency/idempotency.module';
           // the SUPERUSER attribute" errors. New defaults: prod 12/2,
           // dev 3/1 — total worst case 15+5(DO)=20, headroom 2-5 slots.
           // Override via DB_POOL_MAX / DB_POOL_MIN if the cluster is upgraded.
+          // MIGRATING TO DO CONNECTION POOL (PgBouncer) — the real fix for the
+          // 25-slot ceiling. DO managed PG exposes a separate pooler endpoint
+          // (port 25061, transaction mode) that multiplexes many client conns
+          // onto a few backend conns, so the per-app `max` below stops being a
+          // hard cap. To switch: point DATABASE_URL at the pooler connection
+          // string (…?sslmode=require, port 25061) and raise DB_POOL_MAX via
+          // env. Transaction-mode pooling is safe here — TypeORM/pg use only
+          // unnamed (per-transaction) prepared statements; we must NOT enable
+          // named prepared statements or session-level SET while on the pooler.
           extra: {
             max: Number(cfg.get('DB_POOL_MAX')) || (isProd ? 12 : 3),
             min: Number(cfg.get('DB_POOL_MIN')) || (isProd ? 2 : 1),
             idleTimeoutMillis: 30_000,
             connectionTimeoutMillis: 5_000,
+            // Tags every connection in DO's pg_stat_activity / pool metrics so
+            // prod vs dev slot usage is attributable at a glance — exactly the
+            // visibility we lacked when diagnosing the midnight pool storms.
+            application_name: `subradar-${cfg.get('NODE_ENV', 'development')}`,
           },
         } as any;
       },

@@ -112,7 +112,10 @@ export class TrialCheckerCron {
 
   // ── Pro trial: warn 1 day before expiry ──────────────────────────────────
 
-  @Cron(CronExpression.EVERY_DAY_AT_9AM)
+  // 09:15 daily — offset from checkExpiringTrials (09:00) and grace-period
+  // cleanup so the three morning jobs don't hit the shared DO PG pool at the
+  // same instant. The 15-min shift is immaterial for a "1 day before" warning.
+  @Cron('15 9 * * *')
   async warnExpiringProTrials() {
     return runCronHandler('warnExpiringProTrials', this.logger, this.tg, () =>
       this.warnExpiringProTrialsImpl(),
