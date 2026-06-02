@@ -103,6 +103,34 @@ export class UsersService {
     return this.repo.findOne({ where: { email } });
   }
 
+  /**
+   * Re-identify an OAuth user by the deterministic hash of their provider
+   * `sub`. This is the only way to find a returning Apple user when the
+   * identity token carries no email (Apple omits it after first consent),
+   * since the encrypted `providerId` column can't be queried directly.
+   */
+  async findByProviderSubHash(hash: string): Promise<User | null> {
+    return this.repo.findOne({ where: { providerSubHash: hash } });
+  }
+
+  /**
+   * Backfill the queryable `providerSubHash` (and re-affirm the encrypted
+   * `providerId`) for a user we matched by another key. Deliberately NOT
+   * routed through `update()`: identity-linking columns must only be written
+   * by the auth flow, never by a generic PATCH /users/me, so they're absent
+   * from that method's whitelist.
+   */
+  async linkProviderSub(
+    id: string,
+    providerId: string,
+    providerSubHash: string,
+  ): Promise<void> {
+    await this.repo.update(id, {
+      providerId,
+      providerSubHash,
+    } as Partial<User>);
+  }
+
   async findByEmailWithPassword(email: string): Promise<User | null> {
     return this.repo
       .createQueryBuilder('user')

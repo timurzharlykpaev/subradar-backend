@@ -39,6 +39,8 @@ const mockUsersService = {
   findByEmailWithPassword: jest.fn(),
   findById: jest.fn(),
   findByMagicLinkToken: jest.fn().mockResolvedValue(null),
+  findByProviderSubHash: jest.fn().mockResolvedValue(null),
+  linkProviderSub: jest.fn().mockResolvedValue(undefined),
   create: jest.fn().mockResolvedValue(mockUser),
   update: jest.fn().mockResolvedValue(mockUser),
   updateRefreshToken: jest.fn().mockResolvedValue(undefined),
@@ -108,6 +110,10 @@ describe('AuthService', () => {
     mockUsersService.findByEmailWithPassword.mockReset();
     mockUsersService.findByMagicLinkToken.mockReset();
     mockUsersService.findByMagicLinkToken.mockResolvedValue(null);
+    mockUsersService.findByProviderSubHash.mockReset();
+    mockUsersService.findByProviderSubHash.mockResolvedValue(null);
+    mockUsersService.linkProviderSub.mockReset();
+    mockUsersService.linkProviderSub.mockResolvedValue(undefined);
     mockUsersService.create.mockReset();
     mockUsersService.create.mockResolvedValue(mockUser);
     mockUsersService.update.mockReset();
@@ -322,18 +328,46 @@ describe('AuthService', () => {
       ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('throws BadRequestException if no email in payload', async () => {
-      mockAppleVerify.mockResolvedValueOnce({ sub: 'apple-sub' }); // no email
+    it('throws UnauthorizedException if no sub in payload', async () => {
+      // A token with neither sub nor email is malformed/forged.
+      mockAppleVerify.mockResolvedValueOnce({ email: 'a@test.com' }); // no sub
       await expect(
         service.appleLogin({ idToken: 'tok', name: 'Test' } as any),
-      ).rejects.toThrow();
+      ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('creates new user when not exists', async () => {
+    it('re-identifies a returning user by sub when Apple omits the email', async () => {
+      // The exact production failure: token carries only the sub. Must match
+      // the existing account via providerSubHash, never 400.
+      mockAppleVerify.mockResolvedValueOnce({ sub: 'apple-sub' }); // no email
+      mockUsersService.findByProviderSubHash.mockResolvedValueOnce(mockUser);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      const result = await service.appleLogin({ idToken: 'tok' } as any);
+      expect(result).toHaveProperty('user');
+      expect(mockUsersService.create).not.toHaveBeenCalled();
+      // Email-based lookup must not run when the token has no email.
+      expect(mockUsersService.findByEmail).not.toHaveBeenCalled();
+    });
+
+    it('creates a placeholder account when a brand-new user has no email', async () => {
+      mockAppleVerify.mockResolvedValueOnce({ sub: 'brand-new-sub' }); // no email
+      mockUsersService.findByProviderSubHash.mockResolvedValueOnce(null);
+      mockUsersService.create.mockResolvedValueOnce(mockUser);
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      const result = await service.appleLogin({ idToken: 'tok' } as any);
+      expect(result).toHaveProperty('accessToken');
+      const created = mockUsersService.create.mock.calls[0][0];
+      expect(created.email).toMatch(/@apple-relay\.subradar\.invalid$/);
+      expect(created.providerSubHash).toEqual(expect.any(String));
+      expect(created.emailNotifications).toBe(false);
+    });
+
+    it('creates new user when not exists (email present)', async () => {
       mockAppleVerify.mockResolvedValueOnce({
         email: 'apple@test.com',
         sub: 'apple-sub',
       });
+      mockUsersService.findByProviderSubHash.mockResolvedValueOnce(null);
       mockUsersService.findByEmail.mockResolvedValueOnce(null);
       mockUsersService.create.mockResolvedValueOnce(mockUser);
       mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
@@ -342,17 +376,52 @@ describe('AuthService', () => {
         name: 'Apple User',
       } as any);
       expect(result).toHaveProperty('accessToken');
+      const created = mockUsersService.create.mock.calls[0][0];
+      expect(created.email).toBe('apple@test.com');
+      expect(created.providerSubHash).toEqual(expect.any(String));
     });
 
-    it('uses existing user', async () => {
+    it('does NOT rebind a Google account that shares the Apple email', async () => {
+      // OAuth "same email, different provider" hazard: the matched row is a
+      // Google identity. We log them in but must not overwrite its providerId.
+      mockAppleVerify.mockResolvedValueOnce({
+        email: 'shared@test.com',
+        sub: 'apple-sub',
+      });
+      mockUsersService.findByProviderSubHash.mockResolvedValueOnce(null);
+      mockUsersService.findByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        provider: 'google',
+        providerId: 'google-sub-encrypted',
+        providerSubHash: null,
+      });
+      mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
+      const result = await service.appleLogin({ idToken: 'tok' } as any);
+      expect(result).toHaveProperty('user');
+      expect(mockUsersService.linkProviderSub).not.toHaveBeenCalled();
+      expect(mockUsersService.create).not.toHaveBeenCalled();
+    });
+
+    it('matches a legacy user by email then backfills the sub hash', async () => {
       mockAppleVerify.mockResolvedValueOnce({
         email: 'test@test.com',
         sub: 'apple-sub',
       });
-      mockUsersService.findByEmail.mockResolvedValueOnce(mockUser);
+      // No hash row yet (legacy account), but email matches.
+      mockUsersService.findByProviderSubHash.mockResolvedValueOnce(null);
+      mockUsersService.findByEmail.mockResolvedValueOnce({
+        ...mockUser,
+        providerSubHash: null,
+      });
       mockUsersService.updateRefreshToken.mockResolvedValueOnce(undefined);
       const result = await service.appleLogin({ idToken: 'tok' } as any);
       expect(result).toHaveProperty('user');
+      expect(mockUsersService.linkProviderSub).toHaveBeenCalledWith(
+        mockUser.id,
+        'apple-sub',
+        expect.any(String),
+      );
+      expect(mockUsersService.create).not.toHaveBeenCalled();
     });
   });
 

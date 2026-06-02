@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   OneToMany,
   OneToOne,
+  Index,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { AesGcmTransformer } from '../../common/crypto/aes-gcm-transformer';
@@ -62,6 +63,19 @@ export class User {
   @Column({ nullable: true, transformer: AesGcmTransformer })
   @Exclude({ toPlainOnly: true })
   providerId: string;
+
+  // Deterministic sha256(provider + ':' + sub) — the queryable twin of the
+  // encrypted `providerId`. The encrypted column can't be searched (GCM
+  // ciphertext is non-deterministic), so this is how we re-identify a
+  // returning OAuth user by their stable `sub` when the provider omits the
+  // email. Apple does exactly that on every login after the first consent,
+  // which is what made email-only lookup 400 returning users. Indexed for
+  // O(1) login lookups. A one-way hash, so it leaks nothing the raw `sub`
+  // (already an opaque per-app id) wouldn't.
+  @Index()
+  @Column({ nullable: true })
+  @Exclude({ toPlainOnly: true })
+  providerSubHash: string;
 
   // `fcmToken` is intentionally NOT encrypted: it's looked up by-value in
   // `notifications.service.clearDeadToken` (`where: { fcmToken: token }`)

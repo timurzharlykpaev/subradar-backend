@@ -1,7 +1,6 @@
 import {
   Injectable,
   UnauthorizedException,
-  BadRequestException,
   ConflictException,
   ForbiddenException,
   InternalServerErrorException,
@@ -61,6 +60,7 @@ import { Inject } from '@nestjs/common';
 import { REDIS_CLIENT } from '../common/redis.module';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { maskEmail } from '../common/utils/pii';
+import { hashProviderSub } from '../common/crypto/provider-sub-hash';
 
 @Injectable()
 export class AuthService {
@@ -281,6 +281,14 @@ export class AuthService {
         avatarUrl: googleUser.avatarUrl,
         provider: AuthProvider.GOOGLE,
         providerId: googleUser.providerId,
+        ...(googleUser.providerId
+          ? {
+              providerSubHash: hashProviderSub(
+                AuthProvider.GOOGLE,
+                googleUser.providerId,
+              ),
+            }
+          : {}),
         ...(locale ? { locale } : {}),
       });
     } else {
@@ -332,36 +340,80 @@ export class AuthService {
       throw new UnauthorizedException('Invalid Apple token');
     }
 
-    const email = payload?.email;
-    if (!email) {
+    // `sub` is mandatory in every Apple identity token. Its absence means a
+    // malformed/forged token — not the returning-user-without-email case
+    // handled below — so reject it as unauthorized.
+    const sub: string | undefined = payload?.sub;
+    if (!sub) {
       await this.auditAuth('auth.login.failure', {
-        reason: 'apple_no_email',
+        reason: 'apple_no_sub',
         ctx,
         extra: { provider: 'apple' },
       });
-      throw new BadRequestException('Email not provided by Apple');
+      throw new UnauthorizedException('Invalid Apple token');
     }
 
-    let user = await this.usersService.findByEmail(email);
-    const isNew = !user;
+    // Email is OPTIONAL. Apple sends it only on the first consent; every
+    // later login carries just the `sub`. The old code required email and
+    // 400'd these returning users ("Email not provided by Apple").
+    const email: string | undefined = payload?.email;
+    const subHash = hashProviderSub(AuthProvider.APPLE, sub);
     const locale = pickLocale(dto.locale, ctx);
+
+    // Primary identity key: the stable `sub`, looked up via its deterministic
+    // hash. Works whether or not Apple sent the email this time.
+    let user = await this.usersService.findByProviderSubHash(subHash);
+
+    // Fallback for accounts created before `providerSubHash` existed and for
+    // the migration's blind spot: match by email when Apple did send it, then
+    // backfill the hash so the user's NEXT (emailless) login resolves by sub.
+    if (!user && email) {
+      user = await this.usersService.findByEmail(email);
+    }
+
+    const isNew = !user;
     if (!user) {
+      // Brand-new Apple user. Apple guarantees the email on first consent, so
+      // it's normally present. If it's somehow absent (e.g. the user revoked
+      // then re-added the app and we'd since deleted their row), synthesize a
+      // stable, unique placeholder from the sub so we never reject a valid
+      // Apple token. `.invalid` (RFC 2606) guarantees no real mailbox, and we
+      // mute email notifications for these rows; the user can set a real
+      // address later in Settings.
+      const resolvedEmail =
+        email || `apple_${subHash.slice(0, 24)}@apple-relay.subradar.invalid`;
       user = await this.usersService.create({
-        email,
-        name: name || email.split('@')[0],
+        email: resolvedEmail,
+        name: name || (email ? email.split('@')[0] : 'Apple User'),
         provider: AuthProvider.APPLE,
-        providerId: payload.sub,
+        providerId: sub,
+        providerSubHash: subHash,
+        ...(email ? {} : { emailNotifications: false }),
         ...(locale ? { locale } : {}),
       });
     } else {
+      // Self-heal legacy Apple rows so future emailless logins match by sub.
+      //
+      // Guard against the OAuth "same email, different provider" hazard: when
+      // we reach here via the email fallback, the matched row might be a
+      // Google/local account that merely shares the Apple-disclosed email. We
+      // must NOT rebind that account's encrypted `providerId` to the Apple
+      // `sub`. Only backfill when the row is genuinely an Apple identity (or
+      // has no provider binding yet). The hash-hit path already implies an
+      // Apple row, and there `providerSubHash` is non-null so this is a no-op.
+      const isAppleIdentity =
+        user.provider === AuthProvider.APPLE || !user.providerId;
+      if (isAppleIdentity && !user.providerSubHash) {
+        await this.usersService.linkProviderSub(user.id, sub, subHash);
+      }
       await this.backfillLocale(user, locale);
     }
 
     await this.auditAuth('auth.login.success', {
       userId: user.id,
-      email,
+      email: user.email,
       ctx,
-      extra: { provider: 'apple', isNew },
+      extra: { provider: 'apple', isNew, viaSubHash: !email },
     });
     const tokens = this.generateTokens(user);
     await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
