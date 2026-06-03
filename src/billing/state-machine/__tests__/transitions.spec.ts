@@ -398,4 +398,86 @@ describe('BillingStateMachine.transition', () => {
       ).toThrow(InvalidTransitionError);
     });
   });
+
+  // Regression: these two transitions were parked in billing_dead_letter on
+  // prod because the state machine threw InvalidTransitionError on a
+  // perfectly recoverable RC webhook ordering. Both come from real RC
+  // delivery patterns (duplicate UNCANCELLATION after the sub is already
+  // active; PRODUCT_CHANGE arriving before/without the INITIAL_PURCHASE).
+  describe('RC webhook-ordering hardening', () => {
+    it('RC_UNCANCELLATION on already-active is an idempotent no-op (not a throw)', () => {
+      const active: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'organization',
+        state: 'active',
+        billingSource: 'revenuecat',
+        billingPeriod: 'monthly',
+        currentPeriodEnd: new Date('2099-01-01'),
+        cancelAtPeriodEnd: false,
+      };
+      const next = transition(active, { type: 'RC_UNCANCELLATION' });
+      expect(next).toEqual(active);
+      expect(next.state).toBe('active');
+      expect(next.cancelAtPeriodEnd).toBe(false);
+    });
+
+    it('RC_UNCANCELLATION on billing_issue is an idempotent no-op', () => {
+      const issue: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'pro',
+        state: 'billing_issue',
+        billingSource: 'revenuecat',
+        billingIssueAt: new Date('2026-05-01'),
+      };
+      expect(transition(issue, { type: 'RC_UNCANCELLATION' })).toEqual(issue);
+    });
+
+    it('RC_UNCANCELLATION on free still throws (genuinely invalid)', () => {
+      expect(() =>
+        transition(freeSnapshot(), { type: 'RC_UNCANCELLATION' }),
+      ).toThrow(InvalidTransitionError);
+    });
+
+    it('RC_PRODUCT_CHANGE from free establishes the subscription (lost INITIAL_PURCHASE)', () => {
+      const start = new Date('2026-05-07T20:15:22Z');
+      const end = new Date('2026-06-07T20:15:22Z');
+      const next = transition(freeSnapshot(), {
+        type: 'RC_PRODUCT_CHANGE',
+        newPlan: 'organization',
+        period: 'monthly',
+        periodStart: start,
+        periodEnd: end,
+      });
+      expect(next.state).toBe('active');
+      expect(next.plan).toBe('organization');
+      expect(next.billingSource).toBe('revenuecat');
+      expect(next.billingPeriod).toBe('monthly');
+      expect(next.currentPeriodStart).toEqual(start);
+      expect(next.currentPeriodEnd).toEqual(end);
+      expect(next.cancelAtPeriodEnd).toBe(false);
+    });
+
+    it('RC_PRODUCT_CHANGE from grace_pro reactivates on the new plan', () => {
+      const grace: UserBillingSnapshot = {
+        ...freeSnapshot(),
+        plan: 'pro',
+        state: 'grace_pro',
+        billingSource: 'revenuecat',
+        graceExpiresAt: new Date('2099-01-01'),
+        graceReason: 'pro_expired',
+      };
+      const end = new Date('2026-06-07T20:15:22Z');
+      const next = transition(grace, {
+        type: 'RC_PRODUCT_CHANGE',
+        newPlan: 'organization',
+        period: 'yearly',
+        periodStart: new Date('2026-05-07T20:15:22Z'),
+        periodEnd: end,
+      });
+      expect(next.state).toBe('active');
+      expect(next.plan).toBe('organization');
+      expect(next.graceExpiresAt).toBeNull();
+      expect(next.graceReason).toBeNull();
+    });
+  });
 });

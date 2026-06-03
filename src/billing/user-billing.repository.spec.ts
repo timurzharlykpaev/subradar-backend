@@ -119,10 +119,13 @@ describe('UserBillingRepository', () => {
         }),
       );
 
-      // RC_UNCANCELLATION on active sub is invalid per reducer.
+      // ADMIN_GRANT_PRO on an already-paid (active) sub is invalid per
+      // reducer — it's only allowed from `free` so we never clobber a real
+      // RC subscription. (RC_UNCANCELLATION on active is now an idempotent
+      // no-op, not an invalid transition — see transitions.ts hardening.)
       const result = await repo.applyTransition(
         'user-1',
-        { type: 'RC_UNCANCELLATION' },
+        { type: 'ADMIN_GRANT_PRO', plan: 'pro', invitedByUserId: 'owner-1' },
         { actor: 'webhook_rc' },
       );
 

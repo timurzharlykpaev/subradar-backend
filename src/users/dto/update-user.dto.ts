@@ -1,4 +1,15 @@
-import { IsString, IsOptional, IsEmail, IsIn, Length, Matches } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEmail,
+  IsIn,
+  IsBoolean,
+  IsInt,
+  Min,
+  Max,
+  Length,
+  Matches,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -83,4 +94,40 @@ export class UpdateUserDto {
   @IsString()
   @IsIn(['DD/MM', 'MM/DD', 'YYYY-MM-DD'])
   dateFormat?: string;
+
+  // The fields below are all whitelisted on UsersService.update but were
+  // missing from this DTO. With the global ValidationPipe running
+  // `forbidNonWhitelisted: true`, any client (including older App Store
+  // builds and the web app) that PATCHes /users/me with one of these
+  // got a 400 instead of having the value persisted. Declaring them
+  // here as optional restores backward-compatible behaviour additively —
+  // no field is required, so clients that omit them keep the old
+  // semantics. See commit 71e9222 (the tightening that introduced the
+  // regression).
+  @ApiPropertyOptional({ description: 'Mark the first-run onboarding as finished' })
+  @IsOptional()
+  @IsBoolean()
+  onboardingCompleted?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  notificationsEnabled?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  emailNotifications?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  weeklyDigestEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Days before renewal to send a reminder (0–30)' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(30)
+  reminderDaysBefore?: number;
 }

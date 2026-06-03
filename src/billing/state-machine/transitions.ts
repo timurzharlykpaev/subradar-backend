@@ -104,13 +104,34 @@ export function transition(
       // current Pro is `cancel_at_period_end`. Previously throwing here
       // meant a user who cancelled Pro and then chose Team would see the
       // webhook fail and stay on Pro forever.
-      if (s.state !== 'active' && s.state !== 'cancel_at_period_end') {
+      //
+      // Also accept from `free`, `billing_issue`, `grace_pro`, `grace_team`:
+      // RC can deliver PRODUCT_CHANGE before — or instead of — the
+      // INITIAL_PURCHASE (webhook reordering / a lost first event), in
+      // which case our local row is still `free`. It can likewise arrive
+      // while the row sits in grace (the win-back purchase IS a product
+      // change) or billing_issue (resolved by switching product). The
+      // event always carries a full fresh period, so in every one of
+      // these we adopt the new subscription and snap to `active`. Throwing
+      // here is what parked `free -> RC_PRODUCT_CHANGE` in
+      // billing_dead_letter on prod.
+      if (
+        s.state !== 'active' &&
+        s.state !== 'cancel_at_period_end' &&
+        s.state !== 'free' &&
+        s.state !== 'billing_issue' &&
+        s.state !== 'grace_pro' &&
+        s.state !== 'grace_team'
+      ) {
         throw new InvalidTransitionError(s.state, e.type);
       }
       return {
         ...s,
         plan: e.newPlan,
         state: 'active',
+        // Establishes the billing source for the free/grace entry paths
+        // (a no-op when we were already on an RC sub).
+        billingSource: 'revenuecat',
         billingPeriod: e.period,
         currentPeriodStart: e.periodStart,
         currentPeriodEnd: e.periodEnd,
@@ -119,6 +140,11 @@ export function transition(
         // issues a fresh subscription for the new product.
         cancelAtPeriodEnd: false,
         billingIssueAt: null,
+        // Clear grace markers when a product change reactivates a lapsed
+        // sub, mirroring RC_RENEWAL — otherwise stale "expires in N days"
+        // copy lingers on the banner.
+        graceExpiresAt: null,
+        graceReason: null,
         refundedAt: null,
       };
 
@@ -144,8 +170,22 @@ export function transition(
       };
 
     case 'RC_UNCANCELLATION':
-      if (s.state !== 'cancel_at_period_end') throw new InvalidTransitionError(s.state, e.type);
-      return { ...s, state: 'active', cancelAtPeriodEnd: false };
+      // The only meaningful transition is cancel_at_period_end → active.
+      if (s.state === 'cancel_at_period_end') {
+        return { ...s, state: 'active', cancelAtPeriodEnd: false };
+      }
+      // Already in a non-cancelling paid state — RC re-delivers
+      // UNCANCELLATION on retries, and Apple can emit it right after a
+      // RENEWAL that already cleared the cancel flag. There's nothing to
+      // un-cancel, so this is an idempotent no-op. Throwing here parked
+      // `active -> RC_UNCANCELLATION` in billing_dead_letter on prod and
+      // bounced the webhook back to RC for pointless retries.
+      if (s.state === 'active' || s.state === 'billing_issue') {
+        return s;
+      }
+      // free / grace_* genuinely have no subscription to un-cancel — keep
+      // surfacing this as an invalid transition for visibility.
+      throw new InvalidTransitionError(s.state, e.type);
 
     case 'RC_EXPIRATION':
       if (s.state === 'free' || s.state === 'grace_pro' || s.state === 'grace_team') return s;
