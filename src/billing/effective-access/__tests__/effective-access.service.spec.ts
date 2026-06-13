@@ -190,6 +190,43 @@ describe('EffectiveAccessResolver.resolve', () => {
     expect(r.flags.graceReason).toBe('pro_expired');
   });
 
+  it('stale grace_pro under an active RC entitlement → state=active, no grace banner', async () => {
+    // Regression: an EXPIRATION webhook parked the row in grace_pro (+7d
+    // gracePeriodEnd), but RC still reports an active entitlement and the
+    // renewal webhook has not landed yet (for yearly plans this gap can be
+    // weeks — see reconcile.ts grace-recovery comment). Read-time self-heal
+    // already surfaces effective.state='active'; the banner MUST agree and
+    // NOT render a contradictory "Pro expired — 7 days left" grace banner on
+    // a paying user. The grace branch keyed off the raw billingStatus while
+    // the rest of the response was self-healed — that mismatch was the bug.
+    const graceExpiresAt = new Date(Date.now() + 7 * 86_400_000);
+    users.findOne.mockResolvedValue(
+      userFixture({
+        plan: 'pro',
+        billingStatus: 'grace_pro',
+        billingSource: 'revenuecat',
+        billingPeriod: 'monthly',
+        currentPeriodStart: new Date(Date.now() - 5 * 86_400_000),
+        currentPeriodEnd: new Date(Date.now() + 25 * 86_400_000),
+        gracePeriodEnd: graceExpiresAt,
+        gracePeriodReason: 'pro_expired',
+      }),
+    );
+    trials.findOne.mockResolvedValue(null);
+    workspaces.findOne.mockResolvedValue(null);
+    members.findOne.mockResolvedValue(null);
+    subs.count.mockResolvedValue(10);
+
+    const r = await svc.resolve('u1');
+
+    expect(r.effective.plan).toBe('pro');
+    expect(r.effective.source).toBe('own');
+    expect(r.effective.state).toBe('active');
+    expect(r.banner.priority).not.toBe('grace');
+    // monthly pro that's actually active → annual-upgrade nudge, not grace
+    expect(r.banner.priority).toBe('annual_upgrade');
+  });
+
   it('team member with active owner → organization / team source', async () => {
     users.findOne.mockImplementation(({ where }: any) => {
       if (where.id === 'u1') {

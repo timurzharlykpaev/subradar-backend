@@ -320,8 +320,22 @@ export class EffectiveAccessResolver {
     // sandbox replay (e.g. row says "Pro is cancelling" but user is now
     // effectively on Team via a fresh transaction — banner is meaningless).
     const rowPlan: Plan = (user.plan as Plan) ?? 'free';
+
+    // Self-heal: when billingSource + user.plan say the user holds a valid
+    // own paid plan still inside its paid window, but `billingStatus` lags on
+    // a non-paid state (grace_pro / grace_team / free) because a renewal
+    // webhook is late or arrived out of order, surface 'active'. This is the
+    // single source of truth for "what state is the user actually in" and
+    // MUST feed the banner too — otherwise the banner keys off the stale
+    // grace_pro and renders a contradictory "Pro expired — N days left" on a
+    // paying user while every other field already reads active.
+    const effectiveState: BillingState =
+      source === 'own' && effectivePlan !== 'free' && !PAID_STATES.has(billingStatus)
+        ? 'active'
+        : billingStatus;
+
     const banner = computeBannerPriority({
-      state: billingStatus,
+      state: effectiveState,
       plan: rowPlan,
       effectivePlan,
       billingPeriod,
@@ -340,14 +354,6 @@ export class EffectiveAccessResolver {
 
     const workspaceId =
       ownedWorkspace?.id ?? membership?.workspaceId ?? null;
-
-    // When self-heal kicks in (source='own' but billingStatus is 'free'),
-    // surface 'active' so the client's state-driven UI (banners, CTA labels,
-    // retry modals) doesn't treat a just-purchased user as free.
-    const effectiveState: BillingState =
-      source === 'own' && effectivePlan !== 'free' && !PAID_STATES.has(billingStatus)
-        ? 'active'
-        : billingStatus;
 
     return {
       effective: {
