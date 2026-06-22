@@ -22,7 +22,10 @@
  *   qa-pro-billing-issue@…           — billing_issue active, shows BillingIssueBanner
  *   qa-team-owner@subradar.test      — Team Owner, workspace + 2 members invited
  *   qa-team-member@subradar.test     — Team member, no own Pro
+ *   qa-team-fresh@subradar.test      — Team plan active, NO workspace (team-creation flow)
  *   qa-double-pay@subradar.test      — Team member with own active Pro (DoublePayBanner)
+ *   qa-winback-recent@subradar.test  — Free + downgradedAt 3d ago (WinBackBanner, d3_7 bucket)
+ *   qa-winback-old@subradar.test     — Free + downgradedAt 20d ago, 1 sub (WinBackBanner, d8_30)
  *   qa-suppressed@subradar.test      — Email on suppression list (complaint)
  */
 import 'dotenv/config';
@@ -69,6 +72,10 @@ interface SeedUser {
   trialUsed?: boolean;
   trialStartDate?: Date | null;
   trialEndDate?: Date | null;
+  /** Set → user previously had Pro/trial and dropped to free (drives win_back banner). */
+  downgradedAt?: Date | null;
+  /** Skip auto-adding to the shared QA workspace (for team-creation-flow accounts). */
+  noWorkspace?: boolean;
   currentPeriodStart?: Date | null;
   currentPeriodEnd?: Date | null;
   billingPeriod?: string | null;
@@ -204,6 +211,39 @@ const SEED: SeedUser[] = [
     ],
   },
   {
+    email: 'qa-team-fresh@subradar.test',
+    name: 'QA Team Fresh',
+    plan: 'team',
+    billingStatus: 'active',
+    currentPeriodStart: new Date(now - 1 * DAY),
+    currentPeriodEnd: new Date(now + 29 * DAY),
+    billingPeriod: 'monthly',
+    noWorkspace: true, // no workspace yet → exercises the team-creation flow
+    subs: [
+      sub('Netflix', 15.99, SubscriptionCategory.STREAMING, BillingPeriod.MONTHLY, 6),
+    ],
+  },
+  {
+    email: 'qa-winback-recent@subradar.test',
+    name: 'QA Win-back Recent',
+    plan: 'free',
+    billingStatus: 'free',
+    trialUsed: true,
+    downgradedAt: new Date(now - 3 * DAY), // d3_7 bucket
+    subs: [],
+  },
+  {
+    email: 'qa-winback-old@subradar.test',
+    name: 'QA Win-back Old',
+    plan: 'free',
+    billingStatus: 'free',
+    trialUsed: true,
+    downgradedAt: new Date(now - 20 * DAY), // d8_30 bucket
+    subs: [
+      sub('Spotify', 9.99, SubscriptionCategory.MUSIC, BillingPeriod.MONTHLY, 9),
+    ],
+  },
+  {
     email: 'qa-double-pay@subradar.test',
     name: 'QA Double Pay',
     plan: 'pro',
@@ -285,6 +325,7 @@ async function upsertUser(ds: typeof AppDataSource, seed: SeedUser): Promise<Use
     trialUsed: seed.trialUsed ?? false,
     trialStartDate: seed.trialStartDate ?? null,
     trialEndDate: seed.trialEndDate ?? null,
+    downgradedAt: seed.downgradedAt ?? null,
     currentPeriodStart: seed.currentPeriodStart ?? null,
     currentPeriodEnd: seed.currentPeriodEnd ?? null,
     billingPeriod: seed.billingPeriod ?? null,

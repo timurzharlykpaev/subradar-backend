@@ -194,6 +194,7 @@ jobs:
             cat > /opt/subradar/.env.dev << 'ENVEOF'
             NODE_ENV=development
             PORT=8080
+            ENABLE_REVIEW_ACCOUNT=true
             DATABASE_URL=postgresql://doadmin:${{ secrets.DB_PASSWORD }}@dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com:25060/subradar_dev?sslmode=require
             DB_HOST=dbaas-db-4327922-do-user-30639355-0.f.db.ondigitalocean.com
             DB_PORT=25060
