@@ -8,7 +8,7 @@ describe('computeBannerPriority', () => {
     billingPeriod: 'monthly',
     cancelAtPeriodEnd: false,
     billingIssueAt: null,
-        refundedAt: null,
+    refundedAt: null,
     currentPeriodEnd: null,
     graceExpiresAt: null,
     graceReason: null,
@@ -17,6 +17,7 @@ describe('computeBannerPriority', () => {
     isTeamOwner: false,
     hiddenSubscriptionsCount: 0,
     hadProBefore: false,
+    downgradedAt: null,
   };
 
   it('billing_issue wins over everything', () => {
@@ -122,6 +123,21 @@ describe('computeBannerPriority', () => {
       hadProBefore: true,
     });
     expect(r.priority).toBe('win_back');
+    // No downgradedAt → daysSince is null (legacy rows / neutral bucket).
+    expect(r.payload).toMatchObject({ daysSince: null });
+  });
+
+  it('win_back carries whole-day daysSince from downgradedAt', () => {
+    const r = computeBannerPriority({
+      ...base,
+      plan: 'free',
+      state: 'free',
+      hadProBefore: true,
+      // 5 days + a few hours ago → floored to 5 whole days.
+      downgradedAt: new Date(Date.now() - (5 * 86_400_000 + 3_600_000)),
+    });
+    expect(r.priority).toBe('win_back');
+    expect(r.payload).toMatchObject({ daysSince: 5 });
   });
 
   it('none for active yearly pro with own plan', () => {

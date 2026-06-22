@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { TrialCheckerCron } from './trial-checker.cron';
-import { Subscription, SubscriptionStatus } from './entities/subscription.entity';
+import {
+  Subscription,
+  SubscriptionStatus,
+} from './entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramAlertService } from '../common/telegram-alert.service';
@@ -12,7 +15,11 @@ describe('TrialCheckerCron', () => {
   let cron: TrialCheckerCron;
 
   const mockSubRepo = { find: jest.fn() };
-  const mockUserRepo = { findOne: jest.fn() };
+  const mockUserRepo = {
+    findOne: jest.fn(),
+    update: jest.fn().mockResolvedValue(undefined),
+    createQueryBuilder: jest.fn(),
+  };
   const mockNotifications = {
     sendPushNotification: jest.fn().mockResolvedValue(undefined),
     sendEmail: jest.fn().mockResolvedValue(undefined),
@@ -25,12 +32,20 @@ describe('TrialCheckerCron', () => {
         { provide: getRepositoryToken(Subscription), useValue: mockSubRepo },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: NotificationsService, useValue: mockNotifications },
-        { provide: TelegramAlertService, useValue: { send: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: TelegramAlertService,
+          useValue: { send: jest.fn().mockResolvedValue(undefined) },
+        },
         {
           provide: UserBillingRepository,
           useValue: {
             read: jest.fn(),
-            applyTransition: jest.fn().mockResolvedValue({ applied: true, from: 'active', to: 'free', snapshot: {} }),
+            applyTransition: jest.fn().mockResolvedValue({
+              applied: true,
+              from: 'active',
+              to: 'free',
+              snapshot: {},
+            }),
           },
         },
         {
@@ -57,7 +72,13 @@ describe('TrialCheckerCron', () => {
 
   it('skips trial without trialEndDate', async () => {
     mockSubRepo.find.mockResolvedValue([
-      { id: 'sub-1', name: 'Netflix', status: SubscriptionStatus.TRIAL, trialEndDate: null, userId: 'u1' },
+      {
+        id: 'sub-1',
+        name: 'Netflix',
+        status: SubscriptionStatus.TRIAL,
+        trialEndDate: null,
+        userId: 'u1',
+      },
     ]);
     await cron.checkExpiringTrials();
     expect(mockNotifications.sendEmail).not.toHaveBeenCalled();
@@ -105,14 +126,20 @@ describe('TrialCheckerCron', () => {
       'fcm-token',
       expect.stringMatching(/trial/i),
       expect.stringContaining('Netflix'),
-      expect.objectContaining({ subscriptionId: 'sub-1', type: 'trial_expiring' }),
+      expect.objectContaining({
+        subscriptionId: 'sub-1',
+        type: 'trial_expiring',
+      }),
       'u1',
     );
     expect(mockNotifications.sendEmail).toHaveBeenCalledWith(
       'user@test.com',
       expect.stringContaining('Netflix'),
       expect.stringContaining('Netflix'),
-      expect.objectContaining({ userId: 'u1', unsubType: 'email_notifications' }),
+      expect.objectContaining({
+        userId: 'u1',
+        unsubType: 'email_notifications',
+      }),
     );
   });
 
@@ -141,7 +168,10 @@ describe('TrialCheckerCron', () => {
       'user@test.com',
       expect.any(String),
       expect.stringContaining('tomorrow'),
-      expect.objectContaining({ userId: 'u1', unsubType: 'email_notifications' }),
+      expect.objectContaining({
+        userId: 'u1',
+        unsubType: 'email_notifications',
+      }),
     );
     expect(mockNotifications.sendPushNotification).not.toHaveBeenCalled();
   });
@@ -203,5 +233,60 @@ describe('TrialCheckerCron', () => {
 
     // Should not throw
     await expect(cron.checkExpiringTrials()).resolves.not.toThrow();
+  });
+
+  describe('downgradeExpiredTrials', () => {
+    function mockExpiredUsers(users: any[]) {
+      const qb: any = {
+        leftJoinAndSelect: jest.fn(() => qb),
+        leftJoin: jest.fn(() => qb),
+        where: jest.fn(() => qb),
+        andWhere: jest.fn(() => qb),
+        getMany: jest.fn().mockResolvedValue(users),
+      };
+      mockUserRepo.createQueryBuilder.mockReturnValue(qb);
+    }
+
+    it('stamps downgradedAt so win-back fires for expired trial users', async () => {
+      mockExpiredUsers([
+        {
+          id: 'u1',
+          email: 't@e.com',
+          locale: 'en',
+          fcmToken: null,
+          downgradedAt: null,
+        },
+      ]);
+
+      await cron.downgradeExpiredTrials();
+
+      expect(mockUserRepo.update).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({
+          trialEndDate: null,
+          downgradedAt: expect.any(Date),
+        }),
+      );
+    });
+
+    it('preserves an earlier real downgrade timestamp', async () => {
+      const earlier = new Date('2026-01-01T00:00:00Z');
+      mockExpiredUsers([
+        {
+          id: 'u2',
+          email: 't2@e.com',
+          locale: 'en',
+          fcmToken: null,
+          downgradedAt: earlier,
+        },
+      ]);
+
+      await cron.downgradeExpiredTrials();
+
+      expect(mockUserRepo.update).toHaveBeenCalledWith(
+        'u2',
+        expect.objectContaining({ downgradedAt: earlier }),
+      );
+    });
   });
 });

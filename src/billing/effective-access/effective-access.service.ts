@@ -330,7 +330,9 @@ export class EffectiveAccessResolver {
     // grace_pro and renders a contradictory "Pro expired — N days left" on a
     // paying user while every other field already reads active.
     const effectiveState: BillingState =
-      source === 'own' && effectivePlan !== 'free' && !PAID_STATES.has(billingStatus)
+      source === 'own' &&
+      effectivePlan !== 'free' &&
+      !PAID_STATES.has(billingStatus)
         ? 'active'
         : billingStatus;
 
@@ -349,11 +351,11 @@ export class EffectiveAccessResolver {
       isTeamOwner,
       hiddenSubscriptionsCount: hiddenCount,
       hadProBefore: !!user.downgradedAt,
+      downgradedAt: user.downgradedAt ?? null,
       refundedAt: user.refundedAt,
     });
 
-    const workspaceId =
-      ownedWorkspace?.id ?? membership?.workspaceId ?? null;
+    const workspaceId = ownedWorkspace?.id ?? membership?.workspaceId ?? null;
 
     return {
       effective: {
@@ -383,8 +385,7 @@ export class EffectiveAccessResolver {
         cancelAtPeriodEnd: user.cancelAtPeriodEnd,
         hasBillingIssue: billingStatus === 'billing_issue',
         trialEligible: !trial && !hasOwnPaidPlan && effectivePlan === 'free',
-        shouldShowDoublePay:
-          hasOwnPaidPlan && isTeamMember && !isTeamOwner,
+        shouldShowDoublePay: hasOwnPaidPlan && isTeamMember && !isTeamOwner,
         degradedMode: effectivePlan === 'free' && hiddenCount > 0,
         hiddenSubscriptionsCount: hiddenCount,
         graceReason: user.gracePeriodReason ?? null,
@@ -401,13 +402,11 @@ export class EffectiveAccessResolver {
         canInvite: currentLimits.hasInvite,
       },
       actions: {
-        canStartTrial:
-          !trial && !hasOwnPaidPlan && effectivePlan === 'free',
+        canStartTrial: !trial && !hasOwnPaidPlan && effectivePlan === 'free',
         canCancel: hasOwnPaidPlan && !user.cancelAtPeriodEnd,
         canRestore: true,
         canUpgradeToYearly: hasOwnPaidPlan && billingPeriod === 'monthly',
-        canInviteProFriend:
-          currentLimits.hasInvite && !user.proInviteeEmail,
+        canInviteProFriend: currentLimits.hasInvite && !user.proInviteeEmail,
       },
       products: {
         pro: { ...PRODUCTS.pro },

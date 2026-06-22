@@ -39,6 +39,13 @@ export interface BannerInput {
   hiddenSubscriptionsCount: number;
   hadProBefore: boolean;
   /**
+   * When the user was last downgraded to free (trial expiry or paid-sub
+   * expiry). Drives `daysSince` in the win_back payload so the mobile
+   * banner can tailor copy by recency bucket (d0-2 / d3-7 / d8-30).
+   * Null when the user was never on a paid/trial plan.
+   */
+  downgradedAt: Date | null;
+  /**
    * Timestamp when the user was last refunded by Apple/Google (RC_REFUND
    * transition). Null in every other state. Used to surface the
    * "refund processed" banner for 7 days so the user understands why
@@ -167,12 +174,18 @@ export function computeBannerPriority(input: BannerInput): BannerResult {
     }
   }
 
-  if (
-    input.plan === 'free' &&
-    input.state === 'free' &&
-    input.hadProBefore
-  ) {
-    return { priority: 'win_back', payload: {} };
+  if (input.plan === 'free' && input.state === 'free' && input.hadProBefore) {
+    // daysSince = whole days since downgrade. Mobile buckets this into
+    // d0-2 / d3-7 / d8-30 copy. Omit when downgradedAt is missing (legacy
+    // rows): mobile falls back to its neutral bucket.
+    const daysSince =
+      input.downgradedAt != null
+        ? Math.max(
+            0,
+            Math.floor((now.getTime() - input.downgradedAt.getTime()) / DAY_MS),
+          )
+        : null;
+    return { priority: 'win_back', payload: { daysSince } };
   }
 
   return { priority: 'none', payload: {} };

@@ -2,7 +2,10 @@ import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Subscription, SubscriptionStatus } from './entities/subscription.entity';
+import {
+  Subscription,
+  SubscriptionStatus,
+} from './entities/subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { pushT } from '../notifications/push-i18n';
@@ -192,7 +195,9 @@ export class TrialCheckerCron {
 
         this.logger.log(`Sent Pro trial expiry warning to ${user.email}`);
       } catch (err) {
-        this.logger.error(`Failed to send Pro trial warning to ${user.email}: ${err.message}`);
+        this.logger.error(
+          `Failed to send Pro trial warning to ${user.email}: ${err.message}`,
+        );
       }
     }
   }
@@ -248,18 +253,33 @@ export class TrialCheckerCron {
           { type: 'TRIAL_EXPIRED' },
           { actor: 'cron_trial' },
         );
-        await this.userRepo.update(user.id, { trialEndDate: null as any });
+        // Mark "previously had Pro access" so the win-back banner fires for
+        // trial users who didn't convert. `downgradedAt` was historically set
+        // only on RC_EXPIRATION (paid subs), so internal-trial expiry left it
+        // null → `hadProBefore` stayed false → win-back NEVER showed for the
+        // largest churn cohort. Preserve an earlier real-downgrade timestamp
+        // if one exists (?? guard). trialEndDate is cleared in the same write.
+        await this.userRepo.update(user.id, {
+          trialEndDate: null as any,
+          downgradedAt: user.downgradedAt ?? now,
+        });
         downgraded++;
-        this.logger.log(`Downgraded user ${user.email} (${user.id}) from pro trial to free`);
+        this.logger.log(
+          `Downgraded user ${user.email} (${user.id}) from pro trial to free`,
+        );
 
         // Notify user about downgrade
         await this.sendTrialExpiredNotification(user);
       } catch (err) {
-        this.logger.error(`Failed to downgrade user ${user.id}: ${err.message}`);
+        this.logger.error(
+          `Failed to downgrade user ${user.id}: ${err.message}`,
+        );
       }
     }
 
-    this.logger.log(`Trial downgrade complete. Downgraded ${downgraded}/${expiredUsers.length} users.`);
+    this.logger.log(
+      `Trial downgrade complete. Downgraded ${downgraded}/${expiredUsers.length} users.`,
+    );
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -280,16 +300,16 @@ export class TrialCheckerCron {
 
       const { subject, html } = buildTrialExpiredEmail(user.locale);
 
-      await this.notifications.sendEmail(
-        user.email,
-        subject,
-        html,
-        { userId: user.id, unsubType: 'email_notifications' },
-      );
+      await this.notifications.sendEmail(user.email, subject, html, {
+        userId: user.id,
+        unsubType: 'email_notifications',
+      });
 
       this.logger.log(`Sent trial expired notification to ${user.email}`);
     } catch (err) {
-      this.logger.warn(`Failed to send trial expired notification to ${user.email}: ${err.message}`);
+      this.logger.warn(
+        `Failed to send trial expired notification to ${user.email}: ${err.message}`,
+      );
     }
   }
 }
