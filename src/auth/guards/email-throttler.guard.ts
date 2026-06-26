@@ -21,6 +21,25 @@ import { ThrottlerGuard } from '@nestjs/throttler';
  */
 @Injectable()
 export class EmailThrottlerGuard extends ThrottlerGuard {
+  /**
+   * E2E escape hatch: when the review-account bypass is enabled (dev/sandbox
+   * only — `ENABLE_REVIEW_ACCOUNT=true`), skip per-email auth throttling for the
+   * seeded test accounts (`review@subradar.ai`, `*@subradar.test`). The Maestro
+   * suite reinstalls the app and logs in fresh for every one of ~65 flows, which
+   * blows the 5-per-15-min budget and makes runs flaky. Prod is unaffected: the
+   * flag is off there, so real users keep the full throttle.
+   */
+  protected async shouldSkip(context: ExecutionContext): Promise<boolean> {
+    if (process.env.ENABLE_REVIEW_ACCOUNT === 'true') {
+      const req = context.switchToHttp().getRequest();
+      const email = String(req?.body?.email ?? '').trim().toLowerCase();
+      if (email === 'review@subradar.ai' || email.endsWith('@subradar.test')) {
+        return true;
+      }
+    }
+    return super.shouldSkip(context);
+  }
+
   protected async getTracker(req: Record<string, any>): Promise<string> {
     const email = req?.body?.email;
     if (typeof email === 'string' && email.length > 0) {
