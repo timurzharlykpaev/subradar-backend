@@ -48,6 +48,16 @@ export class AnalysisController {
   }
 
   @Get('status/:jobId')
+  // Polling endpoint: the mobile client polls this every ~3-5s while a job
+  // runs (an analysis takes 15-30s). The controller-level 10/min cap is sized
+  // for the expensive `run` route, but ThrottlerGuard keys per-IP (not per
+  // user), so a single client polling at 3s (20/min) — let alone several
+  // users sharing a carrier CGNAT IP — blows that budget and gets 429ed
+  // mid-analysis. This is a cheap auth-gated DB read, so give it a generous
+  // per-route ceiling that comfortably covers fixed-3s polling from multiple
+  // shared-IP clients. Raising it server-side also fixes already-shipped App
+  // Store builds that poll at a fixed 3s and can't be updated.
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @UseGuards(AnalysisPlanGuard)
   async getStatus(@Param('jobId') jobId: string, @Request() req: any) {
     const job = await this.analysisService.getJobStatus(jobId, req.user.id);
