@@ -6,7 +6,8 @@ import { ClientErrorController } from './common/client-error.controller';
 import { TelegramAlertModule } from './common/telegram-alert.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { E2eAwareThrottlerGuard } from './common/guards/e2e-throttler.guard';
 import { BullModule } from '@nestjs/bull';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -185,7 +186,7 @@ import { IdempotencyModule } from './common/idempotency/idempotency.module';
     ScheduleModule.forRoot(),
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard }, // global rate limiting
+    { provide: APP_GUARD, useClass: E2eAwareThrottlerGuard }, // global rate limiting (skips E2E test accounts on dev)
   ],
 })
 export class AppModule implements NestModule {
