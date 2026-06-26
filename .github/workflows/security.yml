@@ -123,7 +123,7 @@ jobs:
           # Full history so leaked-then-removed secrets in old commits
           # don't slip through (`fetch-depth: 1` would miss them).
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
         # Private-repo scanning requires GITLEAKS_LICENSE; without it
