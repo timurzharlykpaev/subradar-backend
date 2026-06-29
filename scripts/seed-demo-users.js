@@ -129,7 +129,14 @@ async function upsertUser(c, acc) {
 
 async function upsertBilling(c, userId, acc, now) {
   const isPaid = acc.plan !== 'free';
-  const source = isPaid ? 'admin_grant' : null;
+  // 'revenuecat' is the only billingSource recognised as a paid own-plan by
+  // ALL THREE resolvers (EffectiveAccessResolver for /billing/me,
+  // BillingService.getEffectiveAccess for the create-time subscription limit,
+  // and getEffectivePlan) — lemon_squeezy/admin_grant/null fail at least one
+  // and the account reads as free (subs hidden, can't add). The reconcile
+  // cron only re-checks revenuecat rows whose currentPeriodEnd is already in
+  // the PAST, so a future period (below) is never auto-downgraded.
+  const source = isPaid ? 'revenuecat' : null;
   const period = isPaid ? acc.billingPeriod : null;
   const start = isPaid ? now : null;
   const end = isPaid ? new Date(now.getTime() + 365 * DAY) : null;
