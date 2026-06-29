@@ -67,7 +67,7 @@ const ACCOUNTS = [
       sub('Claude Pro', 20, 'AI_SERVICES', 'MONTHLY', 'anthropic.com', 21),
       sub('GitHub Copilot', 10, 'DEVELOPER', 'MONTHLY', 'github.com', 24),
       sub('Notion', 10, 'PRODUCTIVITY', 'MONTHLY', 'notion.so', 6),
-      sub('Figma', 180, 'DESIGN', 'YEARLY', 'figma.com', 70),
+      sub('Figma', 180, 'PRODUCTIVITY', 'YEARLY', 'figma.com', 70),
     ],
   },
   {
@@ -80,7 +80,7 @@ const ACCOUNTS = [
     subs: [
       sub('Netflix', 22.99, 'STREAMING', 'MONTHLY', 'netflix.com', 4),
       sub('Slack', 87, 'BUSINESS', 'YEARLY', 'slack.com', 40),
-      sub('Adobe Creative Cloud', 59.99, 'DESIGN', 'MONTHLY', 'adobe.com', 16),
+      sub('Adobe Creative Cloud', 59.99, 'OTHER', 'MONTHLY', 'adobe.com', 16),
       sub('Microsoft 365', 99.99, 'PRODUCTIVITY', 'YEARLY', 'microsoft.com', 55),
       sub('1Password', 7.99, 'SECURITY', 'MONTHLY', '1password.com', 19),
     ],
