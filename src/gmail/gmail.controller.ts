@@ -22,6 +22,7 @@ import { GmailService } from './gmail.service';
 import { GmailScanService } from './gmail-scan.service';
 import { BillingService } from '../billing/billing.service';
 import { UsersService } from '../users/users.service';
+import { isActiveDemoAccount } from '../common/test-accounts';
 
 class ScanGmailDto {
   @IsOptional()
@@ -132,6 +133,21 @@ export class GmailController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   async status(@Request() req) {
+    // Demo accounts always report "connected" so the recorded flow can go
+    // straight to Scan without a real OAuth round-trip — regardless of which
+    // (or whether any) Gmail was actually connected on the device.
+    if (isActiveDemoAccount(req.user?.email)) {
+      const now = new Date();
+      const resetAt = new Date(now);
+      resetAt.setUTCHours(24, 0, 0, 0);
+      return {
+        connected: true,
+        email: req.user.email,
+        connectedAt: now,
+        scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+        dailyScans: { used: 0, cap: 5, resetAt: resetAt.toISOString() },
+      };
+    }
     // Base Gmail connection state (everyone — Free can connect Gmail
     // even though they can't scan, so the disconnect button still
     // works regardless of plan).
@@ -193,6 +209,7 @@ export class GmailController {
     return this.scanService.scan(req.user.id, plan, dto.locale ?? 'en', {
       ...ctxFromReq(req),
       force: dto.force === true,
+      demo: isActiveDemoAccount(req.user?.email),
     });
   }
 
@@ -219,7 +236,11 @@ export class GmailController {
       req.user.id,
       plan,
       dto.locale ?? 'en',
-      { ...ctxFromReq(req), force: dto.force === true },
+      {
+        ...ctxFromReq(req),
+        force: dto.force === true,
+        demo: isActiveDemoAccount(req.user?.email),
+      },
     );
   }
 

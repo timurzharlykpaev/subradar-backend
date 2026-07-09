@@ -1,11 +1,13 @@
 import { ExecutionContext, Injectable } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { shouldSkipThrottle } from '../test-accounts';
 
 /**
- * Base throttler guard that skips rate limiting for the seeded E2E test
- * accounts (`review@subradar.ai`, `*@subradar.test`) — but ONLY when the
- * review-account bypass is enabled (`ENABLE_REVIEW_ACCOUNT=true`), which is
- * dev/sandbox only. Prod keeps the full throttle because the flag is off.
+ * Base throttler guard that skips rate limiting for the reserved test/demo
+ * account families — review@subradar.ai and `@subradar.test` (when
+ * ENABLE_REVIEW_ACCOUNT=true), plus testN@subradar.ai (when
+ * ENABLE_DEMO_ACCOUNTS=true). Real users always hit the full throttle. See
+ * `test-accounts` for the gating matrix.
  *
  * Why a shared base: the auth routes are guarded by BOTH the global
  * `APP_GUARD` throttler (per-IP) and the route-level `EmailThrottlerGuard`
@@ -17,12 +19,9 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 @Injectable()
 export class E2eAwareThrottlerGuard extends ThrottlerGuard {
   protected async shouldSkip(context: ExecutionContext): Promise<boolean> {
-    if (process.env.ENABLE_REVIEW_ACCOUNT === 'true') {
-      const req = context.switchToHttp().getRequest();
-      const email = String(req?.body?.email ?? '').trim().toLowerCase();
-      if (email === 'review@subradar.ai' || email.endsWith('@subradar.test')) {
-        return true;
-      }
+    const req = context.switchToHttp().getRequest();
+    if (shouldSkipThrottle(req?.body?.email)) {
+      return true;
     }
     return super.shouldSkip(context);
   }

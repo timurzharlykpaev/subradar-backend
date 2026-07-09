@@ -61,6 +61,7 @@ import { REDIS_CLIENT } from '../common/redis.module';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { maskEmail } from '../common/utils/pii';
 import { hashProviderSub } from '../common/crypto/provider-sub-hash';
+import { FIXED_OTP_CODE, resolveOtpBypass } from '../common/test-accounts';
 
 @Injectable()
 export class AuthService {
@@ -858,33 +859,29 @@ export class AuthService {
   }
 
   async sendOtp(dto: OtpSendDto, ctx?: AuthContext) {
-    // Fixed OTP for App Store review account. This is a live backdoor into any
-    // email matching review@subradar.ai, so it must be explicitly enabled per
-    // environment — in production we only flip ENABLE_REVIEW_ACCOUNT=true while
-    // Apple is actively reviewing the build.
-    const isReviewAccount = dto.email === 'review@subradar.ai';
-    // Maestro E2E seed users share the same `000000` bypass but only on
-    // non-prod environments — the `qa-*@subradar.test` domain never exists
-    // in reality, so this is a safe channel for the test harness.
-    const isE2ESeed =
-      !!dto.email &&
-      dto.email.startsWith('qa-') &&
-      dto.email.endsWith('@subradar.test') &&
-      process.env.NODE_ENV !== 'production';
-    const isBypass = isReviewAccount || isE2ESeed;
-    if (isReviewAccount && process.env.ENABLE_REVIEW_ACCOUNT !== 'true') {
+    // Fixed-OTP backdoor for the reserved review / E2E / demo account
+    // families. Each family is a live backdoor into its email pattern, so it
+    // only opens when its env flag is set (see `test-accounts` for the gating
+    // matrix). A reserved email used while its channel is closed is rejected
+    // outright so the pattern can't be probed; every real address falls
+    // through to the random-OTP path below untouched.
+    const bypass = resolveOtpBypass(dto.email);
+    if (bypass.matched && !bypass.enabled) {
       this.logger.warn(
-        `Review account OTP attempted while disabled: ${maskEmail(dto.email)}`,
+        `${bypass.kind} account OTP attempted while disabled: ${maskEmail(dto.email)}`,
       );
-      throw new ForbiddenException('Review account is disabled');
+      const reason =
+        bypass.kind === 'review'
+          ? 'Review account is disabled'
+          : bypass.kind === 'demo'
+            ? 'Demo accounts are disabled'
+            : 'E2E seed accounts disabled';
+      throw new ForbiddenException(reason);
     }
-    if (isE2ESeed && process.env.ENABLE_REVIEW_ACCOUNT !== 'true') {
-      this.logger.warn(
-        `E2E seed OTP attempted while disabled: ${maskEmail(dto.email)}`,
-      );
-      throw new ForbiddenException('E2E seed accounts disabled');
-    }
-    const code = isBypass ? '000000' : randomInt(100000, 1000000).toString();
+    const isBypass = bypass.matched && bypass.enabled;
+    const code = isBypass
+      ? FIXED_OTP_CODE
+      : randomInt(100000, 1000000).toString();
     // Store sha256 of the code, never the plaintext. A Redis dump must not
     // disclose any live login codes.
     const codeHash = createHash('sha256').update(code).digest('hex');

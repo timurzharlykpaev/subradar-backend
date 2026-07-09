@@ -26,6 +26,8 @@
     "seed:test-users": "ts-node -r tsconfig-paths/register scripts/seed-test-users.ts",
     "seed:casa-user": "node scripts/seed-casa-test-user.js",
     "seed:casa-user:wipe": "node scripts/seed-casa-test-user.js --wipe",
+    "seed:demo-users": "node scripts/seed-demo-users.js",
+    "seed:demo-users:wipe": "node scripts/seed-demo-users.js --wipe",
     "test:unit": "jest --passWithNoTests",
     "test:all": "bash scripts/test-all.sh"
   },

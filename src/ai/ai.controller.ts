@@ -24,6 +24,16 @@ import { BillingService } from '../billing/billing.service';
 import { MarketDataService } from '../analysis/market-data.service';
 import { AntivirusService } from '../common/antivirus/antivirus.service';
 import { WizardDto, MatchServiceDto } from './dto/ai.dto';
+import { isActiveDemoAccount } from '../common/test-accounts';
+import {
+  demoBulk,
+  demoLookup,
+  demoMatch,
+  demoScreenshot,
+  demoVoice,
+  demoVoiceBulk,
+  demoWizard,
+} from './demo-ai.fixtures';
 
 function isValidImage(buffer: Buffer): boolean {
   // JPEG: FF D8 FF
@@ -167,24 +177,37 @@ export class AiController {
     private readonly antivirus: AntivirusService,
   ) {}
 
+  /**
+   * Demo accounts (testN@subradar.ai, when ENABLE_DEMO_ACCOUNTS is on) get
+   * deterministic fixtures instead of a real OpenAI call, so marketing videos
+   * are reproducible. Real users always return false here. Callers check this
+   * BEFORE `consumeAiRequest`, so demo runs never burn quota or budget.
+   */
+  private isDemo(req: any): boolean {
+    return isActiveDemoAccount(req?.user?.email);
+  }
+
   @Post('lookup')
   async lookup(@Request() req, @Body() dto: LookupServiceDto) {
-    await this.billingService.consumeAiRequest(req.user.id);
     const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req)) return demoLookup(dto.query, ctx);
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.query, ctx);
   }
 
   @Post('lookup-service')
   async lookupServiceAlias(@Request() req, @Body() dto: LookupServiceDto) {
-    await this.billingService.consumeAiRequest(req.user.id);
     const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req)) return demoLookup(dto.query, ctx);
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.query, ctx);
   }
 
   @Post('search')
   async search(@Request() req, @Body() dto: LookupServiceDto) {
-    await this.billingService.consumeAiRequest(req.user.id);
     const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req)) return demoLookup(dto.query, ctx);
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.query, ctx);
   }
 
@@ -204,6 +227,8 @@ export class AiController {
     @Body() dto: ParseScreenshotDto,
     @UploadedFile() file?: Express.Multer.File,
   ) {
+    const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req)) return demoScreenshot(ctx);
     await this.billingService.consumeAiRequest(req.user.id);
     if (file?.buffer && !isValidImage(file.buffer)) {
       throw new BadRequestException('Invalid image file');
@@ -221,14 +246,14 @@ export class AiController {
     if (!imageBase64 && file) {
       imageBase64 = file.buffer.toString('base64');
     }
-    const ctx = resolveLocaleContext(req, dto);
     return this.aiService.parseScreenshot(imageBase64 || '', ctx);
   }
 
   @Post('voice')
   async voice(@Request() req, @Body() dto: VoiceDto) {
-    await this.billingService.consumeAiRequest(req.user.id);
     const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req)) return demoVoice(ctx);
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.voiceToSubscription(dto.audioBase64 || '', ctx);
   }
 
@@ -248,6 +273,8 @@ export class AiController {
     @Body() dto: VoiceDto,
     @UploadedFile() file?: Express.Multer.File,
   ) {
+    const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req)) return demoVoice(ctx);
     await this.billingService.consumeAiRequest(req.user.id);
     if (file?.buffer && !isValidAudio(file.buffer)) {
       throw new BadRequestException('Invalid audio file');
@@ -262,7 +289,6 @@ export class AiController {
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
     }
-    const ctx = resolveLocaleContext(req, dto);
     return this.aiService.voiceToSubscription(audioBase64 || '', ctx);
   }
 
@@ -305,13 +331,15 @@ export class AiController {
 
   @Post('parse-text')
   async parseText(@Request() req, @Body() dto: ParseTextDto) {
-    await this.billingService.consumeAiRequest(req.user.id);
     const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req)) return demoLookup(dto.text, ctx);
+    await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.lookupService(dto.text, ctx);
   }
 
   @Post('match-service')
   async matchService(@Request() req, @Body() dto: MatchServiceDto) {
+    if (this.isDemo(req)) return demoMatch(dto.name);
     await this.billingService.consumeAiRequest(req.user.id);
     return this.aiService.matchService(dto.name);
   }
@@ -341,8 +369,10 @@ export class AiController {
    */
   @Post('parse-bulk')
   async parseBulk(@Request() req, @Body() dto: ParseTextDto) {
-    await this.billingService.consumeAiRequest(req.user.id);
     const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req))
+      return { subscriptions: demoBulk(ctx), text: dto.text };
+    await this.billingService.consumeAiRequest(req.user.id);
     const subscriptions = await this.aiService.parseBulkSubscriptions(
       dto.text,
       ctx.locale,
@@ -373,6 +403,8 @@ export class AiController {
     @Body() dto: VoiceDto,
     @UploadedFile() file?: Express.Multer.File,
   ) {
+    const ctx = resolveLocaleContext(req, dto);
+    if (this.isDemo(req)) return demoVoiceBulk(ctx);
     await this.billingService.consumeAiRequest(req.user.id);
     if (file?.buffer && !isValidAudio(file.buffer)) {
       throw new BadRequestException('Invalid audio file');
@@ -381,7 +413,6 @@ export class AiController {
     if (!audioBase64 && file) {
       audioBase64 = file.buffer.toString('base64');
     }
-    const ctx = resolveLocaleContext(req, dto);
     return this.aiService.voiceToBulkSubscriptions(
       audioBase64 || '',
       ctx.locale,
@@ -397,8 +428,9 @@ export class AiController {
    */
   @Post('wizard')
   async wizard(@Request() req, @Body() dto: WizardDto) {
-    await this.billingService.consumeAiRequest(req.user.id);
     const ctx = resolveLocaleContext(req, { locale: dto.locale });
+    if (this.isDemo(req)) return demoWizard(dto.message, ctx);
+    await this.billingService.consumeAiRequest(req.user.id);
     // Server-side guarantee: even if the frontend forgets to pass currency/country
     // through `context`, derive them from the authenticated user's profile so the
     // wizard prompt always knows the user's monetary frame.
