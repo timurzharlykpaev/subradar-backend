@@ -33,7 +33,12 @@ const { Client } = require('pg');
 
 const WIPE = process.argv.includes('--wipe');
 const DAY = 24 * 3600 * 1000;
-const icon = (domain) => `https://icon.horse/icon/${domain}`;
+// Google S2 favicons — reliable real-brand logos (incl. openai.com, which
+// icon.horse serves as a grey-letter placeholder). Matches the mobile app's
+// canonical icon source so seeded subs (e.g. ChatGPT Plus) show a real logo
+// on every client, old and new.
+const icon = (domain) =>
+  `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
 
 // daysUntil → next payment date spread realistically across the month.
 function sub(name, amount, category, billingPeriod, domain, daysUntil, currency = 'USD') {

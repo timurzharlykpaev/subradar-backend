@@ -11,6 +11,8 @@
  * the mobile/web clients can't tell the difference.
  */
 
+import type { EmailCandidate } from './ai.service';
+
 export interface DemoLocaleCtx {
   locale: string;
   currency: string;
@@ -28,7 +30,13 @@ interface DemoService {
   cancelUrl: string;
 }
 
-const icon = (domain: string): string => `https://icon.horse/icon/${domain}`;
+// Google S2 favicons — reliable real-brand logos (incl. openai.com, which
+// icon.horse serves as a grey-letter placeholder). Matches the mobile app's
+// canonical source (`src/utils/iconUrl.ts` domainIconUrl), so the icon never
+// gets rewritten client-side and old clients rendering the URL directly still
+// get a real logo instead of the ChatGPT placeholder.
+const icon = (domain: string): string =>
+  `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
 
 // Curated, real-world 2026 US pricing — every entry has a recognisable icon.
 const CATALOG: DemoService[] = [
@@ -218,6 +226,137 @@ export function demoVoiceBulk(ctx: DemoLocaleCtx) {
   return {
     text: 'Netflix, Spotify and ChatGPT Plus',
     subscriptions: demoBulk(ctx),
+  };
+}
+
+// ─── Gmail scan demo ──────────────────────────────────────────────────────
+// Curated "found in your inbox" list for the demo Gmail scan. Deliberately
+// uses recognizable brands the seeded demo accounts DON'T already have
+// (see scripts/seed-demo-users.js), so the review sheet always surfaces a
+// full, photogenic set of finds on camera even after the real dedup pass runs.
+interface DemoFoundService {
+  name: string;
+  domain: string;
+  category: string;
+  monthly: number;
+  serviceUrl: string;
+  cancelUrl: string;
+  daysUntil: number;
+}
+
+const GMAIL_FOUND: DemoFoundService[] = [
+  {
+    name: 'Disney+',
+    domain: 'disneyplus.com',
+    category: 'STREAMING',
+    monthly: 15.99,
+    serviceUrl: 'https://www.disneyplus.com',
+    cancelUrl: 'https://www.disneyplus.com/account/subscription',
+    daysUntil: 6,
+  },
+  {
+    name: 'Amazon Prime',
+    domain: 'amazon.com',
+    category: 'STREAMING',
+    monthly: 14.99,
+    serviceUrl: 'https://www.amazon.com/prime',
+    cancelUrl: 'https://www.amazon.com/gp/primecentral',
+    daysUntil: 12,
+  },
+  {
+    name: 'Max',
+    domain: 'max.com',
+    category: 'STREAMING',
+    monthly: 15.99,
+    serviceUrl: 'https://www.max.com',
+    cancelUrl: 'https://www.max.com/account',
+    daysUntil: 9,
+  },
+  {
+    name: 'Dropbox',
+    domain: 'dropbox.com',
+    category: 'PRODUCTIVITY',
+    monthly: 11.99,
+    serviceUrl: 'https://www.dropbox.com',
+    cancelUrl: 'https://www.dropbox.com/account/plan',
+    daysUntil: 20,
+  },
+  {
+    name: 'NordVPN',
+    domain: 'nordvpn.com',
+    category: 'SECURITY',
+    monthly: 12.99,
+    serviceUrl: 'https://nordvpn.com',
+    cancelUrl: 'https://my.nordaccount.com',
+    daysUntil: 3,
+  },
+  {
+    name: 'Duolingo',
+    domain: 'duolingo.com',
+    category: 'EDUCATION',
+    monthly: 6.99,
+    serviceUrl: 'https://www.duolingo.com',
+    cancelUrl: 'https://www.duolingo.com/settings',
+    daysUntil: 27,
+  },
+  {
+    name: 'Audible',
+    domain: 'audible.com',
+    category: 'OTHER',
+    monthly: 14.95,
+    serviceUrl: 'https://www.audible.com',
+    cancelUrl: 'https://www.audible.com/account',
+    daysUntil: 15,
+  },
+];
+
+function daysFromNow(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
+}
+
+/**
+ * Shape of `GmailScanService.scan` — served for active demo accounts so the
+ * "Connect Gmail → scan" recording always finds a clean, full list without
+ * touching a real inbox, calling the AI, or spending OpenAI quota.
+ */
+export function demoGmailScan(ctx: DemoLocaleCtx): {
+  scanned: number;
+  candidates: EmailCandidate[];
+  durationMs: number;
+  truncated: boolean;
+  summary: { aiReturned: number; droppedNoise: number; droppedDup: number };
+} {
+  const candidates: EmailCandidate[] = GMAIL_FOUND.map((s, i) => ({
+    sourceMessageId: `demo-msg-${i + 1}`,
+    name: s.name,
+    amount: s.monthly,
+    currency: ctx.currency,
+    billingPeriod: 'MONTHLY',
+    category: s.category,
+    status: 'ACTIVE',
+    nextPaymentDate: daysFromNow(s.daysUntil),
+    confidence: 0.97,
+    isRecurring: true,
+    isCancellation: false,
+    isTrial: false,
+    aggregatedFrom: [`demo-msg-${i + 1}`],
+    amountFromEmail: true,
+    iconUrl: icon(s.domain),
+    serviceUrl: s.serviceUrl,
+    cancelUrl: s.cancelUrl,
+  }));
+  return {
+    scanned: 187,
+    candidates,
+    durationMs: 2400,
+    truncated: false,
+    summary: {
+      aiReturned: candidates.length,
+      droppedNoise: 0,
+      droppedDup: 0,
+    },
   };
 }
 

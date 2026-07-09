@@ -14,6 +14,7 @@ import { Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { User } from '../users/entities/user.entity';
 import { AiService, EmailCandidate } from '../ai/ai.service';
+import { demoGmailScan } from '../ai/demo-ai.fixtures';
 import { MarketDataService } from '../analysis/market-data.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { AuditService } from '../common/audit/audit.service';
@@ -274,8 +275,28 @@ export class GmailScanService {
     userId: string,
     plan: 'pro' | 'organization',
     locale: string,
-    ctx: { ipAddress?: string; userAgent?: string; force?: boolean },
+    ctx: {
+      ipAddress?: string;
+      userAgent?: string;
+      force?: boolean;
+      demo?: boolean;
+    },
   ): Promise<{ jobId: string; status: 'pending' | 'running' | 'completed'; cached: boolean }> {
+    // Demo accounts: skip Gmail/AI entirely and return an already-completed
+    // job whose result is the curated fixture, so the recorded async
+    // "scan → poll → review" flow always resolves to a full, clean list.
+    if (ctx?.demo) {
+      const jobId = randomUUID();
+      const now = new Date().toISOString();
+      await this.writeJob(jobId, {
+        userId,
+        status: 'completed',
+        result: demoGmailScan({ locale, currency: 'USD', country: 'US' }),
+        startedAt: now,
+        completedAt: now,
+      });
+      return { jobId, status: 'completed', cached: false };
+    }
     // If the cached result is still fresh AND the caller isn't forcing
     // a fresh scan, return a synthetic "already-completed" job so the
     // mobile can render the result immediately without polling.
@@ -1543,6 +1564,8 @@ export class GmailScanService {
        * so a slow Redis write never blocks the actual scan.
        */
       onProgress?: (p: ScanProgress) => void;
+      /** Active demo account — short-circuit to the deterministic fixture. */
+      demo?: boolean;
     },
   ): Promise<{
     scanned: number;
@@ -1570,6 +1593,13 @@ export class GmailScanService {
     };
   }> {
     const startedAt = Date.now();
+
+    // Demo accounts: return the curated fixture directly — no Gmail fetch, no
+    // AI call, no OpenAI quota, no cache/lock/quota bookkeeping. Keeps every
+    // recorded scan reproducible and full.
+    if (ctx?.demo) {
+      return demoGmailScan({ locale, currency: 'USD', country: 'US' });
+    }
 
     // Short-circuit on cached prior scan unless the caller forces a
     // refresh. Done BEFORE acquiring the single-flight lock so the
