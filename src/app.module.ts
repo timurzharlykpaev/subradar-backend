@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { AppController } from './app.controller';
 import { ClientErrorController } from './common/client-error.controller';
+import { WaitlistController } from './common/waitlist.controller';
 import { TelegramAlertModule } from './common/telegram-alert.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -34,7 +35,7 @@ import { AntivirusModule } from './common/antivirus/antivirus.module';
 import { IdempotencyModule } from './common/idempotency/idempotency.module';
 
 @Module({
-  controllers: [AppController, ClientErrorController],
+  controllers: [AppController, ClientErrorController, WaitlistController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     TelegramAlertModule,
